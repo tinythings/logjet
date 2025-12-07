@@ -3,19 +3,22 @@
 DEFAULT_TARGET := build
 
 build:
-	cargo build --release
+	cargo build --workspace --release
 
 dev:
-	cargo build
+	cargo build --workspace
 
 check:
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 fix:
-	cargo clippy --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --workspace --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
 
 test:
-	cargo nextest run
+	cargo nextest run --workspace
+
+clean:
+	cargo clean
 
 setup:
 	@command -v rustc >/dev/null 2>&1 || { echo "rustc not found. Install Rust from https://rustup.rs"; exit 1; }
