@@ -1,13 +1,19 @@
 use std::io::{self, BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::config::Config;
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use prost::Message;
+use tiny_http::{Method, Response, Server, StatusCode};
+
+use crate::config::{Config, IngestProtocol};
 use crate::protocol::read_record;
 use crate::spool::Spool;
+use crate::{protocol::WireRecord};
 
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
@@ -17,6 +23,7 @@ pub struct DaemonConfig {
 
 pub fn serve(config: DaemonConfig) -> io::Result<()> {
     let spool = Arc::new(Mutex::new(Spool::open(config.config.storage.clone())?));
+    let next_seq = Arc::new(AtomicU64::new(1));
 
     let replay_spool = Arc::clone(&spool);
     let replay_addr = config.config.replay_addr.clone();
@@ -27,26 +34,84 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
         .spawn(move || replay_loop(replay_addr, replay_spool, poll_interval_ms))?;
 
     eprintln!("logjetd using config {}", config.config_path.display());
-    ingest_loop(config.config.ingest_addr, spool)?;
+    ingest_loop(
+        config.config.ingest_addr,
+        config.config.ingest_protocol,
+        spool,
+        next_seq,
+    )?;
     replay_thread
         .join()
         .map_err(|_| io::Error::other("replay listener thread panicked"))?
 }
 
-fn ingest_loop(bind_addr: String, spool: Arc<Mutex<Spool>>) -> io::Result<()> {
-    let listener = TcpListener::bind(&bind_addr)?;
-    eprintln!("logjetd ingest listening on {bind_addr}");
+fn ingest_loop(
+    bind_addr: String,
+    protocol: IngestProtocol,
+    spool: Arc<Mutex<Spool>>,
+    next_seq: Arc<AtomicU64>,
+) -> io::Result<()> {
+    match protocol {
+        IngestProtocol::Wire => {
+            let listener = TcpListener::bind(&bind_addr)?;
+            eprintln!("logjetd ingest listening on {bind_addr} using wire protocol");
 
-    for stream in listener.incoming() {
-        let stream = stream?;
-        let spool = Arc::clone(&spool);
-        thread::Builder::new()
-            .name("logjetd-ingest-client".to_string())
-            .spawn(move || {
-                if let Err(err) = handle_ingest_client(stream, spool) {
-                    eprintln!("logjetd ingest client error: {err}");
+            for stream in listener.incoming() {
+                let stream = stream?;
+                let spool = Arc::clone(&spool);
+                thread::Builder::new()
+                    .name("logjetd-ingest-client".to_string())
+                    .spawn(move || {
+                        if let Err(err) = handle_ingest_client(stream, spool) {
+                            eprintln!("logjetd ingest client error: {err}");
+                        }
+                    })?;
+            }
+        }
+        IngestProtocol::OtlpHttp => {
+            let server = Server::http(&bind_addr)
+                .map_err(|err| io::Error::other(err.to_string()))?;
+            eprintln!("logjetd ingest listening on http://{bind_addr}/v1/logs using otlp-http");
+
+            for mut request in server.incoming_requests() {
+                if request.method() != &Method::Post || request.url() != "/v1/logs" {
+                    let response = Response::from_string("not found")
+                        .with_status_code(StatusCode(404));
+                    let _ = request.respond(response);
+                    continue;
                 }
-            })?;
+
+                let mut body = Vec::new();
+                request.as_reader().read_to_end(&mut body)?;
+                match ExportLogsServiceRequest::decode(body.as_slice()) {
+                    Ok(batch) => {
+                        let record = WireRecord {
+                            record_type: logjet::RecordType::Logs,
+                            seq: next_seq.fetch_add(1, Ordering::Relaxed),
+                            ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
+                            payload: body,
+                        };
+
+                        let mut spool = spool
+                            .lock()
+                            .map_err(|_| io::Error::other("spool mutex poisoned"))?;
+                        spool.append(record)?;
+
+                        let response = Response::empty(200);
+                        request
+                            .respond(response)
+                            .map_err(|err| io::Error::other(err.to_string()))?;
+                    }
+                    Err(err) => {
+                        let response = Response::from_string(format!("decode error: {err}"))
+                            .with_status_code(StatusCode(400));
+                        request
+                            .respond(response)
+                            .map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -112,4 +177,27 @@ fn handle_replay_client(
             thread::sleep(sleep);
         }
     }
+}
+
+fn extract_batch_timestamp(batch: &ExportLogsServiceRequest) -> Option<u64> {
+    for resource_logs in &batch.resource_logs {
+        for scope_logs in &resource_logs.scope_logs {
+            for record in &scope_logs.log_records {
+                if record.time_unix_nano != 0 {
+                    return Some(record.time_unix_nano);
+                }
+                if record.observed_time_unix_nano != 0 {
+                    return Some(record.observed_time_unix_nano);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn unix_time_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
 }
