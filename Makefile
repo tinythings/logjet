@@ -1,4 +1,4 @@
-.PHONY: build dev check fix test setup clean stats arm-devel arm x86-devel x86
+.PHONY: build dev check fix test setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86
 
 DEFAULT_TARGET := build
 ARM_TARGET ?= aarch64-unknown-linux-musl
@@ -19,16 +19,16 @@ fix: setup
 test: setup
 	cargo nextest run --workspace
 
-arm-devel: setup
+arm-devel: setup setup-arm
 	cargo build --workspace --target $(ARM_TARGET)
 
-arm: setup
+arm: setup setup-arm
 	cargo build --workspace --release --target $(ARM_TARGET)
 
-x86-devel: setup
+x86-devel: setup setup-x86
 	cargo build --workspace --target $(X86_TARGET)
 
-x86: setup
+x86: setup setup-x86
 	cargo build --workspace --release --target $(X86_TARGET)
 
 clean:
@@ -43,6 +43,10 @@ setup:
 	@command -v rustup >/dev/null 2>&1 || { echo "rustup not found. Install Rust from https://rustup.rs"; exit 1; }
 	@cargo clippy --version >/dev/null 2>&1 || { echo "clippy is missing. Run: rustup component add clippy"; exit 1; }
 	@cargo nextest --version >/dev/null 2>&1 || { echo "cargo-nextest is missing. Run: cargo install cargo-nextest"; exit 1; }
-	@rustup target list --installed | grep -qx "$(ARM_TARGET)" || rustup target add "$(ARM_TARGET)"
-	@rustup target list --installed | grep -qx "$(X86_TARGET)" || rustup target add "$(X86_TARGET)"
 	@echo "Rust toolchain looks ready."
+
+setup-arm:
+	@rustup target list --installed | grep -qx "$(ARM_TARGET)" || rustup target add "$(ARM_TARGET)"
+
+setup-x86:
+	@rustup target list --installed | grep -qx "$(X86_TARGET)" || rustup target add "$(X86_TARGET)"
