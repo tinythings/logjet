@@ -9,8 +9,9 @@
 
 ```yaml
 output: buffer          # "buffer" or "file"
-buffer.size: 100        # KiB
-buffer.preserve: 1000   # preserve first N messages
+buffer.size: 100        # KiB, conflicts with buffer.messages
+buffer.messages: 5000   # message count, conflicts with buffer.size
+buffer.keep: 1000       # keep first N messages forever
 file.path: /foo         # directory, used only when output: file
 file.size: 100          # KiB per file segment
 file.name: bar.logjet   # base file name
@@ -25,7 +26,8 @@ If omitted:
 
 - `output: buffer`
 - `buffer.size: 100`
-- `buffer.preserve: 0`
+- `buffer.messages: unset`
+- `buffer.keep: 0`
 - `file.path: .`
 - `file.size: 100`
 - `file.name: bar.logjet`
@@ -36,6 +38,11 @@ If omitted:
 ## Notes
 
 - sizes are interpreted as KiB
+- `buffer.keep` means: keep the first `N` messages in a permanent front jar, then rotate only the later FIFO tail
+- set either `buffer.size` or `buffer.messages`, never both
+- `buffer.size` limits the rotating in-memory tail by bytes
+- `buffer.messages` limits the rotating in-memory tail by message count
 - `file.*` settings are ignored unless `output: file`
 - `buffer.*` settings are ignored unless `output: buffer`
 - `file.path` is treated as a directory, not a full file path
+- file mode always keeps everything and only rotates to a new append-only file when `file.size` is exceeded
