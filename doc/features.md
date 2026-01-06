@@ -5,7 +5,7 @@ It is meant to evolve as the daemon grows.
 
 ## Current Features
 
-### 1. OTLP/HTTP log ingest
+### 1. OTLP log ingest
 
 `logjetd` can accept real OTLP/HTTP protobuf log export requests on:
 
@@ -13,9 +13,12 @@ It is meant to evolve as the daemon grows.
 POST /v1/logs
 ```
 
+It can also accept OTLP/gRPC log export requests on the standard
+`LogsService/Export` endpoint when `ingest.protocol: otlp-grpc` is configured.
+
 Current behavior:
 
-- accepts OTLP log batches
+- accepts OTLP log batches over HTTP and gRPC
 - validates that the request decodes as `ExportLogsServiceRequest`
 - stores the raw OTLP protobuf bytes
 - assigns a local sequence number for internal replay ordering
@@ -45,11 +48,13 @@ Current behavior:
 - supports message-count limit with `buffer.messages`
 - `buffer.size` and `buffer.messages` are mutually exclusive
 - supports `buffer.keep` to permanently retain the first `N` messages
+- `buffer.size` and `buffer.messages` apply to the rotating tail only
 
 Memory model:
 
 - front jar: first `buffer.keep` messages are never evicted
 - rotating tail: later messages are evicted FIFO-style
+- total retained = kept front jar + rotating tail
 
 ### 4. Replay listener
 
@@ -178,7 +183,6 @@ Useful when:
 These are not implemented yet:
 
 - continuous OTLP egress from the daemon
-- OTLP/gRPC ingest
 - resume checkpoints or acknowledgements
 - advanced slow-consumer handling
 - disk-budget retention management for rotated files
