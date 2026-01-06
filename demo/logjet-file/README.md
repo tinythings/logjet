@@ -10,7 +10,6 @@ Emitter emits classic BOFH excuses as log messages. :-)
 Build everything in development mode from the project root:
 
 ```bash
-make devel
 make demo
 ```
 

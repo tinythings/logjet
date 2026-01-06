@@ -39,7 +39,7 @@ x86-devel: setup setup-x86
 x86: setup setup-x86
 	cargo build $(CORE_WORKSPACE) --release --target $(X86_TARGET)
 
-demo: setup
+demo: devel
 	cargo build -p otlp-demo
 
 man:
