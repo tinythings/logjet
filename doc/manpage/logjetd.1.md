@@ -21,6 +21,7 @@ logjetd - OTLP ingest, `.logjet` storage, replay, and file blasting daemon
 It can:
 
 - accept OTLP/HTTP log batches on `POST /v1/logs`
+- accept OTLP/gRPC log batches on the standard `LogsService/Export` endpoint
 - store raw OTLP protobuf payloads either in memory or in append-only `.logjet` files
 - expose a replay listener for downstream consumers over the current internal wire protocol
 - inspect `.logjet` files and directories
@@ -41,6 +42,7 @@ If no explicit command is given, `serve` is the default.
 Current serve behavior:
 
 - OTLP/HTTP ingest is supported with `ingest.protocol: otlp-http`
+- OTLP/gRPC ingest is supported with `ingest.protocol: otlp-grpc`
 - a replay listener socket is exposed for downstream clients
 - replay listener traffic currently uses the internal framed protocol, not OTLP egress
 
@@ -145,7 +147,7 @@ Rules:
 - set either `buffer.size` or `buffer.messages`, never both
 - `buffer.keep` applies only to memory mode
 - file mode always keeps all rotated files
-- `ingest.protocol` currently supports `wire` and `otlp-http`
+- `ingest.protocol` currently supports `wire`, `otlp-http`, and `otlp-grpc`
 - `collector.url` configures replay destination URL
 - `collector.timeout-ms` configures replay socket timeout in milliseconds
 
@@ -175,6 +177,7 @@ Append-only file behavior:
 # CURRENT FEATURES
 
 - OTLP/HTTP log ingest on `POST /v1/logs`
+- OTLP/gRPC log ingest on the standard logs export service
 - append-only `.logjet` file output with size-based rotation
 - in-memory ring buffering with `buffer.keep`
 - replay listener for downstream consumers using the internal framed protocol
@@ -185,7 +188,6 @@ Append-only file behavior:
 # CURRENT LIMITATIONS
 
 - continuous OTLP egress from the daemon is not implemented
-- OTLP/gRPC ingest is not implemented
 - replay listener traffic is not OTLP
 - resume checkpoints and acknowledgements are not implemented
 - slow-consumer handling is basic
