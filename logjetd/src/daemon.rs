@@ -1,14 +1,19 @@
 use std::io::{self, BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::logs::v1::{
+    logs_service_server::{LogsService, LogsServiceServer},
+    ExportLogsServiceRequest, ExportLogsServiceResponse,
+};
 use prost::Message;
 use tiny_http::{Method, Response, Server, StatusCode};
+use tonic::{Request, Response as GrpcResponse, Status};
 
 use crate::config::{Config, IngestProtocol};
 use crate::protocol::read_record;
@@ -112,6 +117,28 @@ fn ingest_loop(
                 }
             }
         }
+        IngestProtocol::OtlpGrpc => {
+            let addr: SocketAddr = bind_addr.parse().map_err(|err| {
+                io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC bind addr: {err}"))
+            })?;
+            eprintln!(
+                "logjetd ingest listening on grpc://{bind_addr} using otlp-grpc"
+            );
+
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|err| io::Error::other(err.to_string()))?;
+            let service = OtlpGrpcLogsService { spool, next_seq };
+
+            runtime.block_on(async move {
+                tonic::transport::Server::builder()
+                    .add_service(LogsServiceServer::new(service))
+                    .serve(addr)
+                    .await
+                    .map_err(|err| io::Error::other(err.to_string()))
+            })?;
+        }
     }
 
     Ok(())
@@ -200,4 +227,39 @@ fn unix_time_nanos() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64
+}
+
+#[derive(Clone)]
+struct OtlpGrpcLogsService {
+    spool: Arc<Mutex<Spool>>,
+    next_seq: Arc<AtomicU64>,
+}
+
+#[tonic::async_trait]
+impl LogsService for OtlpGrpcLogsService {
+    async fn export(
+        &self,
+        request: Request<ExportLogsServiceRequest>,
+    ) -> Result<GrpcResponse<ExportLogsServiceResponse>, Status> {
+        let batch = request.into_inner();
+        let payload = batch.encode_to_vec();
+        let record = WireRecord {
+            record_type: logjet::RecordType::Logs,
+            seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
+            ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
+            payload,
+        };
+
+        let mut spool = self
+            .spool
+            .lock()
+            .map_err(|_| Status::internal("spool mutex poisoned"))?;
+        spool
+            .append(record)
+            .map_err(|err| Status::internal(err.to_string()))?;
+
+        Ok(GrpcResponse::new(ExportLogsServiceResponse {
+            partial_success: None,
+        }))
+    }
 }
