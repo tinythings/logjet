@@ -62,6 +62,7 @@ Memory model:
 
 Current behavior:
 
+- clients send a small replay request with `from_seq`
 - replays retained data in sequence order
 - continues polling for new records
 - supports multiple clients in a basic way
@@ -70,7 +71,30 @@ Current limitation:
 
 - replay uses a custom internal wire protocol, not OTLP egress yet
 
-### 5. One-shot file replay to OTLP/HTTP
+### 5. Continuous bridge mode
+
+`logjetd` can run as a downstream bridge process with:
+
+```text
+logjetd bridge [--source <host:port>]
+```
+
+Current behavior:
+
+- connects to another `logjetd` replay listener
+- requests replay starting after the last sequence already forwarded
+- drains retained backlog first
+- stays attached and forwards new log records live
+- posts raw stored OTLP protobuf payloads to `collector.url`
+- reconnects after disconnect and resumes from the last in-process forwarded sequence
+
+This is the current path for:
+
+```text
+OA -> logjetd <- network <- logjetd -> Vector
+```
+
+### 6. One-shot file replay to OTLP/HTTP
 
 `logjetd` can replay stored `.logjet` files directly into an OTLP/HTTP
 collector with:
@@ -104,6 +128,7 @@ Current config areas:
 - ingest and replay bind addresses
 - replay polling interval
 - collector URL and timeout
+- upstream replay source and retry behavior
 
 ### 7. Inspection tooling
 
@@ -178,12 +203,25 @@ Useful when:
 - you need bulk backfill of recorded OTLP logs
 - you want to validate stored files against a collector pipeline
 
+### 6. Continuous remote drain into a collector
+
+Use case:
+
+- one `logjetd` instance runs next to `OA`
+- a second `logjetd` instance connects to the first over the network
+- the second instance forwards retained backlog and live OTLP logs into Vector
+
+Useful when:
+
+- the appliance cannot push directly to the final collector
+- an external side must initiate the connection
+- you need a lightweight relay instead of deploying a full collector locally
+
 ## Current Non-Features
 
 These are not implemented yet:
 
-- continuous OTLP egress from the daemon
-- resume checkpoints or acknowledgements
+- persisted resume checkpoints or acknowledgements across bridge restarts
 - advanced slow-consumer handling
 - disk-budget retention management for rotated files
 - production-grade service lifecycle handling
