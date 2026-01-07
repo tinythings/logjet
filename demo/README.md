@@ -15,6 +15,19 @@ This directory contains two binaries for a two-terminal OTLP demo over TCP.
   - decodes the protobuf payload
   - prints the same log content to stdout with ANSI colors
 
+It also contains scenario demos under subdirectories:
+
+- [`logjet-file`](./logjet-file)
+  - OTLP/HTTP emitter into file-backed `logjetd`
+- [`logjet-grpc-file`](./logjet-grpc-file)
+  - OTLP/gRPC emitter into file-backed `logjetd`
+- [`memory-buffer`](./memory-buffer)
+  - kept-front-jar plus rotating-tail memory retention
+- [`file-replay`](./file-replay)
+  - replay stored `.logjet` files into a collector
+- [`remote-drain`](./remote-drain)
+  - appliance-side `logjetd` drained by a remote-side `logjetd bridge`
+
 ## Enjoy It
 
 Open two terminals in the project root.
