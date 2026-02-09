@@ -20,6 +20,12 @@ collector.timeout-ms: 10000
 upstream.replay: 10.0.0.15:7002
 upstream.retry-ms: 1000
 upstream.connect-timeout-ms: 5000
+tls.enable: false
+tls.ca-file: /etc/logjet/ca.pem
+tls.cert-file: /etc/logjet/node.pem
+tls.key-file: /etc/logjet/node.key
+tls.require-client-cert: false
+tls.server-name: appliance.internal
 ingest.protocol: otlp-http   # "wire", "otlp-http", or "otlp-grpc"
 ingest.listen: 127.0.0.1:7001
 replay.listen: 0.0.0.0:7002
@@ -172,6 +178,61 @@ long before reconnecting.
 TCP connect timeout in milliseconds for `logjetd bridge` when opening the
 upstream replay connection.
 
+### `tls.enable`
+
+Enable TLS for the daemon-to-daemon replay transport.
+
+This affects:
+
+- the replay listener exposed by `serve`
+- the upstream replay connection used by `bridge`
+
+It does not affect:
+
+- OTLP/HTTP ingest
+- OTLP/gRPC ingest
+- OTLP/HTTP export to `collector.url`
+
+### `tls.ca-file`
+
+PEM file containing CA certificates for replay/bridge TLS validation.
+
+Use cases:
+
+- bridge client verifies the replay listener certificate
+- replay listener verifies client certificates when `tls.require-client-cert: true`
+
+### `tls.cert-file`
+
+PEM file containing the local certificate for replay/bridge TLS.
+
+Use cases:
+
+- replay listener presents this certificate when `tls.enable: true`
+- bridge presents this certificate when mutual TLS is used
+
+### `tls.key-file`
+
+PEM file containing the private key matching `tls.cert-file`.
+
+### `tls.require-client-cert`
+
+Require client certificates on the replay listener.
+
+When enabled:
+
+- replay listener requires a client certificate
+- `tls.ca-file` must be set on the server side
+
+### `tls.server-name`
+
+Override server name used by `logjetd bridge` for TLS certificate validation.
+
+Use this when:
+
+- the replay listener is reached by IP address
+- but the certificate is issued for a DNS name
+
 ### `ingest.protocol`
 
 Selects how `logjetd` accepts incoming telemetry.
@@ -241,6 +302,12 @@ If omitted:
 - `upstream.replay: unset`
 - `upstream.retry-ms: 1000`
 - `upstream.connect-timeout-ms: 5000`
+- `tls.enable: false`
+- `tls.ca-file: unset`
+- `tls.cert-file: unset`
+- `tls.key-file: unset`
+- `tls.require-client-cert: false`
+- `tls.server-name: unset`
 - `ingest.protocol: wire`
 - `ingest.listen: 127.0.0.1:7001`
 - `replay.listen: 0.0.0.0:7002`
@@ -258,6 +325,7 @@ If omitted:
 - `upstream.replay` is used by `logjetd bridge` when `--source` is omitted
 - `upstream.retry-ms` controls bridge reconnect delay
 - `upstream.connect-timeout-ms` controls bridge source connect timeout
+- `tls.*` controls optional TLS on the replay listener and bridge source connection
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `file.*` settings are ignored unless `output: file`
 - `buffer.*` settings are ignored unless `output: buffer`

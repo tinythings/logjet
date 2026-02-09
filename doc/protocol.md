@@ -51,3 +51,15 @@ can remain easy to build on constrained systems.
 
 It is a transport layer for the current daemon implementation, not the final
 external interoperability story.
+
+## TLS
+
+The replay transport can optionally be wrapped in TLS.
+
+When TLS is enabled:
+
+- the framing described above is unchanged
+- replay clients still send the same replay request
+- records are still streamed in the same wire format
+
+TLS protects the transport, not the framing itself.

@@ -62,6 +62,7 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - expects a small replay request carrying `from_seq`
 - replays retained records in sequence order
 - continues polling for newly ingested records
+- can optionally wrap the replay transport in TLS
 
 Replay is strictly sequential today. Resume exists per connection via `from_seq`,
 but there is no persisted checkpoint yet.
@@ -74,6 +75,7 @@ but there is no persisted checkpoint yet.
 - forwards OTLP log payloads to `collector.url`
 - reconnects after disconnect using the last in-process forwarded sequence
 - source address comes from `--source` or `upstream.replay`
+- can optionally use TLS with `tls.*`
 
 ### File Blast Replay
 
@@ -123,6 +125,7 @@ What exists now:
 - OTLP/gRPC ingest
 - TCP replay
 - continuous daemon-to-daemon bridge to OTLP/HTTP collectors
+- optional TLS on replay/bridge transport
 - one-shot file replay to OTLP/HTTP collectors
 - in-memory ring buffering
 - `.logjet` file output with rotation
@@ -132,3 +135,4 @@ What does not exist yet:
 
 - persisted reconnect resume from saved cursor
 - client acknowledgement protocol
+- TLS for OTLP ingest and collector export

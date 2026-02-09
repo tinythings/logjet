@@ -94,7 +94,25 @@ This is the current path for:
 OA -> logjetd <- network <- logjetd -> Vector
 ```
 
-### 6. One-shot file replay to OTLP/HTTP
+### 6. Optional TLS on replay and bridge transport
+
+The replay listener and bridge client can run over TLS.
+
+Current behavior:
+
+- TLS is optional and disabled by default
+- the replay listener can present a server certificate
+- the bridge client can verify the replay listener with `tls.ca-file`
+- mutual TLS is supported with client certificates
+- replay framing and sequence resume work the same way inside the TLS session
+
+Current limitation:
+
+- OTLP/HTTP ingest is still plain HTTP
+- OTLP/gRPC ingest is unchanged
+- collector export from `replay` and `bridge` is still plain HTTP
+
+### 7. One-shot file replay to OTLP/HTTP
 
 `logjetd` can replay stored `.logjet` files directly into an OTLP/HTTP
 collector with:
@@ -112,7 +130,7 @@ Current behavior:
 - sends as fast as the destination socket allows, with no artificial delay
 - if `--dest` is omitted, replay uses `collector.url` from config
 
-### 6. YAML configuration
+### 8. YAML configuration
 
 `logjetd` reads configuration from:
 
@@ -130,7 +148,7 @@ Current config areas:
 - collector URL and timeout
 - upstream replay source and retry behavior
 
-### 7. Inspection tooling
+### 9. Inspection tooling
 
 `logjetd` can inspect stored `.logjet` files or directories and print metadata
 about retained records.
@@ -224,4 +242,5 @@ These are not implemented yet:
 - persisted resume checkpoints or acknowledgements across bridge restarts
 - advanced slow-consumer handling
 - disk-budget retention management for rotated files
+- transport security for OTLP ingest and collector export
 - production-grade service lifecycle handling
