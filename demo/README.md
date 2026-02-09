@@ -27,6 +27,8 @@ It also contains scenario demos under subdirectories:
   - replay stored `.logjet` files into a collector
 - [`remote-drain`](./remote-drain)
   - appliance-side `logjetd` drained by a remote-side `logjetd bridge`
+- [`remote-drain-tls`](./remote-drain-tls)
+  - same remote-drain topology, but with TLS and mutual TLS on the replay link
 
 ## Enjoy It
 
