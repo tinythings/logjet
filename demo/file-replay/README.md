@@ -1,6 +1,6 @@
 # File Replay Demo
 
-This demo replays previously recorded `.logjet` files into the OTLP collector mockup
+This demo replays recorded `.logjet` files into the OTLP collector mockup
 as fast as possible. This demo depends on the first demo.
 
 ## Build
