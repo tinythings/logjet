@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufReader, Write};
+use std::io::{self, BufReader};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,12 +12,21 @@ use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use crate::config::{CollectorConfig, TlsConfig, UpstreamConfig};
 use crate::protocol::{ReplayRequest, read_record, write_replay_request};
 use crate::spool::list_named_segments;
-use crate::tls::{load_client_config, parse_server_name};
+use crate::tls::{load_client_config, load_collector_client_config, parse_collector_server_name, parse_server_name};
 
 pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorConfig) -> io::Result<u64> {
     let mut sent = 0u64;
     let endpoint = CollectorEndpoint::parse(&collector.url)?;
-    let timeout = Duration::from_millis(collector.timeout_ms);
+    let transport = CollectorTransport {
+        timeout: Duration::from_millis(collector.timeout_ms),
+        tls_client: if endpoint.tls {
+            Some(load_collector_client_config(collector)?)
+        } else {
+            None
+        },
+        endpoint,
+        collector: collector.clone(),
+    };
 
     for segment in list_named_segments(path, name)? {
         let file = File::open(&segment.path)?;
@@ -28,7 +37,7 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
                 continue;
             }
 
-            post_raw_otlp_http(&endpoint, timeout, &record.payload)?;
+            post_raw_otlp_http(&transport, &record.payload)?;
             sent = sent.saturating_add(1);
         }
     }
@@ -48,7 +57,6 @@ pub fn bridge_wire_to_otlp_http(
     tls: &TlsConfig,
 ) -> io::Result<()> {
     let endpoint = CollectorEndpoint::parse(&collector.url)?;
-    let collector_timeout = Duration::from_millis(collector.timeout_ms);
     let connect_timeout = Duration::from_millis(upstream.connect_timeout_ms);
     let retry_delay = Duration::from_millis(upstream.retry_ms);
     let tls_client = if tls.enable {
@@ -56,17 +64,26 @@ pub fn bridge_wire_to_otlp_http(
     } else {
         None
     };
+    let collector_transport = CollectorTransport {
+        timeout: Duration::from_millis(collector.timeout_ms),
+        tls_client: if endpoint.tls {
+            Some(load_collector_client_config(collector)?)
+        } else {
+            None
+        },
+        endpoint,
+        collector: collector.clone(),
+    };
     let mut last_seq = 0u64;
 
     loop {
         match bridge_once(
             source,
-            &endpoint,
-            collector_timeout,
             connect_timeout,
             &mut last_seq,
             tls,
             tls_client.clone(),
+            &collector_transport,
         ) {
             Ok(()) => {
                 eprintln!(
@@ -87,12 +104,11 @@ pub fn bridge_wire_to_otlp_http(
 
 fn bridge_once(
     source: &str,
-    endpoint: &CollectorEndpoint,
-    collector_timeout: Duration,
     connect_timeout: Duration,
     last_seq: &mut u64,
     tls: &TlsConfig,
     tls_client: Option<Arc<ClientConfig>>,
+    collector_transport: &CollectorTransport,
 ) -> io::Result<()> {
     let stream = connect_with_timeout(source, connect_timeout)?;
     stream.set_read_timeout(None)?;
@@ -103,19 +119,18 @@ fn bridge_once(
         let conn = ClientConnection::new(client_config, server_name)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         let mut transport = StreamOwned::new(conn, stream);
-        return bridge_transport(source, endpoint, collector_timeout, last_seq, &mut transport);
+        return bridge_transport(source, last_seq, &mut transport, collector_transport);
     }
 
     let mut transport = stream;
-    bridge_transport(source, endpoint, collector_timeout, last_seq, &mut transport)
+    bridge_transport(source, last_seq, &mut transport, collector_transport)
 }
 
 fn bridge_transport<T: io::Read + io::Write>(
     source: &str,
-    endpoint: &CollectorEndpoint,
-    collector_timeout: Duration,
     last_seq: &mut u64,
     transport: &mut T,
+    collector_transport: &CollectorTransport,
 ) -> io::Result<()> {
     write_replay_request(transport, &ReplayRequest { from_seq: *last_seq })?;
     transport.flush()?;
@@ -126,7 +141,7 @@ fn bridge_transport<T: io::Read + io::Write>(
 
     while let Some(record) = read_record(transport)? {
         if record.record_type == RecordType::Logs {
-            post_raw_otlp_http(endpoint, collector_timeout, &record.payload)?;
+            post_raw_otlp_http(collector_transport, &record.payload)?;
         }
         *last_seq = record.seq;
     }
@@ -134,31 +149,24 @@ fn bridge_transport<T: io::Read + io::Write>(
     Ok(())
 }
 
-fn post_raw_otlp_http(endpoint: &CollectorEndpoint, timeout: Duration, payload: &[u8]) -> io::Result<()> {
-    let mut stream = connect_with_timeout(&endpoint.authority, timeout)?;
-    stream.set_write_timeout(Some(timeout))?;
-    stream.set_read_timeout(Some(timeout))?;
+fn post_raw_otlp_http(collector_transport: &CollectorTransport, payload: &[u8]) -> io::Result<()> {
+    let stream = connect_with_timeout(&collector_transport.endpoint.authority, collector_transport.timeout)?;
+    stream.set_write_timeout(Some(collector_transport.timeout))?;
+    stream.set_read_timeout(Some(collector_transport.timeout))?;
 
-    write!(
-        stream,
-        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        endpoint.path,
-        endpoint.authority,
-        payload.len()
-    )?;
-    stream.write_all(payload)?;
-    stream.flush()?;
-
-    let mut response = String::new();
-    std::io::Read::read_to_string(&mut stream, &mut response)?;
-    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
-        return Err(io::Error::other(format!(
-            "collector returned non-200 response: {}",
-            response.lines().next().unwrap_or("unknown response")
-        )));
+    if let Some(client_config) = &collector_transport.tls_client {
+        let server_name = parse_collector_server_name(
+            &collector_transport.collector,
+            &collector_transport.endpoint.authority,
+        )?;
+        let conn = ClientConnection::new(client_config.clone(), server_name)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+        let mut tls_transport = StreamOwned::new(conn, stream);
+        return post_raw_otlp_http_transport(&collector_transport.endpoint, payload, &mut tls_transport);
     }
 
-    Ok(())
+    let mut plain_transport = stream;
+    post_raw_otlp_http_transport(&collector_transport.endpoint, payload, &mut plain_transport)
 }
 
 fn connect_with_timeout(authority: &str, timeout: Duration) -> io::Result<TcpStream> {
@@ -185,6 +193,14 @@ fn to_io_error(err: logjet::Error) -> io::Error {
 struct CollectorEndpoint {
     authority: String,
     path: String,
+    tls: bool,
+}
+
+struct CollectorTransport {
+    endpoint: CollectorEndpoint,
+    timeout: Duration,
+    tls_client: Option<Arc<ClientConfig>>,
+    collector: CollectorConfig,
 }
 
 impl CollectorEndpoint {
@@ -200,21 +216,58 @@ impl CollectorEndpoint {
             return Ok(Self {
                 authority: authority.to_string(),
                 path: normalize_path(path),
+                tls: false,
             });
         }
 
-        if input.starts_with("https://") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "https collector.url is not supported yet",
-            ));
+        if let Some(rest) = input.strip_prefix("https://") {
+            let (authority, path) = split_authority_and_path(rest);
+            if authority.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "collector.url missing host:port",
+                ));
+            }
+            return Ok(Self {
+                authority: authority.to_string(),
+                path: normalize_path(path),
+                tls: true,
+            });
         }
 
         Ok(Self {
             authority: input.to_string(),
             path: "/v1/logs".to_string(),
+            tls: false,
         })
     }
+}
+
+fn post_raw_otlp_http_transport<T: io::Read + io::Write>(
+    endpoint: &CollectorEndpoint,
+    payload: &[u8],
+    transport: &mut T,
+) -> io::Result<()> {
+    write!(
+        transport,
+        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        endpoint.path,
+        endpoint.authority,
+        payload.len()
+    )?;
+    transport.write_all(payload)?;
+    transport.flush()?;
+
+    let mut response = String::new();
+    std::io::Read::read_to_string(transport, &mut response)?;
+    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+        return Err(io::Error::other(format!(
+            "collector returned non-200 response: {}",
+            response.lines().next().unwrap_or("unknown response")
+        )));
+    }
+
+    Ok(())
 }
 
 fn split_authority_and_path(input: &str) -> (&str, &str) {
