@@ -22,10 +22,12 @@ The daemon provides:
 
 - OTLP/HTTP ingest listener
 - OTLP/gRPC ingest listener
+- optional TLS for OTLP ingest
 - internal wire-protocol ingest listener
 - replay listener
 - continuous bridge mode to another collector through a remote replay listener
 - optional TLS on the replay/bridge transport
+- HTTPS collector export
 - one-shot file replay to OTLP/HTTP collectors
 - configurable backlog storage
 - in-memory ring buffer mode
