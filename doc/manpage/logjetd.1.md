@@ -24,10 +24,12 @@ It can:
 
 - accept OTLP/HTTP log batches on `POST /v1/logs`
 - accept OTLP/gRPC log batches on the standard `LogsService/Export` endpoint
+- optionally run OTLP/HTTP ingest over HTTPS and OTLP/gRPC ingest over TLS
 - store raw OTLP protobuf payloads either in memory or in append-only `.logjet` files
 - expose a replay listener for downstream consumers over the current internal wire protocol
 - connect to another `logjetd` replay listener and forward backlog plus live records into an OTLP/HTTP collector
 - optionally protect replay and bridge transport with TLS
+- optionally export to an HTTPS OTLP collector
 - inspect `.logjet` files and directories
 - replay stored `.logjet` files into an OTLP/HTTP collector as a one-shot operation
 
@@ -158,6 +160,10 @@ file.size: 10240
 file.name: vehicle.logjet
 collector.url: http://127.0.0.1:4318/v1/logs
 collector.timeout-ms: 10000
+collector.ca-file: /etc/logjet/collector-ca.pem
+collector.cert-file: /etc/logjet/collector.pem
+collector.key-file: /etc/logjet/collector.key
+collector.server-name: vector.internal
 upstream.replay: 10.0.0.15:7002
 upstream.retry-ms: 1000
 upstream.connect-timeout-ms: 5000
@@ -169,6 +175,11 @@ tls.require-client-cert: false
 tls.server-name: appliance.internal
 ingest.protocol: otlp-http
 ingest.listen: 127.0.0.1:4318
+ingest.tls-enable: false
+ingest.ca-file: /etc/logjet/ingest-ca.pem
+ingest.cert-file: /etc/logjet/ingest.pem
+ingest.key-file: /etc/logjet/ingest.key
+ingest.require-client-cert: false
 replay.listen: 0.0.0.0:7002
 replay.poll_ms: 250
 ```
@@ -180,12 +191,14 @@ Rules:
 - set either `buffer.size` or `buffer.messages`, never both
 - `buffer.keep` applies only to memory mode
 - file mode always keeps all rotated files
-- `ingest.protocol` currently supports `wire`, `otlp-http`, and `otlp-grpc`
+- `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `collector.url` configures replay destination URL
 - `collector.timeout-ms` configures replay and bridge socket timeout in milliseconds
+- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure HTTPS collector export
 - `upstream.replay` configures the default bridge source
 - `upstream.retry-ms` configures bridge reconnect delay
 - `upstream.connect-timeout-ms` configures bridge source connect timeout
+- `ingest.*` configures optional TLS on OTLP/HTTP and OTLP/gRPC ingest
 - `tls.*` configures optional TLS for replay listener and bridge transport
 
 # STORAGE MODES
@@ -215,11 +228,13 @@ Append-only file behavior:
 
 - OTLP/HTTP log ingest on `POST /v1/logs`
 - OTLP/gRPC log ingest on the standard logs export service
+- optional TLS on OTLP/HTTP and OTLP/gRPC ingest
 - append-only `.logjet` file output with size-based rotation
 - in-memory ring buffering with `buffer.keep`
 - replay listener for downstream consumers using the internal framed protocol
 - continuous bridge mode from replay listener to OTLP/HTTP collectors
 - optional TLS on replay/bridge transport
+- HTTPS OTLP collector export
 - one-shot file replay to OTLP/HTTP collectors with `logjetd replay`
 - configurable replay destination via `collector.url`
 - inspection of `.logjet` files and directories
@@ -230,7 +245,7 @@ Append-only file behavior:
 - persisted resume checkpoints and acknowledgements are not implemented
 - slow-consumer handling is basic
 - file mode does not delete old rotated files
-- OTLP ingest and collector export are not TLS-enabled yet
+- certificate management and deployment policy are still operator-managed
 
 # EXAMPLES
 

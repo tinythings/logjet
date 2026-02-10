@@ -30,6 +30,8 @@ accept OTLP/HTTP log batches on \f[C]POST /v1/logs\f[R]
 accept OTLP/gRPC log batches on the standard
 \f[C]LogsService/Export\f[R] endpoint
 .IP \[bu] 2
+optionally run OTLP/HTTP ingest over HTTPS and OTLP/gRPC ingest over TLS
+.IP \[bu] 2
 store raw OTLP protobuf payloads either in memory or in append-only
 \f[C].logjet\f[R] files
 .IP \[bu] 2
@@ -40,6 +42,8 @@ connect to another \f[C]logjetd\f[R] replay listener and forward backlog
 plus live records into an OTLP/HTTP collector
 .IP \[bu] 2
 optionally protect replay and bridge transport with TLS
+.IP \[bu] 2
+optionally export to an HTTPS OTLP collector
 .IP \[bu] 2
 inspect \f[C].logjet\f[R] files and directories
 .IP \[bu] 2
@@ -187,6 +191,10 @@ file.size: 10240
 file.name: vehicle.logjet
 collector.url: http://127.0.0.1:4318/v1/logs
 collector.timeout-ms: 10000
+collector.ca-file: /etc/logjet/collector-ca.pem
+collector.cert-file: /etc/logjet/collector.pem
+collector.key-file: /etc/logjet/collector.key
+collector.server-name: vector.internal
 upstream.replay: 10.0.0.15:7002
 upstream.retry-ms: 1000
 upstream.connect-timeout-ms: 5000
@@ -198,6 +206,11 @@ tls.require-client-cert: false
 tls.server-name: appliance.internal
 ingest.protocol: otlp-http
 ingest.listen: 127.0.0.1:4318
+ingest.tls-enable: false
+ingest.ca-file: /etc/logjet/ingest-ca.pem
+ingest.cert-file: /etc/logjet/ingest.pem
+ingest.key-file: /etc/logjet/ingest.key
+ingest.require-client-cert: false
 replay.listen: 0.0.0.0:7002
 replay.poll_ms: 250
 \f[R]
@@ -216,13 +229,17 @@ both
 .IP \[bu] 2
 file mode always keeps all rotated files
 .IP \[bu] 2
-\f[C]ingest.protocol\f[R] currently supports \f[C]wire\f[R],
-\f[C]otlp-http\f[R], and \f[C]otlp-grpc\f[R]
+\f[C]ingest.protocol\f[R] supports \f[C]wire\f[R], \f[C]otlp-http\f[R],
+and \f[C]otlp-grpc\f[R]
 .IP \[bu] 2
 \f[C]collector.url\f[R] configures replay destination URL
 .IP \[bu] 2
 \f[C]collector.timeout-ms\f[R] configures replay and bridge socket
 timeout in milliseconds
+.IP \[bu] 2
+\f[C]collector.ca-file\f[R], \f[C]collector.cert-file\f[R],
+\f[C]collector.key-file\f[R], and \f[C]collector.server-name\f[R]
+configure HTTPS collector export
 .IP \[bu] 2
 \f[C]upstream.replay\f[R] configures the default bridge source
 .IP \[bu] 2
@@ -230,6 +247,9 @@ timeout in milliseconds
 .IP \[bu] 2
 \f[C]upstream.connect-timeout-ms\f[R] configures bridge source connect
 timeout
+.IP \[bu] 2
+\f[C]ingest.*\f[R] configures optional TLS on OTLP/HTTP and OTLP/gRPC
+ingest
 .IP \[bu] 2
 \f[C]tls.*\f[R] configures optional TLS for replay listener and bridge
 transport
@@ -266,6 +286,8 @@ OTLP/HTTP log ingest on \f[C]POST /v1/logs\f[R]
 .IP \[bu] 2
 OTLP/gRPC log ingest on the standard logs export service
 .IP \[bu] 2
+optional TLS on OTLP/HTTP and OTLP/gRPC ingest
+.IP \[bu] 2
 append-only \f[C].logjet\f[R] file output with size-based rotation
 .IP \[bu] 2
 in-memory ring buffering with \f[C]buffer.keep\f[R]
@@ -276,6 +298,8 @@ protocol
 continuous bridge mode from replay listener to OTLP/HTTP collectors
 .IP \[bu] 2
 optional TLS on replay/bridge transport
+.IP \[bu] 2
+HTTPS OTLP collector export
 .IP \[bu] 2
 one-shot file replay to OTLP/HTTP collectors with
 \f[C]logjetd replay\f[R]
@@ -293,7 +317,7 @@ slow-consumer handling is basic
 .IP \[bu] 2
 file mode does not delete old rotated files
 .IP \[bu] 2
-OTLP ingest and collector export are not TLS-enabled yet
+certificate management and deployment policy are still operator-managed
 .SH EXAMPLES
 .PP
 Run the daemon with explicit config:
