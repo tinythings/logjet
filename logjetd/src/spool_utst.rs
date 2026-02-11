@@ -1,5 +1,5 @@
-use super::BufferSpool;
-use crate::config::{BufferConfig, BufferLimit};
+use super::{BufferSpool, Spool};
+use crate::config::{BufferConfig, BufferLimit, FileConfig, StorageConfig};
 use crate::protocol::{WireRecord, read_record};
 use logjet::RecordType;
 use std::fs;
@@ -92,6 +92,71 @@ fn list_named_segments_orders_numeric_suffixes() {
         .collect();
     assert_eq!(names, vec!["bofh.logjet", "bofh-1.logjet", "bofh-2.logjet", "bofh-10.logjet"]);
 
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn file_spool_rotates_when_segment_size_is_exceeded() {
+    let dir = unique_temp_dir("file-rotate");
+    let mut spool = Spool::open(StorageConfig::File(FileConfig {
+        dir: dir.clone(),
+        name: "bofh.logjet".to_string(),
+        segment_size_bytes: 1,
+    }))
+    .unwrap();
+
+    for seq in 1..=2 {
+        spool.append(WireRecord {
+            record_type: RecordType::Logs,
+            seq,
+            ts_unix_ns: seq,
+            payload: vec![0u8; 8],
+        })
+        .unwrap();
+    }
+
+    assert!(dir.join("bofh.logjet").exists());
+    assert!(dir.join("bofh-1.logjet").exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn file_spool_reuses_existing_non_full_segment() {
+    let dir = unique_temp_dir("file-reuse");
+    {
+        let mut spool = Spool::open(StorageConfig::File(FileConfig {
+            dir: dir.clone(),
+            name: "bofh.logjet".to_string(),
+            segment_size_bytes: 1024 * 1024,
+        }))
+        .unwrap();
+        spool.append(WireRecord {
+            record_type: RecordType::Logs,
+            seq: 1,
+            ts_unix_ns: 1,
+            payload: vec![1u8; 8],
+        })
+        .unwrap();
+    }
+
+    {
+        let mut spool = Spool::open(StorageConfig::File(FileConfig {
+            dir: dir.clone(),
+            name: "bofh.logjet".to_string(),
+            segment_size_bytes: 1024 * 1024,
+        }))
+        .unwrap();
+        spool.append(WireRecord {
+            record_type: RecordType::Logs,
+            seq: 2,
+            ts_unix_ns: 2,
+            payload: vec![2u8; 8],
+        })
+        .unwrap();
+    }
+
+    assert!(dir.join("bofh.logjet").exists());
+    assert!(!dir.join("bofh-1.logjet").exists());
     fs::remove_dir_all(dir).unwrap();
 }
 
