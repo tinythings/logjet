@@ -15,7 +15,7 @@ fn http_url_with_custom_path_is_preserved() {
 }
 
 #[test]
-fn http_url_without_leading_slash_is_normalized() {
+fn http_url_without_leading_slash_is_normalised() {
     let endpoint = CollectorEndpoint::parse("http://127.0.0.1:4318/custom").unwrap();
     assert_eq!(endpoint.path, "/custom");
 }

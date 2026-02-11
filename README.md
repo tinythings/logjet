@@ -17,7 +17,7 @@ It is designed for telemetry relay and local persistence on weak hardware where:
 
 - a block-based on-disk container format
 - a Rust library for appending telemetry records and replaying them later
-- a corruption-tolerant sequential reader with forward resynchronization
+- a corruption-tolerant sequential reader with forward resynchronisation
 - a transport-neutral storage layer for opaque OTLP protobuf payload bytes
 
 Each record stores:
@@ -76,7 +76,7 @@ using whole-file compression or per-record checksums.
 - a query layer for telemetry
 - an OTLP decoder or validator
 - a replacement for object storage, Kafka, or long-term analytics systems
-- a whole-file archival compressor optimized for maximum compression ratio
+- a whole-file archival compressor optimised for maximum compression ratio
 
 It stores opaque OTLP protobuf bytes and focuses on durable append and reliable
 sequential replay, not schema inspection or analytical querying.

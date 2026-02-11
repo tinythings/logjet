@@ -83,7 +83,7 @@ From this directory:
 
 This starts:
 
-1. the colorful OTLP collector mockup on `127.0.0.1:4320`
+1. the colourful OTLP collector mockup on `127.0.0.1:4320`
 2. remote-side `logjetd bridge`
 3. a TLS connection from the remote side into the appliance replay listener
 
@@ -92,7 +92,7 @@ Expected result:
 - `BOOT MESSAGE #1`, `BOOT MESSAGE #2`, and `BOOT MESSAGE #3` always appear
 - the other boot messages may or may not appear, depending on when the remote side starts
 - backlog already retained on the appliance side is drained first
-- then new BOFH messages continue to appear live in the colorful collector
+- then new BOFH messages continue to appear live in the colourful collector
 
 ## Certificates
 

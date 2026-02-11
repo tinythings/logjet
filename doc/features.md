@@ -16,7 +16,7 @@ POST /v1/logs
 It can also accept OTLP/gRPC log export requests on the standard
 `LogsService/Export` endpoint when `ingest.protocol: otlp-grpc` is configured.
 
-Current behavior:
+Current behaviour:
 
 - accepts OTLP log batches over HTTP and gRPC
 - OTLP/HTTP ingest can also run over HTTPS
@@ -30,7 +30,7 @@ Current behavior:
 In file mode, `logjetd` writes raw OTLP protobuf batches into `.logjet` files
 using the `logjet` block format.
 
-Current behavior:
+Current behaviour:
 
 - append-only writes
 - file rotation when `file.size` is exceeded
@@ -44,7 +44,7 @@ Current behavior:
 
 In buffer mode, `logjetd` can hold retained records in RAM.
 
-Current behavior:
+Current behaviour:
 
 - supports byte-based limit with `buffer.size`
 - supports message-count limit with `buffer.messages`
@@ -62,7 +62,7 @@ Memory model:
 
 `logjetd` exposes a replay socket for downstream consumers.
 
-Current behavior:
+Current behaviour:
 
 - clients send a small replay request with `from_seq`
 - replays retained data in sequence order
@@ -81,7 +81,7 @@ Current limitation:
 logjetd bridge [--source <host:port>]
 ```
 
-Current behavior:
+Current behaviour:
 
 - connects to another `logjetd` replay listener
 - requests replay starting after the last sequence already forwarded
@@ -100,7 +100,7 @@ OA -> logjetd <- network <- logjetd -> Vector
 
 The replay listener and bridge client can run over TLS.
 
-Current behavior:
+Current behaviour:
 
 - TLS is optional and disabled by default
 - the replay listener can present a server certificate
@@ -122,7 +122,7 @@ collector with:
 logjetd replay --path <dir> --name <base.logjet> [--dest <url-or-host:port>]
 ```
 
-Current behavior:
+Current behaviour:
 
 - scans for `name.logjet`, `name-1.logjet`, `name-2.logjet`, and so on
 - replays them in that order
@@ -149,7 +149,7 @@ Current config areas:
 - replay polling interval
 - collector URL and timeout
 - collector TLS trust/client-cert settings
-- upstream replay source and retry behavior
+- upstream replay source and retry behaviour
 - replay/bridge TLS settings
 - OTLP ingest TLS settings
 

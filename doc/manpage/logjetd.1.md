@@ -45,7 +45,7 @@ from the file passed with `-c` or `--config`.
 
 If no explicit command is given, `serve` is the default.
 
-Current serve behavior:
+Current serve behaviour:
 
 - OTLP/HTTP ingest is supported with `ingest.protocol: otlp-http`
 - OTLP/gRPC ingest is supported with `ingest.protocol: otlp-grpc`
@@ -205,7 +205,7 @@ Rules:
 
 ## Buffer mode
 
-In-memory ring behavior:
+In-memory ring behaviour:
 
 - first `buffer.keep` messages are retained in a permanent front jar
 - later messages form a rotating FIFO tail
@@ -218,7 +218,7 @@ Drain model:
 
 ## File mode
 
-Append-only file behavior:
+Append-only file behaviour:
 
 - write to `name.logjet`
 - rotate to `name-1.logjet`, `name-2.logjet`, and so on when `file.size` is exceeded

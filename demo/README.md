@@ -4,16 +4,16 @@ This directory contains two binaries for a two-terminal OTLP demo over TCP.
 
 - `otlp-bofh-emitter`
   - emits a real OTLP/HTTP protobuf log batch every second
-  - prints the exact log content it is sending, without ANSI colors
+  - prints the exact log content it is sending, without ANSI colours
 
 - `otlp-bofh-grpc-emitter`
   - emits a real OTLP/gRPC log batch every second
-  - prints the exact log content it is sending, without ANSI colors
+  - prints the exact log content it is sending, without ANSI colours
 
 - `otlp-demo-collector`
   - listens on a TCP socket for OTLP/HTTP `POST /v1/logs`
   - decodes the protobuf payload
-  - prints the same log content to stdout with ANSI colors
+  - prints the same log content to stdout with ANSI colours
 
 It also contains scenario demos under subdirectories:
 
@@ -61,7 +61,7 @@ service=bofh-emitter scope=logjet-demo-emitter severity=WARN ts=1700000000000000
 message: BOFH excuse #1: magnetic interference from a mislabeled coffee mug
 ```
 
-The collector prints the same fields, but colorized.
+The collector prints the same fields, but colourised.
 
 ## Defaults
 
