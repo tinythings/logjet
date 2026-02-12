@@ -23,6 +23,8 @@ It also contains scenario demos under subdirectories:
   - OTLP/gRPC emitter into file-backed `logjetd`
 - [`memory-buffer`](./memory-buffer)
   - kept-front-jar plus rotating-tail memory retention
+- [`drain-once`](./drain-once)
+  - preserved startup messages are consumed on the first drain and do not appear on the second
 - [`multi-emitter`](./multi-emitter)
   - five emitters into one `logjetd`, then late replay into one collector
 - [`multi-emitter-continuous`](./multi-emitter-continuous)
