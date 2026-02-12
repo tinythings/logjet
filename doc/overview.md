@@ -26,6 +26,7 @@ The daemon provides:
 - internal wire-protocol ingest listener
 - replay listener
 - continuous bridge mode to another collector through a remote replay listener
+- configurable keep-or-drain bridge semantics
 - optional TLS on the replay/bridge transport
 - HTTPS collector export
 - one-shot file replay to OTLP/HTTP collectors
@@ -50,7 +51,7 @@ Typical flow:
 
 1. connect to another `logjetd` replay listener
 2. request records after a known sequence
-3. receive retained backlog
+3. keep or drain retained backlog
 4. stay attached for live records
 5. forward raw OTLP protobuf payloads into an OTLP/HTTP collector
 

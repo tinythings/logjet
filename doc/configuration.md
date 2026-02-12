@@ -22,6 +22,7 @@ collector.cert-file: /etc/logjet/collector.pem
 collector.key-file: /etc/logjet/collector.key
 collector.server-name: vector.internal
 upstream.replay: 10.0.0.15:7002
+upstream.mode: keep
 upstream.retry-ms: 1000
 upstream.connect-timeout-ms: 5000
 tls.enable: false
@@ -190,6 +191,24 @@ Example:
 
 If this key is omitted, `logjetd bridge` requires `--source`.
 
+### `upstream.mode`
+
+Retention mode requested by `logjetd bridge` from the upstream replay listener.
+
+Values:
+
+- `keep`
+  - replayed records stay on the upstream side after forwarding
+- `drain`
+  - replayed records are acknowledged and then consumed on the upstream side
+
+Important:
+
+- default is `keep`
+- use `drain` when replay should behave like a queue instead of a replayable backlog
+- in `drain` mode, the downstream bridge acknowledges each record only after successful collector export
+- in file mode, fully consumed closed segments are deleted; the current active segment stays logically empty until rotation or reopen
+
 ### `upstream.retry-ms`
 
 Reconnect delay in milliseconds for `logjetd bridge`.
@@ -351,6 +370,7 @@ If omitted:
 - `collector.key-file: unset`
 - `collector.server-name: unset`
 - `upstream.replay: unset`
+- `upstream.mode: keep`
 - `upstream.retry-ms: 1000`
 - `upstream.connect-timeout-ms: 5000`
 - `tls.enable: false`
@@ -380,6 +400,8 @@ If omitted:
 - `collector.timeout-ms` controls replay and bridge HTTP socket timeout
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to HTTPS collector export
 - `upstream.replay` is used by `logjetd bridge` when `--source` is omitted
+- `upstream.mode: keep` leaves upstream retained records in place after replay
+- `upstream.mode: drain` consumes upstream retained records after successful bridge export
 - `upstream.retry-ms` controls bridge reconnect delay
 - `upstream.connect-timeout-ms` controls bridge source connect timeout
 - `ingest.tls-*` controls TLS on OTLP/HTTP and OTLP/gRPC ingest
@@ -388,4 +410,5 @@ If omitted:
 - `file.*` settings are ignored unless `output: file`
 - `buffer.*` settings are ignored unless `output: buffer`
 - `file.path` is treated as a directory, not a full file path
-- file mode always keeps everything and only rotates to a new append-only file when `file.size` is exceeded
+- file mode always rotates to a new append-only file when `file.size` is exceeded
+- in file mode, `upstream.mode: drain` deletes fully consumed closed segments
