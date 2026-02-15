@@ -11,7 +11,7 @@ use crate::protocol::{WireRecord, write_record};
 #[derive(Debug)]
 pub enum Spool {
     Buffer(BufferSpool),
-    File(FileSpool),
+    File(Box<FileSpool>),
 }
 
 #[derive(Debug)]
@@ -26,11 +26,13 @@ pub struct BufferSpool {
 pub struct FileSpool {
     dir: PathBuf,
     base_stem: String,
+    state_path: PathBuf,
     active_segment_id: u64,
     active_segment_path: PathBuf,
     active_writer: LogjetWriter<File>,
     active_size_bytes: u64,
     segment_target_bytes: u64,
+    consumed_through_seq: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -43,7 +45,7 @@ impl Spool {
     pub fn open(config: StorageConfig) -> io::Result<Self> {
         match config {
             StorageConfig::Buffer(config) => Ok(Self::Buffer(BufferSpool::new(config))),
-            StorageConfig::File(config) => Ok(Self::File(FileSpool::open(config)?)),
+            StorageConfig::File(config) => Ok(Self::File(Box::new(FileSpool::open(config)?))),
         }
     }
 
@@ -61,6 +63,23 @@ impl Spool {
         match self {
             Self::Buffer(spool) => spool.replay_since(writer, last_seq),
             Self::File(spool) => spool.replay_since(writer, last_seq),
+        }
+    }
+
+    pub fn next_after(&self, last_seq: u64) -> io::Result<Option<WireRecord>> {
+        match self {
+            Self::Buffer(spool) => Ok(spool.next_after(last_seq)),
+            Self::File(spool) => spool.next_after(last_seq),
+        }
+    }
+
+    pub fn consume_through(&mut self, seq: u64) -> io::Result<()> {
+        match self {
+            Self::Buffer(spool) => {
+                spool.consume_through(seq);
+                Ok(())
+            }
+            Self::File(spool) => spool.consume_through(seq),
         }
     }
 }
@@ -101,6 +120,20 @@ impl BufferSpool {
         Ok(sent_any)
     }
 
+    fn next_after(&self, last_seq: u64) -> Option<WireRecord> {
+        self.records
+            .iter()
+            .find(|record| record.seq > last_seq)
+            .cloned()
+    }
+
+    fn consume_through(&mut self, seq: u64) {
+        while matches!(self.records.front(), Some(record) if record.seq <= seq) {
+            self.records.pop_front();
+        }
+        self.recalculate_tail_bytes();
+    }
+
     fn enforce_limits(&mut self) {
         while self.over_limit() && self.records.len() > self.keep_messages {
             let drop_index = self.keep_messages;
@@ -121,6 +154,15 @@ impl BufferSpool {
     fn tail_len(&self) -> usize {
         self.records.len().saturating_sub(self.keep_messages)
     }
+
+    fn recalculate_tail_bytes(&mut self) {
+        self.tail_bytes = self
+            .records
+            .iter()
+            .skip(self.keep_messages)
+            .map(record_size)
+            .sum();
+    }
 }
 
 impl FileSpool {
@@ -128,7 +170,9 @@ impl FileSpool {
         fs::create_dir_all(&config.dir)?;
 
         let base_stem = derive_base_stem(&config.name);
+        let state_path = config.dir.join(format!("{base_stem}.state"));
         let segments = list_segments(&config.dir, &base_stem)?;
+        let consumed_through_seq = read_consumed_state(&state_path)?;
 
         let (active_segment_id, active_segment_path, active_size_bytes) = match segments.last() {
             Some(segment) => {
@@ -151,15 +195,19 @@ impl FileSpool {
             .append(true)
             .open(&active_segment_path)?;
 
-        Ok(Self {
+        let mut spool = Self {
             dir: config.dir,
             base_stem,
+            state_path,
             active_segment_id,
             active_segment_path,
             active_writer: LogjetWriter::new(file),
             active_size_bytes,
             segment_target_bytes: config.segment_size_bytes,
-        })
+            consumed_through_seq,
+        };
+        spool.cleanup_consumed_segments()?;
+        Ok(spool)
     }
 
     fn append(&mut self, record: WireRecord) -> io::Result<()> {
@@ -182,13 +230,14 @@ impl FileSpool {
 
     fn replay_since<W: io::Write>(&self, writer: &mut W, last_seq: &mut u64) -> io::Result<bool> {
         let mut sent_any = false;
+        let floor_seq = (*last_seq).max(self.consumed_through_seq);
 
         for segment in list_segments(&self.dir, &self.base_stem)? {
             let file = File::open(&segment.path)?;
             let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
 
             while let Some(record) = reader.next_record().map_err(to_io_error)? {
-                if record.seq <= *last_seq {
+                if record.seq <= floor_seq || record.seq <= *last_seq {
                     continue;
                 }
 
@@ -209,6 +258,40 @@ impl FileSpool {
         Ok(sent_any)
     }
 
+    fn next_after(&self, last_seq: u64) -> io::Result<Option<WireRecord>> {
+        let floor_seq = last_seq.max(self.consumed_through_seq);
+
+        for segment in list_segments(&self.dir, &self.base_stem)? {
+            let file = File::open(&segment.path)?;
+            let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
+
+            while let Some(record) = reader.next_record().map_err(to_io_error)? {
+                if record.seq <= floor_seq {
+                    continue;
+                }
+
+                return Ok(Some(WireRecord {
+                    record_type: record.record_type,
+                    seq: record.seq,
+                    ts_unix_ns: record.ts_unix_ns,
+                    payload: record.payload,
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn consume_through(&mut self, seq: u64) -> io::Result<()> {
+        if seq <= self.consumed_through_seq {
+            return Ok(());
+        }
+
+        self.consumed_through_seq = seq;
+        write_consumed_state(&self.state_path, self.consumed_through_seq)?;
+        self.cleanup_consumed_segments()
+    }
+
     fn rotate(&mut self) -> io::Result<()> {
         self.active_writer.flush_block().map_err(to_io_error)?;
         self.active_segment_id = self
@@ -227,6 +310,48 @@ impl FileSpool {
 
     fn refresh_active_size(&mut self) -> io::Result<()> {
         self.active_size_bytes = fs::metadata(&self.active_segment_path)?.len();
+        Ok(())
+    }
+
+    fn cleanup_consumed_segments(&mut self) -> io::Result<()> {
+        let segments = list_segments(&self.dir, &self.base_stem)?;
+
+        for segment in segments {
+            let Some(max_seq) = segment_max_seq(&segment.path)? else {
+                continue;
+            };
+            if max_seq > self.consumed_through_seq {
+                continue;
+            }
+
+            if segment.id == self.active_segment_id {
+                self.advance_empty_active_segment()?;
+                continue;
+            }
+
+            fs::remove_file(&segment.path)?;
+        }
+
+        Ok(())
+    }
+
+    fn advance_empty_active_segment(&mut self) -> io::Result<()> {
+        self.active_writer.flush_block().map_err(to_io_error)?;
+        let old_path = self.active_segment_path.clone();
+        self.active_segment_id = self
+            .active_segment_id
+            .checked_add(1)
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
+        self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.active_segment_path)?;
+        self.active_writer = LogjetWriter::new(file);
+        self.active_size_bytes = 0;
+        if old_path.exists() {
+            fs::remove_file(old_path)?;
+        }
         Ok(())
     }
 }
@@ -337,6 +462,35 @@ fn record_size(record: &WireRecord) -> usize {
 
 fn to_io_error(err: logjet::Error) -> io::Error {
     io::Error::new(ErrorKind::InvalidData, err.to_string())
+}
+
+fn read_consumed_state(path: &Path) -> io::Result<u64> {
+    if !path.exists() {
+        return Ok(0);
+    }
+
+    let text = fs::read_to_string(path)?;
+    let seq = text
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("invalid consumed state: {err}")))?;
+    Ok(seq)
+}
+
+fn write_consumed_state(path: &Path, seq: u64) -> io::Result<()> {
+    fs::write(path, seq.to_string())
+}
+
+fn segment_max_seq(path: &Path) -> io::Result<Option<u64>> {
+    let file = File::open(path)?;
+    let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
+    let mut max_seq = None;
+
+    while let Some(record) = reader.next_record().map_err(to_io_error)? {
+        max_seq = Some(record.seq);
+    }
+
+    Ok(max_seq)
 }
 
 #[cfg(test)]
