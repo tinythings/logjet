@@ -1,5 +1,6 @@
 use super::{
-    ReplayRequest, WireRecord, read_record, read_replay_request, write_record, write_replay_request,
+    ReplayAck, ReplayRequest, WireRecord, read_record, read_replay_ack, read_replay_request,
+    write_record, write_replay_ack, write_replay_request,
 };
 use logjet::RecordType;
 
@@ -19,11 +20,23 @@ fn round_trip_record() {
 
 #[test]
 fn replay_request_round_trip() {
-    let request = ReplayRequest { from_seq: 1234 };
+    let request = ReplayRequest {
+        from_seq: 1234,
+        consume: true,
+    };
     let mut bytes = Vec::new();
     write_replay_request(&mut bytes, &request).unwrap();
     let decoded = read_replay_request(&mut bytes.as_slice()).unwrap();
     assert_eq!(decoded, request);
+}
+
+#[test]
+fn replay_ack_round_trip() {
+    let ack = ReplayAck { ack_seq: 9876 };
+    let mut bytes = Vec::new();
+    write_replay_ack(&mut bytes, &ack).unwrap();
+    let decoded = read_replay_ack(&mut bytes.as_slice()).unwrap();
+    assert_eq!(decoded, ack);
 }
 
 #[test]
@@ -59,6 +72,30 @@ fn invalid_replay_request_magic_is_rejected() {
     bytes.extend_from_slice(&99u64.to_le_bytes());
 
     let err = read_replay_request(&mut bytes.as_slice()).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn invalid_replay_ack_magic_is_rejected() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"BADACK01");
+    bytes.extend_from_slice(&[1]);
+    bytes.extend_from_slice(&[0u8; 7]);
+    bytes.extend_from_slice(&99u64.to_le_bytes());
+
+    let err = read_replay_ack(&mut bytes.as_slice()).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn unsupported_replay_ack_version_is_rejected() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"LJRPA001");
+    bytes.extend_from_slice(&[9]);
+    bytes.extend_from_slice(&[0u8; 7]);
+    bytes.extend_from_slice(&99u64.to_le_bytes());
+
+    let err = read_replay_ack(&mut bytes.as_slice()).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
