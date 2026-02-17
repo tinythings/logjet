@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufReader};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
@@ -76,13 +76,17 @@ pub fn bridge_wire_to_otlp_http(
         collector: collector.clone(),
         upstream_mode: upstream.mode,
     };
-    let mut last_seq = 0u64;
+    let mut last_seq = read_bridge_state(upstream.state_file.as_deref())?;
+    if let Some(path) = upstream.state_file.as_deref() {
+        eprintln!("bridge resume state file {} loaded seq={last_seq}", path.display());
+    }
 
     loop {
         match bridge_once(
             source,
             connect_timeout,
             &mut last_seq,
+            upstream.state_file.as_deref(),
             tls,
             tls_client.clone(),
             &collector_transport,
@@ -108,6 +112,7 @@ fn bridge_once(
     source: &str,
     connect_timeout: Duration,
     last_seq: &mut u64,
+    state_file: Option<&Path>,
     tls: &TlsConfig,
     tls_client: Option<Arc<ClientConfig>>,
     collector_transport: &CollectorTransport,
@@ -121,16 +126,17 @@ fn bridge_once(
         let conn = ClientConnection::new(client_config, server_name)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         let mut transport = StreamOwned::new(conn, stream);
-        return bridge_transport(source, last_seq, &mut transport, collector_transport);
+        return bridge_transport(source, last_seq, state_file, &mut transport, collector_transport);
     }
 
     let mut transport = stream;
-    bridge_transport(source, last_seq, &mut transport, collector_transport)
+    bridge_transport(source, last_seq, state_file, &mut transport, collector_transport)
 }
 
 fn bridge_transport<T: io::Read + io::Write>(
     source: &str,
     last_seq: &mut u64,
+    state_file: Option<&Path>,
     transport: &mut T,
     collector_transport: &CollectorTransport,
 ) -> io::Result<()> {
@@ -149,6 +155,7 @@ fn bridge_transport<T: io::Read + io::Write>(
             post_raw_otlp_http(collector_transport, &record.payload)?;
         }
         *last_seq = record.seq;
+        write_bridge_state(state_file, *last_seq)?;
         if consume {
             write_replay_ack(transport, &ReplayAck { ack_seq: record.seq })?;
             transport.flush()?;
@@ -197,6 +204,34 @@ fn connect_with_timeout(authority: &str, timeout: Duration) -> io::Result<TcpStr
 
 fn to_io_error(err: logjet::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, err.to_string())
+}
+
+fn read_bridge_state(path: Option<&Path>) -> io::Result<u64> {
+    let Some(path) = path else {
+        return Ok(0);
+    };
+    if !path.exists() {
+        return Ok(0);
+    }
+
+    let text = fs::read_to_string(path)?;
+    let seq = text
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("invalid bridge state: {err}")))?;
+    Ok(seq)
+}
+
+fn write_bridge_state(path: Option<&Path>, seq: u64) -> io::Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, seq.to_string())
 }
 
 struct CollectorEndpoint {
