@@ -3,6 +3,8 @@ use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use prost::Message;
@@ -16,10 +18,17 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut tls = false;
     let mut cert_file = None;
     let mut key_file = None;
+    let mut delay_ms = 0u64;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--tls" => tls = true,
+            "--delay-ms" => {
+                delay_ms = args
+                    .next()
+                    .ok_or("missing value for --delay-ms")?
+                    .parse::<u64>()?;
+            }
             "--cert-file" => {
                 cert_file = Some(PathBuf::from(args.next().ok_or("missing value for --cert-file")?));
             }
@@ -30,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
     if tls {
-        return run_tls(&bind_addr, cert_file, key_file);
+        return run_tls(&bind_addr, cert_file, key_file, delay_ms);
     }
 
     let server = Server::http(&bind_addr)?;
@@ -50,6 +59,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match ExportLogsServiceRequest::decode(body.as_slice()) {
             Ok(batch) => {
                 print!("{}", format_batch_coloured(&batch));
+                if delay_ms > 0 {
+                    thread::sleep(Duration::from_millis(delay_ms));
+                }
                 let response = Response::empty(200).with_header(content_type_header());
                 request.respond(response)?;
             }
@@ -68,6 +80,7 @@ fn run_tls(
     bind_addr: &str,
     cert_file: Option<PathBuf>,
     key_file: Option<PathBuf>,
+    delay_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cert_file = cert_file.ok_or("missing --cert-file for --tls")?;
     let key_file = key_file.ok_or("missing --key-file for --tls")?;
@@ -79,7 +92,7 @@ fn run_tls(
         let stream = stream?;
         let config = config.clone();
         std::thread::spawn(move || {
-            if let Err(err) = handle_tls_client(stream, config) {
+            if let Err(err) = handle_tls_client(stream, config, delay_ms) {
                 eprintln!("otlp-demo-collector tls client error: {err}");
             }
         });
@@ -91,10 +104,11 @@ fn run_tls(
 fn handle_tls_client(
     stream: std::net::TcpStream,
     config: Arc<rustls::ServerConfig>,
+    delay_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn = ServerConnection::new(config)?;
     let mut transport = StreamOwned::new(conn, stream);
-    let result = handle_tls_http_request(&mut transport);
+    let result = handle_tls_http_request(&mut transport, delay_ms);
     transport.conn.send_close_notify();
     let _ = transport.flush();
     result
@@ -102,6 +116,7 @@ fn handle_tls_client(
 
 fn handle_tls_http_request(
     transport: &mut StreamOwned<ServerConnection, std::net::TcpStream>,
+    delay_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let request = read_http_request(transport)?;
     if request.method != "POST" || request.path != "/v1/logs" {
@@ -112,6 +127,9 @@ fn handle_tls_http_request(
     match ExportLogsServiceRequest::decode(request.body.as_slice()) {
         Ok(batch) => {
             print!("{}", format_batch_coloured(&batch));
+            if delay_ms > 0 {
+                thread::sleep(Duration::from_millis(delay_ms));
+            }
             write_http_response(transport, 200, "")?;
         }
         Err(err) => {
