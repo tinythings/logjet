@@ -81,6 +81,9 @@ through `upstream.state-file`.
 - can also load and save the last forwarded sequence through `upstream.state-file`
 - source address comes from `--source` or `upstream.replay`
 - `upstream.mode: drain` removes upstream records after successful collector export and acknowledgement
+- `backpressure.enabled: true` enables explicit bridge backpressure policy handling
+- `backpressure.mode: disconnect` uses collector timeouts as a fail-fast policy
+- `backpressure.mode: block` waits for the collector reply instead of timing out
 - can optionally use TLS with `tls.*`
 - collector export can optionally use HTTPS with `collector.*`
 
@@ -133,6 +136,7 @@ What exists now:
 - TCP replay
 - continuous daemon-to-daemon bridge to OTLP/HTTP collectors
 - configurable keep-or-drain bridge mode
+- basic bridge backpressure policy
 - optional TLS on replay/bridge transport
 - TLS-enabled OTLP ingest
 - HTTPS collector export
@@ -144,3 +148,4 @@ What exists now:
 What does not exist yet:
 
 - advanced restart handling when upstream storage is reset or replaced
+- richer slow-consumer policy than `block` and `disconnect`

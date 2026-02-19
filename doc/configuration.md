@@ -21,6 +21,8 @@ collector.ca-file: /etc/logjet/collector-ca.pem
 collector.cert-file: /etc/logjet/collector.pem
 collector.key-file: /etc/logjet/collector.key
 collector.server-name: vector.internal
+backpressure.enabled: false
+backpressure.mode: disconnect
 upstream.replay: 10.0.0.15:7002
 upstream.mode: keep
 upstream.state-file: /var/lib/logjet/bridge.state
@@ -39,6 +41,8 @@ ingest.ca-file: /etc/logjet/ingest-ca.pem
 ingest.cert-file: /etc/logjet/ingest.pem
 ingest.key-file: /etc/logjet/ingest.key
 ingest.require-client-cert: false
+ingest.max-batch-bytes: 1048576
+ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
 replay.poll_ms: 250
 ```
@@ -179,6 +183,69 @@ Private key matching `collector.cert-file`.
 ### `collector.server-name`
 
 Override server name used for HTTPS collector certificate validation.
+
+### `ingest.max-batch-bytes`
+
+Maximum accepted payload size in bytes for one ingest record or one OTLP batch.
+
+Use this to stop oversized senders from consuming too much memory or CPU on
+weak appliances.
+
+Important:
+
+- default is `1048576`
+- applies to `wire`, `otlp-http`, and `otlp-grpc`
+- oversized payloads are rejected before they are appended
+
+### `ingest.max-clients`
+
+Maximum number of ingest clients handled at the same time.
+
+Use this to stop a burst of simultaneous senders from overwhelming the daemon.
+
+Important:
+
+- default is `32`
+- must be greater than zero
+- applies directly to thread-per-client ingest paths and current gRPC concurrency handling
+- plain non-TLS `otlp-http` ingest is already serial in the current implementation
+
+### `backpressure.mode`
+
+Bridge export behaviour when the collector is slower than the bridge.
+
+Values:
+
+- `disconnect`
+  - use `collector.timeout-ms` as a socket timeout
+  - if the collector is too slow, bridge export fails and reconnect logic takes over
+- `block`
+  - do not use collector socket timeouts
+  - the bridge waits as long as needed for the collector reply
+
+Important:
+
+- default is `disconnect`
+- this setting affects bridge export to the collector
+- `logjetd replay` remains a one-shot bulk operation and does not use this policy
+
+### `backpressure.enabled`
+
+Enable or disable bridge backpressure policy handling.
+
+Values:
+
+- `false`
+  - default
+  - bridge uses normal collector socket timeouts
+- `true`
+  - bridge applies `backpressure.mode`
+
+Important:
+
+- default is `false`
+- `backpressure.mode` matters only when `backpressure.enabled: true`
+- this switch affects bridge export only
 
 ### `upstream.replay`
 
@@ -383,6 +450,8 @@ If omitted:
 - `collector.cert-file: unset`
 - `collector.key-file: unset`
 - `collector.server-name: unset`
+- `backpressure.enabled: false`
+- `backpressure.mode: disconnect`
 - `upstream.replay: unset`
 - `upstream.mode: keep`
 - `upstream.state-file: unset`
@@ -401,6 +470,8 @@ If omitted:
 - `ingest.cert-file: unset`
 - `ingest.key-file: unset`
 - `ingest.require-client-cert: false`
+- `ingest.max-batch-bytes: 1048576`
+- `ingest.max-clients: 32`
 - `replay.listen: 0.0.0.0:7002`
 - `replay.poll_ms: 250`
 
@@ -414,6 +485,8 @@ If omitted:
 - `collector.url` is used by `logjetd replay` when `--dest` is omitted
 - `collector.timeout-ms` controls replay and bridge HTTP socket timeout
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to HTTPS collector export
+- `backpressure.enabled` enables bridge backpressure policy handling
+- `backpressure.mode` configures whether bridge export blocks or disconnects when the collector is too slow
 - `upstream.replay` is used by `logjetd bridge` when `--source` is omitted
 - `upstream.mode: keep` leaves upstream retained records in place after replay
 - `upstream.mode: drain` consumes upstream retained records after successful bridge export
@@ -421,6 +494,8 @@ If omitted:
 - `upstream.retry-ms` controls bridge reconnect delay
 - `upstream.connect-timeout-ms` controls bridge source connect timeout
 - `ingest.tls-*` controls TLS on OTLP/HTTP and OTLP/gRPC ingest
+- `ingest.max-batch-bytes` rejects oversized ingest payloads before they are stored
+- `ingest.max-clients` caps concurrent ingest handling
 - `tls.*` controls optional TLS on the replay listener and bridge source connection
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `file.*` settings are ignored unless `output: file`

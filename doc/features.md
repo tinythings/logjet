@@ -21,6 +21,8 @@ Current behaviour:
 - accepts OTLP log batches over HTTP and gRPC
 - OTLP/HTTP ingest can also run over HTTPS
 - OTLP/gRPC ingest can also run over TLS
+- rejects oversized batches through `ingest.max-batch-bytes`
+- can cap concurrent ingest handling through `ingest.max-clients`
 - validates that the request decodes as `ExportLogsServiceRequest`
 - stores the raw OTLP protobuf bytes
 - assigns a local sequence number for internal replay ordering
@@ -92,6 +94,7 @@ Current behaviour:
 - acknowledges records in `drain` mode only after successful collector export
 - reconnects after disconnect and resumes from the last forwarded sequence
 - can persist that sequence in `upstream.state-file`
+- bridge export can block or disconnect when the collector is too slow, when `backpressure.enabled: true`
 
 This is the current path for:
 
@@ -152,6 +155,10 @@ Current config areas:
 - replay polling interval
 - collector URL and timeout
 - collector TLS trust/client-cert settings
+- bridge backpressure enable switch
+- bridge backpressure mode
+- ingest payload-size guardrails
+- ingest concurrent-client guardrails
 - upstream replay source and retry behaviour
 - upstream keep-or-drain behaviour
 - upstream persisted resume state
@@ -251,5 +258,6 @@ These are not implemented yet:
 
 - advanced restart behaviour when upstream storage is reset or replaced
 - advanced slow-consumer handling
+- ingest rate limiting or priority-aware shedding
 - disk-budget retention management for rotated files
 - production-grade service lifecycle handling
