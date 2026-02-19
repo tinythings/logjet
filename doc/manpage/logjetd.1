@@ -195,6 +195,8 @@ collector.ca-file: /etc/logjet/collector-ca.pem
 collector.cert-file: /etc/logjet/collector.pem
 collector.key-file: /etc/logjet/collector.key
 collector.server-name: vector.internal
+backpressure.enabled: false
+backpressure.mode: disconnect
 upstream.replay: 10.0.0.15:7002
 upstream.mode: keep
 upstream.state-file: /var/lib/logjet/bridge.state
@@ -213,6 +215,8 @@ ingest.ca-file: /etc/logjet/ingest-ca.pem
 ingest.cert-file: /etc/logjet/ingest.pem
 ingest.key-file: /etc/logjet/ingest.key
 ingest.require-client-cert: false
+ingest.max-batch-bytes: 1048576
+ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
 replay.poll_ms: 250
 \f[R]
@@ -234,6 +238,11 @@ file mode always keeps all rotated files
 \f[C]ingest.protocol\f[R] supports \f[C]wire\f[R], \f[C]otlp-http\f[R],
 and \f[C]otlp-grpc\f[R]
 .IP \[bu] 2
+\f[C]ingest.max-batch-bytes\f[R] rejects oversized OTLP or wire payloads
+before they are stored
+.IP \[bu] 2
+\f[C]ingest.max-clients\f[R] caps concurrent ingest handling
+.IP \[bu] 2
 \f[C]collector.url\f[R] configures replay destination URL
 .IP \[bu] 2
 \f[C]collector.timeout-ms\f[R] configures replay and bridge socket
@@ -242,6 +251,12 @@ timeout in milliseconds
 \f[C]collector.ca-file\f[R], \f[C]collector.cert-file\f[R],
 \f[C]collector.key-file\f[R], and \f[C]collector.server-name\f[R]
 configure HTTPS collector export
+.IP \[bu] 2
+\f[C]backpressure.enabled\f[R] enables bridge backpressure policy
+handling
+.IP \[bu] 2
+\f[C]backpressure.mode\f[R] configures whether bridge export blocks or
+disconnects when the collector is too slow
 .IP \[bu] 2
 \f[C]upstream.replay\f[R] configures the default bridge source
 .IP \[bu] 2
@@ -295,6 +310,9 @@ OTLP/gRPC log ingest on the standard logs export service
 .IP \[bu] 2
 optional TLS on OTLP/HTTP and OTLP/gRPC ingest
 .IP \[bu] 2
+basic ingest guardrails through \f[C]ingest.max-batch-bytes\f[R] and
+\f[C]ingest.max-clients\f[R]
+.IP \[bu] 2
 append-only \f[C].logjet\f[R] file output with size-based rotation
 .IP \[bu] 2
 in-memory ring buffering with \f[C]buffer.keep\f[R]
@@ -307,6 +325,8 @@ continuous bridge mode from replay listener to OTLP/HTTP collectors
 acknowledged drain mode through \f[C]upstream.mode: drain\f[R]
 .IP \[bu] 2
 persisted bridge resume through \f[C]upstream.state-file\f[R]
+.IP \[bu] 2
+basic backpressure policy through \f[C]backpressure.mode\f[R]
 .IP \[bu] 2
 optional TLS on replay/bridge transport
 .IP \[bu] 2
@@ -324,7 +344,11 @@ replay listener traffic is not OTLP
 .IP \[bu] 2
 upstream storage reset and rollover handling is still basic
 .IP \[bu] 2
-slow-consumer handling is basic
+slow-consumer handling is limited to \f[C]block\f[R] and
+\f[C]disconnect\f[R]
+.IP \[bu] 2
+ingest overload handling is limited to payload-size caps and
+concurrent-client caps
 .IP \[bu] 2
 file mode does not delete old rotated files
 .IP \[bu] 2
