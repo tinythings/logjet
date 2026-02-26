@@ -1,4 +1,4 @@
-use super::{IngestLimiter, read_http_request, write_http_response};
+use super::{ConnectionLimiter, read_http_request, write_http_response};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -73,8 +73,8 @@ fn write_http_response_supports_service_unavailable_status() {
 }
 
 #[test]
-fn ingest_limiter_rejects_when_max_clients_is_reached() {
-    let limiter = Arc::new(IngestLimiter::new(1));
+fn connection_limiter_rejects_when_max_clients_is_reached() {
+    let limiter = Arc::new(ConnectionLimiter::new(1));
     let first = limiter.try_acquire();
     let second = limiter.try_acquire();
 
@@ -83,8 +83,8 @@ fn ingest_limiter_rejects_when_max_clients_is_reached() {
 }
 
 #[test]
-fn ingest_limiter_accepts_again_after_permit_is_dropped() {
-    let limiter = Arc::new(IngestLimiter::new(1));
+fn connection_limiter_accepts_again_after_permit_is_dropped() {
+    let limiter = Arc::new(ConnectionLimiter::new(1));
     let first = limiter.try_acquire();
     assert!(first.is_some());
     drop(first);

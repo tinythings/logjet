@@ -18,6 +18,7 @@ fn empty_config_file_uses_defaults() {
     assert_eq!(config.ingest_limits.max_batch_bytes, 1024 * 1024);
     assert_eq!(config.ingest_limits.max_clients, 32);
     assert_eq!(config.replay_addr, "0.0.0.0:7002");
+    assert_eq!(config.replay_max_clients, 32);
     assert_eq!(config.poll_interval_ms, 250);
     assert_eq!(config.collector.url, "http://127.0.0.1:4318/v1/logs");
     assert_eq!(config.collector.timeout_ms, 10_000);
@@ -62,7 +63,7 @@ fn buffer_size_and_messages_conflict() {
 fn file_mode_and_collector_settings_parse() {
     let path = write_temp_config(
         "file-mode",
-        "output: file\nfile.path: ./logs\nfile.size: 16\nfile.name: bofh.logjet\ningest.protocol: otlp-grpc\ningest.tls-enable: true\ningest.ca-file: ./ingest-ca.pem\ningest.cert-file: ./ingest.pem\ningest.key-file: ./ingest.key\ningest.require-client-cert: true\ningest.max-batch-bytes: 262144\ningest.max-clients: 7\ncollector.url: https://127.0.0.1:4320/custom\ncollector.timeout-ms: 3210\ncollector.ca-file: ./collector-ca.pem\ncollector.cert-file: ./collector.pem\ncollector.key-file: ./collector.key\ncollector.server-name: collector.internal\nbackpressure.enabled: true\nbackpressure.mode: block\nupstream.replay: 10.0.0.15:7002\nupstream.retry-ms: 222\nupstream.connect-timeout-ms: 333\ntls.enable: true\ntls.ca-file: ./ca.pem\ntls.cert-file: ./node.pem\ntls.key-file: ./node.key\ntls.require-client-cert: true\ntls.server-name: appliance.internal\n",
+        "output: file\nfile.path: ./logs\nfile.size: 16\nfile.name: bofh.logjet\ningest.protocol: otlp-grpc\ningest.tls-enable: true\ningest.ca-file: ./ingest-ca.pem\ningest.cert-file: ./ingest.pem\ningest.key-file: ./ingest.key\ningest.require-client-cert: true\ningest.max-batch-bytes: 262144\ningest.max-clients: 7\ncollector.url: https://127.0.0.1:4320/custom\ncollector.timeout-ms: 3210\ncollector.ca-file: ./collector-ca.pem\ncollector.cert-file: ./collector.pem\ncollector.key-file: ./collector.key\ncollector.server-name: collector.internal\nbackpressure.enabled: true\nbackpressure.mode: block\nupstream.replay: 10.0.0.15:7002\nupstream.retry-ms: 222\nupstream.connect-timeout-ms: 333\ntls.enable: true\ntls.ca-file: ./ca.pem\ntls.cert-file: ./node.pem\ntls.key-file: ./node.key\ntls.require-client-cert: true\ntls.server-name: appliance.internal\nreplay.max-clients: 9\n",
     );
     let config = Config::load(&path).unwrap();
 
@@ -80,6 +81,7 @@ fn file_mode_and_collector_settings_parse() {
     assert!(config.ingest_tls.require_client_cert);
     assert_eq!(config.ingest_limits.max_batch_bytes, 262_144);
     assert_eq!(config.ingest_limits.max_clients, 7);
+    assert_eq!(config.replay_max_clients, 9);
     assert!(config.tls.enable);
     assert_eq!(config.tls.ca_file.as_deref(), Some(Path::new("./ca.pem")));
     assert_eq!(config.tls.cert_file.as_deref(), Some(Path::new("./node.pem")));
@@ -175,6 +177,11 @@ fn invalid_ingest_limit_values_are_rejected() {
     let clients_err = Config::load(&clients_path).unwrap_err().to_string();
     assert!(clients_err.contains("ingest.max-clients"));
     fs::remove_file(clients_path).unwrap();
+
+    let replay_path = write_temp_config("bad-replay-clients", "replay.max-clients: 0\n");
+    let replay_err = Config::load(&replay_path).unwrap_err().to_string();
+    assert!(replay_err.contains("replay.max-clients"));
+    fs::remove_file(replay_path).unwrap();
 }
 
 fn write_temp_config(label: &str, body: &str) -> PathBuf {

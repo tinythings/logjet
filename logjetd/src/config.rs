@@ -10,6 +10,7 @@ pub struct Config {
     pub ingest_tls: IngestTlsConfig,
     pub ingest_limits: IngestLimits,
     pub replay_addr: String,
+    pub replay_max_clients: usize,
     pub poll_interval_ms: u64,
     pub collector: CollectorConfig,
     pub backpressure: BackpressureConfig,
@@ -147,6 +148,8 @@ struct RawConfig {
     ingest_max_clients: Option<usize>,
     #[serde(rename = "replay.listen")]
     replay_addr: Option<String>,
+    #[serde(rename = "replay.max-clients")]
+    replay_max_clients: Option<usize>,
     #[serde(rename = "replay.poll_ms")]
     poll_interval_ms: Option<u64>,
     #[serde(rename = "collector.url")]
@@ -212,6 +215,7 @@ impl Config {
                 ingest_max_batch_bytes: None,
                 ingest_max_clients: None,
                 replay_addr: None,
+                replay_max_clients: None,
                 poll_interval_ms: None,
                 collector_url: None,
                 collector_timeout_ms: None,
@@ -267,6 +271,10 @@ impl Config {
         let replay_addr = raw
             .replay_addr
             .unwrap_or_else(|| "0.0.0.0:7002".to_string());
+        let replay_max_clients = raw.replay_max_clients.unwrap_or(32);
+        if replay_max_clients == 0 {
+            return Err("replay.max-clients must be greater than zero".into());
+        }
         let poll_interval_ms = raw.poll_interval_ms.unwrap_or(250);
         let collector = CollectorConfig {
             url: raw
@@ -331,6 +339,7 @@ impl Config {
             ingest_tls,
             ingest_limits,
             replay_addr,
+            replay_max_clients,
             poll_interval_ms,
             collector,
             backpressure,
