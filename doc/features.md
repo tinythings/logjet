@@ -36,6 +36,7 @@ Current behaviour:
 
 - append-only writes
 - file rotation when `file.size` is exceeded
+- after restart, file-mode sequence numbering resumes from the highest stored sequence
 - rotated files are kept
 - naming style:
   - `name.logjet`
@@ -67,6 +68,7 @@ Memory model:
 Current behaviour:
 
 - clients send a small replay request with `from_seq`
+- the server first sends a replay hello carrying stream identity and current bounds
 - clients can request `keep` or `drain`
 - each client keeps its own replay cursor
 - replays retained data in sequence order
@@ -96,12 +98,14 @@ Current behaviour:
 - acknowledges records in `drain` mode only after successful collector export
 - reconnects after disconnect and resumes from the last forwarded sequence
 - can persist that sequence in `upstream.state-file`
+- detects upstream restart or storage replacement through replay stream identity
+- resets stale saved sequence state instead of waiting forever above a restarted upstream
 - bridge export can block or disconnect when the collector is too slow, when `backpressure.enabled: true`
 
 This is the current path for:
 
 ```text
-OA -> logjetd <- network <- logjetd -> Vector
+OA -> logjetd <- network <- logjetd -> OTel Collector
 ```
 
 ### 6. Optional TLS on replay and bridge transport
@@ -211,7 +215,7 @@ Use case:
 
 Useful when:
 
-- automotive and avionics targets are resource-constrained
+- constrained and mission-critical environments need cheap, predictable runtime behaviour
 - storage and networking are unreliable
 
 ### 4. Demo and lab setups without a full collector stack
@@ -224,7 +228,7 @@ Use case:
 
 Useful when:
 
-- a full Vector or collector deployment would be overkill
+- a full OTel Collector deployment would be overkill
 - you want to demonstrate end-to-end OTLP ingest quickly
 
 ### 5. Offline file replay into an OTLP collector
@@ -247,7 +251,7 @@ Use case:
 
 - one `logjetd` instance runs next to `OA`
 - a second `logjetd` instance connects to the first over the network
-- the second instance forwards retained backlog and live OTLP logs into Vector
+- the second instance forwards retained backlog and live OTLP logs into an OTel Collector
 
 Useful when:
 

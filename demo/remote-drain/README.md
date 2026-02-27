@@ -3,7 +3,7 @@
 This demo shows the intended network shape:
 
 ```text
-OA -> logjetd <- network <- logjetd -> Vector
+OA -> logjetd <- network <- logjetd -> OTel Collector
 ```
 
 In this demo:
@@ -11,7 +11,7 @@ In this demo:
 - the appliance-side `logjetd` accepts OTLP/HTTP logs locally
 - the appliance-side emitter stands in for `OA`
 - the remote-side `logjetd` runs in `bridge` mode
-- the remote-side collector mockup stands in for Vector
+- the remote-side collector mockup stands in for an OTel Collector
 - the appliance-side daemon uses memory retention with a permanent kept prefix
 
 The important point is:

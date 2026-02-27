@@ -4,7 +4,7 @@ This demo shows the same network shape as the plain remote-drain demo, but with
 TLS enabled on the daemon-to-daemon replay link:
 
 ```text
-OA -> logjetd <=TLS=> logjetd -> Vector
+OA -> logjetd <=TLS=> logjetd -> OTel Collector
 ```
 
 In this demo:
@@ -13,7 +13,7 @@ In this demo:
 - the appliance-side emitter stands in for `OA`
 - the remote-side `logjetd` runs in `bridge` mode
 - the replay connection between the two `logjetd` instances is protected with TLS
-- the remote-side collector mockup stands in for Vector
+- the remote-side collector mockup stands in for an OTel Collector
 
 This demo exercises all current replay/bridge TLS features:
 

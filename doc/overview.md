@@ -34,6 +34,7 @@ The daemon provides:
 - basic replay-client caps
 - optional TLS on the replay/bridge transport
 - HTTPS collector export
+- bridge-side restart recovery through persisted sequence state and upstream stream identity
 - one-shot file replay to OTLP/HTTP collectors
 - configurable backlog storage
 - in-memory ring buffer mode

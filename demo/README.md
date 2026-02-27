@@ -35,6 +35,8 @@ It also contains scenario demos under subdirectories:
   - replay stored `.logjet` files into a collector
 - [`bridge-resume`](./bridge-resume)
   - consumer restart resumes from persisted sequence state without replaying from zero
+- [`upstream-reset-resume`](./upstream-reset-resume)
+  - consumer bridge detects upstream reset and resumes a fresh stream instead of getting stuck
 - [`backpressure`](./backpressure)
   - slow collector demo showing `block` versus `disconnect`
 - [`ingest-guardrails`](./ingest-guardrails)
@@ -89,4 +91,4 @@ If you do not pass an address:
 - the transport is OTLP/HTTP protobuf
 - the gRPC emitter uses OTLP/gRPC logs export
 - the collector is intentionally tiny and is only for demos and quick local setups
-- this is useful when setting up a real collector like Vector would be overkill
+- this is useful when setting up a real OTel Collector would be overkill
