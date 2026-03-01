@@ -75,6 +75,7 @@ Current behaviour:
 - continues polling for new records
 - supports multiple clients in a basic way
 - can cap concurrent replay clients through `replay.max-clients`
+- can cap blocked replay socket I/O through `replay.client-timeout-ms`
 
 Current limitation:
 
