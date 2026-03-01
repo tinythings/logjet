@@ -188,6 +188,7 @@ ingest.max-batch-bytes: 1048576
 ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
 replay.max-clients: 32
+replay.client-timeout-ms: 10000
 replay.poll_ms: 250
 ```
 
@@ -202,6 +203,7 @@ Rules:
 - `ingest.max-batch-bytes` rejects oversized OTLP or wire payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling
 - `replay.max-clients` caps concurrent replay clients
+- `replay.client-timeout-ms` caps how long one replay client can block on socket I/O
 - `collector.url` configures replay destination URL
 - `collector.timeout-ms` configures replay and bridge socket timeout in milliseconds
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure HTTPS collector export
@@ -249,6 +251,7 @@ Append-only file behaviour:
 - replay listener for downstream consumers using the internal framed protocol
 - independent replay cursor per connected client
 - basic replay-client caps through `replay.max-clients`
+- basic replay-client timeout through `replay.client-timeout-ms`
 - continuous bridge mode from replay listener to OTLP/HTTP collectors
 - acknowledged drain mode through `upstream.mode: drain`
 - persisted bridge resume through `upstream.state-file`
