@@ -31,6 +31,8 @@ It also contains scenario demos under subdirectories:
   - five emitters into one `logjetd`, then late replay into one collector
 - [`multi-emitter-continuous`](./multi-emitter-continuous)
   - five emitters running continuously into one `logjetd` and one live collector
+- [`multi-client-behaviour`](./multi-client-behaviour)
+  - one replay client stalls while another keeps flowing
 - [`file-replay`](./file-replay)
   - replay stored `.logjet` files into a collector
 - [`bridge-resume`](./bridge-resume)
