@@ -6,6 +6,7 @@ It demonstrates two policies:
 
 - `backpressure.mode: disconnect`
 - `backpressure.mode: block`
+- `backpressure.mode: drop-newest`
 
 The slow collector is the key part. It accepts an OTLP request, prints it, then
 waits before returning `200 OK`.
@@ -41,7 +42,7 @@ The emitter sends every 200 ms.
 
 ## Terminal 2: Consumer Side
 
-You can choose one of two consumer scripts.
+You can choose one of three consumer scripts.
 
 ### Disconnect policy
 
@@ -54,6 +55,7 @@ This uses:
 ```yaml
 backpressure.enabled: true
 backpressure.mode: disconnect
+backpressure.max-buffered-records: 3
 collector.timeout-ms: 1000
 ```
 
@@ -62,6 +64,7 @@ The collector waits 2000 ms before replying.
 Expected result:
 
 - the collector is slower than the timeout
+- the bridge can only queue three records locally
 - bridge export times out
 - the bridge disconnects and retries
 - backlog stays on the appliance side
@@ -77,6 +80,7 @@ This uses:
 ```yaml
 backpressure.enabled: true
 backpressure.mode: block
+backpressure.max-buffered-records: 3
 collector.timeout-ms: 1000
 ```
 
@@ -87,8 +91,34 @@ Expected result:
 
 - the collector prints one message every two seconds
 - the bridge waits for each slow reply
+- the bridge can queue only three records before it blocks on the exporter queue
 - backlog accumulates upstream
 - delivery pace is controlled by the collector pace
+
+### Drop-newest policy
+
+```bash
+./run-consumer-drop-newest.sh
+```
+
+This uses:
+
+```yaml
+backpressure.enabled: true
+backpressure.mode: drop-newest
+backpressure.max-buffered-records: 3
+collector.timeout-ms: 1000
+```
+
+The collector still waits 2000 ms before replying, but the bridge keeps only a
+tiny local queue and explicitly sheds overload once that queue is full.
+
+Expected result:
+
+- the collector still prints slowly
+- the bridge keeps forwarding whatever fits into the three-record queue
+- newer records are dropped once the queue is full
+- terminal output from `logjetd` shows dropped sequence numbers
 
 ## Point of the Demo
 
@@ -98,3 +128,4 @@ This shows that:
 - slow downstreams create backpressure
 - `disconnect` favours fail-fast retry behaviour
 - `block` favours waiting instead of timing out
+- `drop-newest` favours keeping the bridge live while explicitly shedding overload

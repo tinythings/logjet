@@ -40,7 +40,7 @@ It also contains scenario demos under subdirectories:
 - [`upstream-reset-resume`](./upstream-reset-resume)
   - consumer bridge detects upstream reset and resumes a fresh stream instead of getting stuck
 - [`backpressure`](./backpressure)
-  - slow collector demo showing `block` versus `disconnect`
+  - slow collector demo showing `block`, `disconnect`, and `drop-newest`
 - [`ingest-guardrails`](./ingest-guardrails)
   - oversized-batch rejection and concurrent ingest-client cap
 - [`remote-drain`](./remote-drain)
