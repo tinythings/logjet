@@ -102,6 +102,8 @@ Current behaviour:
 - detects upstream restart or storage replacement through replay stream identity
 - resets stale saved sequence state instead of waiting forever above a restarted upstream
 - bridge export can block or disconnect when the collector is too slow, when `backpressure.enabled: true`
+- bridge export can also drop newest records explicitly when `backpressure.mode: drop-newest`
+- bridge export queue depth can be capped through `backpressure.max-buffered-records`
 
 This is the current path for:
 

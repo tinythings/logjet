@@ -30,6 +30,7 @@ The daemon provides:
 - configurable keep-or-drain bridge semantics
 - optional persisted bridge resume state
 - basic backpressure policy on bridge export
+- bounded bridge-side exporter queue with `block`, `disconnect`, and `drop-newest` policy
 - basic ingest guardrails for payload size and concurrent clients
 - basic replay-client caps
 - optional TLS on the replay/bridge transport
