@@ -197,6 +197,7 @@ collector.key-file: /etc/logjet/collector.key
 collector.server-name: collector.internal
 backpressure.enabled: false
 backpressure.mode: disconnect
+backpressure.max-buffered-records: 16
 upstream.replay: 10.0.0.15:7002
 upstream.mode: keep
 upstream.state-file: /var/lib/logjet/bridge.state
@@ -262,8 +263,11 @@ configure HTTPS collector export
 \f[C]backpressure.enabled\f[R] enables bridge backpressure policy
 handling
 .IP \[bu] 2
-\f[C]backpressure.mode\f[R] configures whether bridge export blocks or
-disconnects when the collector is too slow
+\f[C]backpressure.mode\f[R] configures whether bridge export blocks,
+disconnects, or drops newest records when the collector is too slow
+.IP \[bu] 2
+\f[C]backpressure.max-buffered-records\f[R] caps the bridge-side
+exporter queue per bridge connection
 .IP \[bu] 2
 \f[C]upstream.replay\f[R] configures the default bridge source
 .IP \[bu] 2
@@ -344,6 +348,9 @@ identity
 .IP \[bu] 2
 basic backpressure policy through \f[C]backpressure.mode\f[R]
 .IP \[bu] 2
+bounded bridge-side exporter queue through
+\f[C]backpressure.max-buffered-records\f[R]
+.IP \[bu] 2
 optional TLS on replay/bridge transport
 .IP \[bu] 2
 HTTPS OTLP collector export
@@ -359,9 +366,6 @@ inspection of \f[C].logjet\f[R] files and directories
 replay listener traffic is not OTLP
 .IP \[bu] 2
 upstream storage reset and rollover handling is still basic
-.IP \[bu] 2
-slow-consumer handling is limited to \f[C]block\f[R] and
-\f[C]disconnect\f[R]
 .IP \[bu] 2
 ingest overload handling is limited to payload-size caps and
 concurrent-client caps
