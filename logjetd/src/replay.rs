@@ -2,7 +2,7 @@ use std::fs::{self, File};
 use std::io::{self, BufReader};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -24,6 +24,7 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
         timeout: Duration::from_millis(collector.timeout_ms),
         backpressure_enabled: false,
         backpressure_mode: BackpressureMode::Disconnect,
+        max_buffered_records: 1,
         tls_client: if endpoint.tls {
             Some(load_collector_client_config(collector)?)
         } else {
@@ -75,6 +76,7 @@ pub fn bridge_wire_to_otlp_http(
         timeout: Duration::from_millis(collector.timeout_ms),
         backpressure_enabled: backpressure.enabled,
         backpressure_mode: backpressure.mode,
+        max_buffered_records: backpressure.max_buffered_records,
         tls_client: if endpoint.tls {
             Some(load_collector_client_config(collector)?)
         } else {
@@ -165,24 +167,185 @@ fn bridge_transport<T: io::Read + io::Write>(
     write_replay_request(transport, &ReplayRequest { from_seq: state.last_seq, consume })?;
     transport.flush()?;
     eprintln!(
-        "bridge connected to {} and requested records after seq={} mode={}",
+        "bridge connected to {} and requested records after seq={} mode={} backpressure={}",
         source,
         state.last_seq,
-        if consume { "drain" } else { "keep" }
+        if consume { "drain" } else { "keep" },
+        collector_transport.describe_backpressure()
     );
 
-    while let Some(record) = read_record(transport)? {
-        if record.record_type == RecordType::Logs {
-            post_raw_otlp_http(collector_transport, &record.payload)?;
+    if !collector_transport.backpressure_enabled {
+        while let Some(record) = read_record(transport)? {
+            if record.record_type == RecordType::Logs {
+                post_raw_otlp_http(collector_transport, &record.payload)?;
+            }
+            commit_record(transport, state, state_file, consume, record.seq)?;
         }
-        state.last_seq = record.seq;
-        write_bridge_state(state_file, state)?;
-        if consume {
-            write_replay_ack(transport, &ReplayAck { ack_seq: record.seq })?;
-            transport.flush()?;
+        return Ok(());
+    }
+
+    let (task_tx, task_rx) = mpsc::sync_channel(collector_transport.max_buffered_records);
+    let (result_tx, result_rx) = mpsc::channel();
+    let worker_transport = collector_transport.clone();
+    let exporter = thread::spawn(move || export_worker(worker_transport, task_rx, result_tx));
+    let mut pending = std::collections::VecDeque::new();
+
+    while let Some(record) = read_record(transport)? {
+        flush_ready_results(transport, state, state_file, consume, &mut pending, &result_rx, false)?;
+
+        if record.record_type != RecordType::Logs {
+            commit_record(transport, state, state_file, consume, record.seq)?;
+            continue;
+        }
+
+        let seq = record.seq;
+        match enqueue_export_task(&task_tx, collector_transport, ExportTask { seq, payload: record.payload }) {
+            Ok(EnqueueOutcome::Queued) => pending.push_back(PendingExport::Queued(seq)),
+            Ok(EnqueueOutcome::DroppedNewest) => pending.push_back(PendingExport::Dropped(seq)),
+            Err(err) => {
+                drop(task_tx);
+                let _ = exporter.join();
+                return Err(err);
+            }
         }
     }
 
+    drop(task_tx);
+    flush_ready_results(transport, state, state_file, consume, &mut pending, &result_rx, true)?;
+    match exporter.join() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err)) => Err(err),
+        Err(_) => Err(io::Error::other("collector export worker panicked")),
+    }
+}
+
+fn enqueue_export_task(
+    task_tx: &mpsc::SyncSender<ExportTask>,
+    collector_transport: &CollectorTransport,
+    task: ExportTask,
+) -> io::Result<EnqueueOutcome> {
+    match collector_transport.backpressure_mode {
+        BackpressureMode::Block => task_tx
+            .send(task)
+            .map(|()| EnqueueOutcome::Queued)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped")),
+        BackpressureMode::Disconnect => match task_tx.try_send(task) {
+            Ok(()) => Ok(EnqueueOutcome::Queued),
+            Err(mpsc::TrySendError::Full(_)) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "collector export buffer is full; disconnecting bridge",
+            )),
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped"))
+            }
+        },
+        BackpressureMode::DropNewest => match task_tx.try_send(task) {
+            Ok(()) => Ok(EnqueueOutcome::Queued),
+            Err(mpsc::TrySendError::Full(task)) => {
+                eprintln!(
+                    "bridge dropping seq={} because collector export buffer is full (mode=drop-newest)",
+                    task.seq
+                );
+                Ok(EnqueueOutcome::DroppedNewest)
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped"))
+            }
+        },
+    }
+}
+
+fn export_worker(
+    collector_transport: CollectorTransport,
+    task_rx: mpsc::Receiver<ExportTask>,
+    result_tx: mpsc::Sender<ExportResult>,
+) -> io::Result<()> {
+    while let Ok(task) = task_rx.recv() {
+        let outcome = post_raw_otlp_http(&collector_transport, &task.payload).map(|()| ExportOutcome::Delivered);
+        let failed = outcome.is_err();
+        if result_tx.send(ExportResult { seq: task.seq, outcome }).is_err() {
+            break;
+        }
+        if failed {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn flush_ready_results<T: io::Read + io::Write>(
+    transport: &mut T,
+    state: &mut BridgeState,
+    state_file: Option<&Path>,
+    consume: bool,
+    pending: &mut std::collections::VecDeque<PendingExport>,
+    result_rx: &mpsc::Receiver<ExportResult>,
+    block: bool,
+) -> io::Result<()> {
+    loop {
+        let Some(front) = pending.front() else {
+            return Ok(());
+        };
+
+        let result = match front {
+            PendingExport::Dropped(seq) => ExportResult {
+                seq: *seq,
+                outcome: Ok(ExportOutcome::DroppedNewest),
+            },
+            PendingExport::Queued(expected_seq) => {
+                let result = if block {
+                    result_rx
+                        .recv()
+                        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped"))?
+                } else {
+                    match result_rx.try_recv() {
+                        Ok(result) => result,
+                        Err(mpsc::TryRecvError::Empty) => return Ok(()),
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::BrokenPipe,
+                                "collector export worker stopped",
+                            ))
+                        }
+                    }
+                };
+                if result.seq != *expected_seq {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "collector export worker returned seq={} out of order; expected {}",
+                            result.seq, expected_seq
+                        ),
+                    ));
+                }
+                result
+            }
+        };
+
+        pending.pop_front();
+        match result.outcome {
+            Ok(ExportOutcome::Delivered) => commit_record(transport, state, state_file, consume, result.seq)?,
+            Ok(ExportOutcome::DroppedNewest) => {
+                commit_record(transport, state, state_file, consume, result.seq)?;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn commit_record<T: io::Read + io::Write>(
+    transport: &mut T,
+    state: &mut BridgeState,
+    state_file: Option<&Path>,
+    consume: bool,
+    seq: u64,
+) -> io::Result<()> {
+    state.last_seq = seq;
+    write_bridge_state(state_file, state)?;
+    if consume {
+        write_replay_ack(transport, &ReplayAck { ack_seq: seq })?;
+        transport.flush()?;
+    }
     Ok(())
 }
 
@@ -197,7 +360,7 @@ fn post_raw_otlp_http(collector_transport: &CollectorTransport, payload: &[u8]) 
                 stream.set_write_timeout(None)?;
                 stream.set_read_timeout(None)?;
             }
-            BackpressureMode::Disconnect => {
+            BackpressureMode::Disconnect | BackpressureMode::DropNewest => {
                 stream.set_write_timeout(Some(collector_transport.timeout))?;
                 stream.set_read_timeout(Some(collector_transport.timeout))?;
             }
@@ -351,20 +514,69 @@ fn reconcile_bridge_state(source: &str, state: &mut BridgeState, hello: &ReplayH
     Ok(())
 }
 
+#[derive(Clone)]
 struct CollectorEndpoint {
     authority: String,
     path: String,
     tls: bool,
 }
 
+#[derive(Clone)]
 struct CollectorTransport {
     endpoint: CollectorEndpoint,
     timeout: Duration,
     backpressure_enabled: bool,
     backpressure_mode: BackpressureMode,
+    max_buffered_records: usize,
     tls_client: Option<Arc<ClientConfig>>,
     collector: CollectorConfig,
     upstream_mode: UpstreamMode,
+}
+
+impl CollectorTransport {
+    fn describe_backpressure(&self) -> String {
+        if !self.backpressure_enabled {
+            return "disabled".to_string();
+        }
+        format!(
+            "{} buffered={}",
+            match self.backpressure_mode {
+                BackpressureMode::Block => "block",
+                BackpressureMode::Disconnect => "disconnect",
+                BackpressureMode::DropNewest => "drop-newest",
+            },
+            self.max_buffered_records
+        )
+    }
+}
+
+#[derive(Debug)]
+struct ExportTask {
+    seq: u64,
+    payload: Vec<u8>,
+}
+
+struct ExportResult {
+    seq: u64,
+    outcome: io::Result<ExportOutcome>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportOutcome {
+    Delivered,
+    DroppedNewest,
+}
+
+#[derive(Debug)]
+enum PendingExport {
+    Queued(u64),
+    Dropped(u64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnqueueOutcome {
+    Queued,
+    DroppedNewest,
 }
 
 impl CollectorEndpoint {
