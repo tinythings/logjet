@@ -190,7 +190,6 @@ ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
 replay.max-clients: 32
 replay.client-timeout-ms: 10000
-replay.poll_ms: 250
 ```
 
 Rules:

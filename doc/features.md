@@ -72,7 +72,7 @@ Current behaviour:
 - clients can request `keep` or `drain`
 - each client keeps its own replay cursor
 - replays retained data in sequence order
-- continues polling for new records
+- switches from retained backlog to live records through direct wakeups from ingest
 - supports multiple clients in a basic way
 - can cap concurrent replay clients through `replay.max-clients`
 - can cap blocked replay socket I/O through `replay.client-timeout-ms`
@@ -161,7 +161,6 @@ Current config areas:
 - file rotation sizing
 - ingest protocol
 - ingest and replay bind addresses
-- replay polling interval
 - replay client cap
 - collector URL and timeout
 - collector TLS trust/client-cert settings
