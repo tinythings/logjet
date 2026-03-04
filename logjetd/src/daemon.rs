@@ -4,7 +4,7 @@ use std::net::{TcpListener, TcpStream};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -33,17 +33,63 @@ pub struct DaemonConfig {
     pub config_path: PathBuf,
 }
 
+struct SharedSpool {
+    spool: Mutex<Spool>,
+    wake_state: Mutex<u64>,
+    wake_cv: Condvar,
+}
+
+impl SharedSpool {
+    fn new(spool: Spool) -> Self {
+        Self {
+            spool: Mutex::new(spool),
+            wake_state: Mutex::new(0),
+            wake_cv: Condvar::new(),
+        }
+    }
+
+    fn notify_change(&self) -> io::Result<()> {
+        let mut generation = self
+            .wake_state
+            .lock()
+            .map_err(|_| io::Error::other("wake-state mutex poisoned"))?;
+        *generation = generation.saturating_add(1);
+        self.wake_cv.notify_all();
+        Ok(())
+    }
+
+    fn wait_for_change(&self, seen_generation: &mut u64) -> io::Result<()> {
+        let generation = self
+            .wake_state
+            .lock()
+            .map_err(|_| io::Error::other("wake-state mutex poisoned"))?;
+        let generation = self
+            .wake_cv
+            .wait_while(generation, |current| *current == *seen_generation)
+            .map_err(|_| io::Error::other("wake-state mutex poisoned"))?;
+        *seen_generation = *generation;
+        Ok(())
+    }
+
+    fn current_generation(&self) -> io::Result<u64> {
+        let generation = self
+            .wake_state
+            .lock()
+            .map_err(|_| io::Error::other("wake-state mutex poisoned"))?;
+        Ok(*generation)
+    }
+}
+
 pub fn serve(config: DaemonConfig) -> io::Result<()> {
     let spool_inner = Spool::open(config.config.storage.clone())?;
     let next_seq_seed = spool_inner.next_sequence_seed()?;
-    let spool = Arc::new(Mutex::new(spool_inner));
+    let spool = Arc::new(SharedSpool::new(spool_inner));
     let next_seq = Arc::new(AtomicU64::new(next_seq_seed));
 
     let replay_spool = Arc::clone(&spool);
     let replay_addr = config.config.replay_addr.clone();
     let replay_max_clients = config.config.replay_max_clients;
     let replay_client_timeout_ms = config.config.replay_client_timeout_ms;
-    let poll_interval_ms = config.config.poll_interval_ms;
     let tls = config.config.tls.clone();
 
     let replay_thread = thread::Builder::new()
@@ -54,7 +100,6 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
                 replay_spool,
                 replay_max_clients,
                 replay_client_timeout_ms,
-                poll_interval_ms,
                 tls,
             )
         })?;
@@ -78,7 +123,7 @@ fn ingest_loop(
     protocol: IngestProtocol,
     ingest_tls: IngestTlsConfig,
     ingest_limits: IngestLimits,
-    spool: Arc<Mutex<Spool>>,
+    spool: Arc<SharedSpool>,
     next_seq: Arc<AtomicU64>,
 ) -> io::Result<()> {
     let limiter = Arc::new(ConnectionLimiter::new(ingest_limits.max_clients));
@@ -215,7 +260,7 @@ fn otlp_http_tls_loop(
     bind_addr: String,
     ingest_tls: IngestTlsConfig,
     ingest_limits: IngestLimits,
-    spool: Arc<Mutex<Spool>>,
+    spool: Arc<SharedSpool>,
     next_seq: Arc<AtomicU64>,
     limiter: Arc<ConnectionLimiter>,
 ) -> io::Result<()> {
@@ -256,7 +301,7 @@ fn otlp_http_tls_loop(
 fn handle_otlp_http_tls_client(
     stream: TcpStream,
     tls_server: Arc<ServerConfig>,
-    spool: Arc<Mutex<Spool>>,
+    spool: Arc<SharedSpool>,
     next_seq: Arc<AtomicU64>,
     limiter: Arc<ConnectionLimiter>,
     max_batch_bytes: usize,
@@ -276,7 +321,7 @@ fn handle_otlp_http_tls_client(
 
 fn handle_otlp_http_transport<T: Read + io::Write>(
     transport: &mut T,
-    spool: Arc<Mutex<Spool>>,
+    spool: Arc<SharedSpool>,
     next_seq: Arc<AtomicU64>,
     max_batch_bytes: usize,
 ) -> io::Result<()> {
@@ -312,11 +357,15 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
     Ok(())
 }
 
-fn append_batch_record(spool: &Arc<Mutex<Spool>>, record: WireRecord) -> io::Result<()> {
-    let mut spool = spool
-        .lock()
-        .map_err(|_| io::Error::other("spool mutex poisoned"))?;
-    spool.append(record)
+fn append_batch_record(spool: &Arc<SharedSpool>, record: WireRecord) -> io::Result<()> {
+    {
+        let mut inner = spool
+            .spool
+            .lock()
+            .map_err(|_| io::Error::other("spool mutex poisoned"))?;
+        inner.append(record)?;
+    }
+    spool.notify_change()
 }
 
 struct ParsedHttpRequest {
@@ -439,10 +488,9 @@ mod daemon_utst;
 
 fn replay_loop(
     bind_addr: String,
-    spool: Arc<Mutex<Spool>>,
+    spool: Arc<SharedSpool>,
     max_clients: usize,
     client_timeout_ms: u64,
-    poll_interval_ms: u64,
     tls: crate::config::TlsConfig,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(&bind_addr)?;
@@ -468,7 +516,7 @@ fn replay_loop(
         thread::Builder::new()
             .name("logjetd-replay-client".to_string())
             .spawn(move || {
-                if let Err(err) = handle_replay_client(stream, spool, poll_interval_ms, tls_server, limiter) {
+                if let Err(err) = handle_replay_client(stream, spool, tls_server, limiter) {
                     eprintln!("logjetd replay client error: {err}");
                 }
             })?;
@@ -479,7 +527,7 @@ fn replay_loop(
 
 fn handle_ingest_client(
     stream: TcpStream,
-    spool: Arc<Mutex<Spool>>,
+    spool: Arc<SharedSpool>,
     limiter: Arc<ConnectionLimiter>,
     max_batch_bytes: usize,
 ) -> io::Result<()> {
@@ -491,10 +539,7 @@ fn handle_ingest_client(
     let mut reader = BufReader::new(stream);
 
     while let Some(record) = read_record_with_limit(&mut reader, max_batch_bytes)? {
-        let mut spool = spool
-            .lock()
-            .map_err(|_| io::Error::other("spool mutex poisoned"))?;
-        spool.append(record)?;
+        append_batch_record(&spool, record)?;
     }
 
     if let Some(peer) = peer {
@@ -547,8 +592,7 @@ impl Drop for ConnectionPermit {
 
 fn handle_replay_client(
     stream: TcpStream,
-    spool: Arc<Mutex<Spool>>,
-    poll_interval_ms: u64,
+    spool: Arc<SharedSpool>,
     tls_server: Option<Arc<ServerConfig>>,
     limiter: Arc<ConnectionLimiter>,
 ) -> io::Result<()> {
@@ -560,20 +604,20 @@ fn handle_replay_client(
         let conn = ServerConnection::new(server_config)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         let mut transport = StreamOwned::new(conn, stream);
-        return handle_replay_transport(&mut transport, spool, poll_interval_ms);
+        return handle_replay_transport(&mut transport, spool);
     }
 
     let mut transport = stream;
-    handle_replay_transport(&mut transport, spool, poll_interval_ms)
+    handle_replay_transport(&mut transport, spool)
 }
 
 fn handle_replay_transport<T: io::Read + io::Write>(
     transport: &mut T,
-    spool: Arc<Mutex<Spool>>,
-    poll_interval_ms: u64,
+    spool: Arc<SharedSpool>,
 ) -> io::Result<()> {
     let hello = {
         let spool = spool
+            .spool
             .lock()
             .map_err(|_| io::Error::other("spool mutex poisoned"))?;
         let (first_seq, last_seq) = spool.sequence_bounds()?.unwrap_or((0, 0));
@@ -588,7 +632,7 @@ fn handle_replay_transport<T: io::Read + io::Write>(
 
     let request = read_replay_request(transport)?;
     let mut last_seq = request.from_seq;
-    let sleep = Duration::from_millis(poll_interval_ms);
+    let mut seen_generation = spool.current_generation()?;
 
     eprintln!(
         "logjetd replay client requested records after seq={} mode={}",
@@ -597,12 +641,13 @@ fn handle_replay_transport<T: io::Read + io::Write>(
     );
 
     if request.consume {
-        return handle_replay_transport_drain(transport, spool, &mut last_seq, sleep);
+        return handle_replay_transport_drain(transport, spool, &mut last_seq, &mut seen_generation);
     }
 
     loop {
         let sent_any = {
             let spool = spool
+                .spool
                 .lock()
                 .map_err(|_| io::Error::other("spool mutex poisoned"))?;
             spool.replay_since(transport, &mut last_seq)?
@@ -610,27 +655,28 @@ fn handle_replay_transport<T: io::Read + io::Write>(
 
         transport.flush()?;
         if !sent_any {
-            thread::sleep(sleep);
+            spool.wait_for_change(&mut seen_generation)?;
         }
     }
 }
 
 fn handle_replay_transport_drain<T: io::Read + io::Write>(
     transport: &mut T,
-    spool: Arc<Mutex<Spool>>,
+    spool: Arc<SharedSpool>,
     last_seq: &mut u64,
-    sleep: Duration,
+    seen_generation: &mut u64,
 ) -> io::Result<()> {
     loop {
         let next_record = {
             let spool = spool
+                .spool
                 .lock()
                 .map_err(|_| io::Error::other("spool mutex poisoned"))?;
             spool.next_after(*last_seq)?
         };
 
         let Some(record) = next_record else {
-            thread::sleep(sleep);
+            spool.wait_for_change(seen_generation)?;
             continue;
         };
 
@@ -647,6 +693,7 @@ fn handle_replay_transport_drain<T: io::Read + io::Write>(
 
         {
             let mut spool = spool
+                .spool
                 .lock()
                 .map_err(|_| io::Error::other("spool mutex poisoned"))?;
             spool.consume_through(ack.ack_seq)?;
@@ -680,7 +727,7 @@ fn unix_time_nanos() -> u64 {
 
 #[derive(Clone)]
 struct OtlpGrpcLogsService {
-    spool: Arc<Mutex<Spool>>,
+    spool: Arc<SharedSpool>,
     next_seq: Arc<AtomicU64>,
 }
 
@@ -699,12 +746,7 @@ impl LogsService for OtlpGrpcLogsService {
             payload,
         };
 
-        let mut spool = self
-            .spool
-            .lock()
-            .map_err(|_| Status::internal("spool mutex poisoned"))?;
-        spool
-            .append(record)
+        append_batch_record(&self.spool, record)
             .map_err(|err| Status::internal(err.to_string()))?;
 
         Ok(GrpcResponse::new(ExportLogsServiceResponse {
