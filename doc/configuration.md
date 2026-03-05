@@ -44,6 +44,9 @@ ingest.key-file: /etc/logjet/ingest.key
 ingest.require-client-cert: false
 ingest.max-batch-bytes: 1048576
 ingest.max-clients: 32
+ingest.max-batches-per-second: 0
+ingest.priority-severity-at-least: error
+ingest.overload-report-ms: 5000
 replay.listen: 0.0.0.0:7002
 replay.max-clients: 32
 replay.client-timeout-ms: 10000
@@ -211,6 +214,47 @@ Important:
 - must be greater than zero
 - applies directly to thread-per-client ingest paths and current gRPC concurrency handling
 - plain non-TLS `otlp-http` ingest is already serial in the current implementation
+
+### `ingest.max-batches-per-second`
+
+Maximum number of accepted ingest batches per second.
+
+Important:
+
+- default is `0`, which disables rate limiting
+- applies to `wire`, `otlp-http`, and `otlp-grpc`
+- OTLP batches above the limit can still be accepted when their severity reaches `ingest.priority-severity-at-least`
+
+### `ingest.priority-severity-at-least`
+
+Minimum OTLP log severity that is allowed to bypass overload shedding when
+`ingest.max-batches-per-second` is exceeded.
+
+Accepted values:
+
+- `trace`
+- `debug`
+- `info`
+- `warn`
+- `error`
+- `fatal`
+
+Important:
+
+- default is `error`
+- applies to decoded OTLP log batches
+- wire ingest records do not carry OTLP severity, so they are treated as low priority during overload
+
+### `ingest.overload-report-ms`
+
+How often `logjetd` prints aggregated ingest overload counters to stderr while
+overload events are happening.
+
+Important:
+
+- default is `5000`
+- `0` disables the periodic overload summary
+- counters include accepted, priority-bypass, rate-limited, oversize-rejected, and client-cap-rejected batches
 
 ### `replay.max-clients`
 
@@ -509,6 +553,9 @@ If omitted:
 - `ingest.require-client-cert: false`
 - `ingest.max-batch-bytes: 1048576`
 - `ingest.max-clients: 32`
+- `ingest.max-batches-per-second: 0`
+- `ingest.priority-severity-at-least: error`
+- `ingest.overload-report-ms: 5000`
 - `replay.listen: 0.0.0.0:7002`
 - `replay.max-clients: 32`
 - `replay.client-timeout-ms: 10000`
@@ -535,6 +582,9 @@ If omitted:
 - `ingest.tls-*` controls TLS on OTLP/HTTP and OTLP/gRPC ingest
 - `ingest.max-batch-bytes` rejects oversized ingest payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling
+- `ingest.max-batches-per-second` caps accepted ingest batches per second
+- `ingest.priority-severity-at-least` lets higher-severity OTLP log batches bypass overload shedding
+- `ingest.overload-report-ms` controls operator-visible overload summaries on stderr
 - `replay.max-clients` caps concurrent replay clients
 - `replay.client-timeout-ms` caps how long one replay client can block on socket I/O
 - `tls.*` controls optional TLS on the replay listener and bridge source connection
