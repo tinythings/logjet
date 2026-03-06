@@ -9,6 +9,7 @@ pub struct Config {
     pub ingest_protocol: IngestProtocol,
     pub ingest_tls: IngestTlsConfig,
     pub ingest_limits: IngestLimits,
+    pub ingest_overload: IngestOverloadConfig,
     pub replay_addr: String,
     pub replay_max_clients: usize,
     pub replay_client_timeout_ms: u64,
@@ -115,6 +116,23 @@ pub struct IngestLimits {
     pub max_clients: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IngestOverloadConfig {
+    pub max_batches_per_second: u64,
+    pub priority_severity_floor: SeverityFloor,
+    pub report_every_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeverityFloor {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     output: Option<String>,
@@ -148,6 +166,12 @@ struct RawConfig {
     ingest_max_batch_bytes: Option<usize>,
     #[serde(rename = "ingest.max-clients")]
     ingest_max_clients: Option<usize>,
+    #[serde(rename = "ingest.max-batches-per-second")]
+    ingest_max_batches_per_second: Option<u64>,
+    #[serde(rename = "ingest.priority-severity-at-least")]
+    ingest_priority_severity_floor: Option<String>,
+    #[serde(rename = "ingest.overload-report-ms")]
+    ingest_overload_report_ms: Option<u64>,
     #[serde(rename = "replay.listen")]
     replay_addr: Option<String>,
     #[serde(rename = "replay.max-clients")]
@@ -218,6 +242,9 @@ impl Config {
                 ingest_require_client_cert: None,
                 ingest_max_batch_bytes: None,
                 ingest_max_clients: None,
+                ingest_max_batches_per_second: None,
+                ingest_priority_severity_floor: None,
+                ingest_overload_report_ms: None,
                 replay_addr: None,
                 replay_max_clients: None,
                 replay_client_timeout_ms: None,
@@ -266,6 +293,13 @@ impl Config {
         let ingest_limits = IngestLimits {
             max_batch_bytes: raw.ingest_max_batch_bytes.unwrap_or(1024 * 1024),
             max_clients: raw.ingest_max_clients.unwrap_or(32),
+        };
+        let ingest_overload = IngestOverloadConfig {
+            max_batches_per_second: raw.ingest_max_batches_per_second.unwrap_or(0),
+            priority_severity_floor: parse_severity_floor(
+                raw.ingest_priority_severity_floor.as_deref().unwrap_or("error"),
+            )?,
+            report_every_ms: raw.ingest_overload_report_ms.unwrap_or(5_000),
         };
         if ingest_limits.max_batch_bytes == 0 {
             return Err("ingest.max-batch-bytes must be greater than zero".into());
@@ -351,6 +385,7 @@ impl Config {
             ingest_protocol,
             ingest_tls,
             ingest_limits,
+            ingest_overload,
             replay_addr,
             replay_max_clients,
             replay_client_timeout_ms,
@@ -360,6 +395,18 @@ impl Config {
             tls,
             storage,
         })
+    }
+}
+
+fn parse_severity_floor(value: &str) -> Result<SeverityFloor, Box<dyn std::error::Error>> {
+    match value {
+        "trace" => Ok(SeverityFloor::Trace),
+        "debug" => Ok(SeverityFloor::Debug),
+        "info" => Ok(SeverityFloor::Info),
+        "warn" => Ok(SeverityFloor::Warn),
+        "error" => Ok(SeverityFloor::Error),
+        "fatal" => Ok(SeverityFloor::Fatal),
+        other => Err(format!("invalid ingest.priority-severity-at-least: {other}").into()),
     }
 }
 
