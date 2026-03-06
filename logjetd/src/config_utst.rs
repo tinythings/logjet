@@ -1,4 +1,4 @@
-use super::{BackpressureMode, BufferLimit, Config, IngestProtocol, StorageConfig, UpstreamMode};
+use super::{BackpressureMode, BufferLimit, Config, IngestProtocol, SeverityFloor, StorageConfig, UpstreamMode};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,6 +17,9 @@ fn empty_config_file_uses_defaults() {
     assert!(!config.ingest_tls.require_client_cert);
     assert_eq!(config.ingest_limits.max_batch_bytes, 1024 * 1024);
     assert_eq!(config.ingest_limits.max_clients, 32);
+    assert_eq!(config.ingest_overload.max_batches_per_second, 0);
+    assert_eq!(config.ingest_overload.priority_severity_floor, SeverityFloor::Error);
+    assert_eq!(config.ingest_overload.report_every_ms, 5_000);
     assert_eq!(config.replay_addr, "0.0.0.0:7002");
     assert_eq!(config.replay_max_clients, 32);
     assert_eq!(config.replay_client_timeout_ms, 10_000);
@@ -64,7 +67,7 @@ fn buffer_size_and_messages_conflict() {
 fn file_mode_and_collector_settings_parse() {
     let path = write_temp_config(
         "file-mode",
-        "output: file\nfile.path: ./logs\nfile.size: 16\nfile.name: bofh.logjet\ningest.protocol: otlp-grpc\ningest.tls-enable: true\ningest.ca-file: ./ingest-ca.pem\ningest.cert-file: ./ingest.pem\ningest.key-file: ./ingest.key\ningest.require-client-cert: true\ningest.max-batch-bytes: 262144\ningest.max-clients: 7\ncollector.url: https://127.0.0.1:4320/custom\ncollector.timeout-ms: 3210\ncollector.ca-file: ./collector-ca.pem\ncollector.cert-file: ./collector.pem\ncollector.key-file: ./collector.key\ncollector.server-name: collector.internal\nbackpressure.enabled: true\nbackpressure.mode: block\nbackpressure.max-buffered-records: 23\nupstream.replay: 10.0.0.15:7002\nupstream.retry-ms: 222\nupstream.connect-timeout-ms: 333\ntls.enable: true\ntls.ca-file: ./ca.pem\ntls.cert-file: ./node.pem\ntls.key-file: ./node.key\ntls.require-client-cert: true\ntls.server-name: appliance.internal\nreplay.max-clients: 9\nreplay.client-timeout-ms: 444\n",
+        "output: file\nfile.path: ./logs\nfile.size: 16\nfile.name: bofh.logjet\ningest.protocol: otlp-grpc\ningest.tls-enable: true\ningest.ca-file: ./ingest-ca.pem\ningest.cert-file: ./ingest.pem\ningest.key-file: ./ingest.key\ningest.require-client-cert: true\ningest.max-batch-bytes: 262144\ningest.max-clients: 7\ningest.max-batches-per-second: 12\ningest.priority-severity-at-least: fatal\ningest.overload-report-ms: 900\ncollector.url: https://127.0.0.1:4320/custom\ncollector.timeout-ms: 3210\ncollector.ca-file: ./collector-ca.pem\ncollector.cert-file: ./collector.pem\ncollector.key-file: ./collector.key\ncollector.server-name: collector.internal\nbackpressure.enabled: true\nbackpressure.mode: block\nbackpressure.max-buffered-records: 23\nupstream.replay: 10.0.0.15:7002\nupstream.retry-ms: 222\nupstream.connect-timeout-ms: 333\ntls.enable: true\ntls.ca-file: ./ca.pem\ntls.cert-file: ./node.pem\ntls.key-file: ./node.key\ntls.require-client-cert: true\ntls.server-name: appliance.internal\nreplay.max-clients: 9\nreplay.client-timeout-ms: 444\n",
     );
     let config = Config::load(&path).unwrap();
 
@@ -82,6 +85,9 @@ fn file_mode_and_collector_settings_parse() {
     assert!(config.ingest_tls.require_client_cert);
     assert_eq!(config.ingest_limits.max_batch_bytes, 262_144);
     assert_eq!(config.ingest_limits.max_clients, 7);
+    assert_eq!(config.ingest_overload.max_batches_per_second, 12);
+    assert_eq!(config.ingest_overload.priority_severity_floor, SeverityFloor::Fatal);
+    assert_eq!(config.ingest_overload.report_every_ms, 900);
     assert_eq!(config.replay_max_clients, 9);
     assert_eq!(config.replay_client_timeout_ms, 444);
     assert!(config.tls.enable);
@@ -116,6 +122,17 @@ fn invalid_ingest_protocol_is_rejected() {
     let path = write_temp_config("bad-protocol", "ingest.protocol: nope\n");
     let err = Config::load(&path).unwrap_err().to_string();
     assert!(err.contains("invalid ingest protocol"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn invalid_ingest_priority_floor_is_rejected() {
+    let path = write_temp_config(
+        "bad-ingest-priority-floor",
+        "ingest.priority-severity-at-least: nope\n",
+    );
+    let err = Config::load(&path).unwrap_err().to_string();
+    assert!(err.contains("invalid ingest.priority-severity-at-least"));
     fs::remove_file(path).unwrap();
 }
 
