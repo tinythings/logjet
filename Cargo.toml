@@ -5,8 +5,8 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace]
-members = ["logjetd"]
-default-members = [".", "logjetd"]
+members = ["logjetd", "demo"]
+default-members = [".", "logjetd", "demo"]
 
 [profile.release]
 lto = true
