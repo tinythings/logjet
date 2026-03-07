@@ -1,40 +1,46 @@
-.PHONY: build dev check fix test setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86
+.PHONY: build dev devel check fix test setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo
 
 DEFAULT_TARGET := build
 ARM_TARGET ?= aarch64-unknown-linux-musl
 X86_TARGET ?= x86_64-unknown-linux-musl
+CORE_WORKSPACE := --workspace --exclude otlp-demo
 
 build: setup
-	cargo build --workspace --release
+	cargo build $(CORE_WORKSPACE) --release
 
 dev: setup
-	cargo build --workspace
+	cargo build $(CORE_WORKSPACE)
+
+devel: dev
 
 check: setup
-	cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cargo clippy $(CORE_WORKSPACE) --all-targets --all-features -- -D warnings
 
 fix: setup
-	cargo clippy --workspace --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
+	cargo clippy $(CORE_WORKSPACE) --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
 
 test: setup
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --workspace; \
+		cargo nextest run $(CORE_WORKSPACE); \
 	else \
-		echo "cargo-nextest not available, falling back to cargo test --workspace"; \
-		cargo test --workspace; \
+		echo "cargo-nextest not available, falling back to cargo test $(CORE_WORKSPACE)"; \
+		cargo test $(CORE_WORKSPACE); \
 	fi
 
 arm-devel: setup setup-arm
-	cargo build --workspace --target $(ARM_TARGET)
+	cargo build $(CORE_WORKSPACE) --target $(ARM_TARGET)
 
 arm: setup setup-arm
-	cargo build --workspace --release --target $(ARM_TARGET)
+	cargo build $(CORE_WORKSPACE) --release --target $(ARM_TARGET)
 
 x86-devel: setup setup-x86
-	cargo build --workspace --target $(X86_TARGET)
+	cargo build $(CORE_WORKSPACE) --target $(X86_TARGET)
 
 x86: setup setup-x86
-	cargo build --workspace --release --target $(X86_TARGET)
+	cargo build $(CORE_WORKSPACE) --release --target $(X86_TARGET)
+
+demo: setup
+	cargo build -p otlp-demo
 
 clean:
 	cargo clean
