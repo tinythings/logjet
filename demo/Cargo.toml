@@ -1,0 +1,11 @@
+[package]
+name = "otlp-demo"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+colored = "3"
+opentelemetry-proto = { version = "0.28", features = ["gen-tonic", "logs"] }
+prost = "0.13"
+tiny_http = "0.12"
