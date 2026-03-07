@@ -17,7 +17,12 @@ fix: setup
 	cargo clippy --workspace --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
 
 test: setup
-	cargo nextest run --workspace
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run --workspace; \
+	else \
+		echo "cargo-nextest not available, falling back to cargo test --workspace"; \
+		cargo test --workspace; \
+	fi
 
 arm-devel: setup setup-arm
 	cargo build --workspace --target $(ARM_TARGET)
@@ -42,7 +47,6 @@ setup:
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo not found. Install Rust from https://rustup.rs"; exit 1; }
 	@command -v rustup >/dev/null 2>&1 || { echo "rustup not found. Install Rust from https://rustup.rs"; exit 1; }
 	@cargo clippy --version >/dev/null 2>&1 || { echo "clippy is missing. Run: rustup component add clippy"; exit 1; }
-	@cargo nextest --version >/dev/null 2>&1 || { echo "cargo-nextest is missing. Run: cargo install cargo-nextest"; exit 1; }
 	@echo "Rust toolchain looks ready."
 
 setup-arm:
