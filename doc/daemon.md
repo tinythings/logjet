@@ -61,25 +61,30 @@ Replay is strictly sequential today. There is no checkpoint or resume token yet.
 ### `output: buffer`
 
 - backlog exists only in memory
-- storage is bounded by `buffer.size`
-- if `buffer.preserve` is set, the first `N` retained messages are never evicted
-- eviction removes later messages first, preserving the front of the buffer
+- storage is bounded by either `buffer.size` or `buffer.messages`
+- if `buffer.keep` is set, the first `N` retained messages are never evicted
+- think of this as two pools:
+- a jar holding the first `N` messages forever
+- a FIFO behind the jar that rotates normally
+- eviction removes later messages first, preserving the jar at the front
 
 Important:
 
-- if the preserved prefix alone exceeds `buffer.size`, memory usage can exceed the configured size
-- that is intentional because `buffer.preserve` is treated as a hard preservation rule
+- if the kept prefix alone exceeds the configured limit, memory usage or retained message count can exceed the rotating tail budget
+- that is intentional because `buffer.keep` is treated as a hard preservation rule
 
 ### `output: file`
 
 - records are written to `.logjet` files
 - files rotate when `file.size` is exceeded
+- old files are not deleted by `logjetd`
+- file mode always keeps everything written
 - naming scheme is:
   - `bar.logjet`
   - `bar-1.logjet`
   - `bar-2.logjet`
 
-Current file mode is rotating output, not a bounded on-disk ring.
+Current file mode is append-only output with file rotation, not a ring.
 
 ## Current Limits
 
@@ -96,6 +101,5 @@ What does not exist yet:
 - OTLP/gRPC ingest
 - OTLP/HTTP ingest
 - downstream OTLP export client
-- disk-backed ring retention in file mode
 - client acknowledgement protocol
 - reconnect resume from saved cursor
