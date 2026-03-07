@@ -4,7 +4,10 @@ use logjet::codec::Codec;
 use logjet::format::{BLOCK_HEADER_FIXED_LEN, DEFAULT_SYNC_MARKER};
 use logjet::{LogjetReader, LogjetWriter, ReaderConfig, RecordType, WriterConfig};
 
-fn sample_record(index: u64) -> (RecordType, u64, u64, Vec<u8>) {
+type TestRecord = (RecordType, u64, u64, Vec<u8>);
+type ReadAllOutput = (Vec<TestRecord>, logjet::ReaderStats);
+
+fn sample_record(index: u64) -> TestRecord {
     let record_type = match index % 3 {
         0 => RecordType::Logs,
         1 => RecordType::Metrics,
@@ -25,7 +28,7 @@ fn write_records(config: WriterConfig, count: u64) -> Vec<u8> {
     writer.into_inner().unwrap().into_inner()
 }
 
-fn read_all(bytes: Vec<u8>, config: ReaderConfig) -> (Vec<(RecordType, u64, u64, Vec<u8>)>, logjet::ReaderStats) {
+fn read_all(bytes: Vec<u8>, config: ReaderConfig) -> ReadAllOutput {
     let mut reader = LogjetReader::with_config(Cursor::new(bytes), config);
     let mut out = Vec::new();
     while let Some(record) = reader.next_record().unwrap() {
