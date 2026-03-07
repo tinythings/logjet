@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, ReaderConfig};
 
-use crate::config::{BufferConfig, FileConfig, StorageConfig};
+use crate::config::{BufferConfig, BufferLimit, FileConfig, StorageConfig};
 use crate::protocol::{WireRecord, write_record};
 
 #[derive(Debug)]
@@ -16,8 +16,8 @@ pub enum Spool {
 
 #[derive(Debug)]
 pub struct BufferSpool {
-    max_bytes: usize,
-    preserve_messages: usize,
+    limit: BufferLimit,
+    keep_messages: usize,
     records: VecDeque<WireRecord>,
     total_bytes: usize,
 }
@@ -68,8 +68,8 @@ impl Spool {
 impl BufferSpool {
     fn new(config: BufferConfig) -> Self {
         Self {
-            max_bytes: config.size_bytes,
-            preserve_messages: config.preserve_messages,
+            limit: config.limit,
+            keep_messages: config.keep_messages,
             records: VecDeque::new(),
             total_bytes: 0,
         }
@@ -98,12 +98,19 @@ impl BufferSpool {
     }
 
     fn enforce_limits(&mut self) {
-        while self.total_bytes > self.max_bytes && self.records.len() > self.preserve_messages {
-            let drop_index = self.preserve_messages;
+        while self.over_limit() && self.records.len() > self.keep_messages {
+            let drop_index = self.keep_messages;
             let Some(record) = self.records.remove(drop_index) else {
                 break;
             };
             self.total_bytes = self.total_bytes.saturating_sub(record_size(&record));
+        }
+    }
+
+    fn over_limit(&self) -> bool {
+        match self.limit {
+            BufferLimit::Bytes(max_bytes) => self.total_bytes > max_bytes,
+            BufferLimit::Messages(max_messages) => self.records.len() > max_messages,
         }
     }
 }
@@ -323,15 +330,15 @@ fn to_io_error(err: logjet::Error) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::BufferSpool;
-    use crate::config::BufferConfig;
+    use crate::config::{BufferConfig, BufferLimit};
     use crate::protocol::WireRecord;
     use logjet::RecordType;
 
     #[test]
     fn preserve_prefix_survives_eviction() {
         let mut spool = BufferSpool::new(BufferConfig {
-            size_bytes: 90,
-            preserve_messages: 2,
+            limit: BufferLimit::Bytes(90),
+            keep_messages: 2,
         });
 
         for seq in 1..=5 {
@@ -345,5 +352,25 @@ mod tests {
 
         let kept: Vec<u64> = spool.records.iter().map(|record| record.seq).collect();
         assert_eq!(&kept[..2], &[1, 2]);
+    }
+
+    #[test]
+    fn message_limit_rotates_tail_only() {
+        let mut spool = BufferSpool::new(BufferConfig {
+            limit: BufferLimit::Messages(4),
+            keep_messages: 2,
+        });
+
+        for seq in 1..=6 {
+            spool.append(WireRecord {
+                record_type: logjet::RecordType::Logs,
+                seq,
+                ts_unix_ns: seq,
+                payload: vec![0u8; 8],
+            });
+        }
+
+        let kept: Vec<u64> = spool.records.iter().map(|record| record.seq).collect();
+        assert_eq!(kept, vec![1, 2, 5, 6]);
     }
 }
