@@ -43,6 +43,8 @@ It also contains scenario demos under subdirectories:
   - slow collector demo showing `block`, `disconnect`, and `drop-newest`
 - [`ingest-guardrails`](./ingest-guardrails)
   - oversized-batch rejection and concurrent ingest-client cap
+- [`ingest-overload`](./ingest-overload)
+  - rate-limited ingest with operator-visible counters and severity-aware shedding
 - [`remote-drain`](./remote-drain)
   - appliance-side `logjetd` drained by a remote-side `logjetd bridge`
 - [`remote-drain-tls`](./remote-drain-tls)
