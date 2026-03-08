@@ -1,6 +1,7 @@
 use super::{
-    ReplayAck, ReplayRequest, WireRecord, read_record, read_record_with_limit, read_replay_ack, read_replay_request,
-    write_record, write_replay_ack, write_replay_request,
+    ReplayAck, ReplayHello, ReplayRequest, WireRecord, read_record, read_record_with_limit,
+    read_replay_ack, read_replay_hello, read_replay_request, write_record, write_replay_ack,
+    write_replay_hello, write_replay_request,
 };
 use logjet::RecordType;
 
@@ -37,6 +38,19 @@ fn replay_ack_round_trip() {
     write_replay_ack(&mut bytes, &ack).unwrap();
     let decoded = read_replay_ack(&mut bytes.as_slice()).unwrap();
     assert_eq!(decoded, ack);
+}
+
+#[test]
+fn replay_hello_round_trip() {
+    let hello = ReplayHello {
+        stream_id: 77,
+        first_seq: 10,
+        last_seq: 99,
+    };
+    let mut bytes = Vec::new();
+    write_replay_hello(&mut bytes, &hello).unwrap();
+    let decoded = read_replay_hello(&mut bytes.as_slice()).unwrap();
+    assert_eq!(decoded, hello);
 }
 
 #[test]
@@ -98,6 +112,17 @@ fn invalid_replay_ack_magic_is_rejected() {
     bytes.extend_from_slice(&99u64.to_le_bytes());
 
     let err = read_replay_ack(&mut bytes.as_slice()).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn invalid_replay_hello_magic_is_rejected() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"BADHELLO");
+    bytes.extend_from_slice(&[1]);
+    bytes.extend_from_slice(&[0u8; 31]);
+
+    let err = read_replay_hello(&mut bytes.as_slice()).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
