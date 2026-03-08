@@ -45,6 +45,7 @@ ingest.max-batch-bytes: 1048576
 ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
 replay.max-clients: 32
+replay.client-timeout-ms: 10000
 replay.poll_ms: 250
 ```
 
@@ -224,6 +225,20 @@ Important:
 - must be greater than zero
 - applies to the replay listener used by downstream `keep` and `drain` clients
 - extra clients are closed when the limit is already reached
+
+### `replay.client-timeout-ms`
+
+Per-client socket timeout for replay connections in milliseconds.
+
+Use this to stop one stuck or extremely slow replay client from holding a replay
+thread forever.
+
+Important:
+
+- default is `10000`
+- must be greater than zero
+- applies to replay request reads, record writes, flushes, and drain acknowledgements
+- timeout currently closes that client connection; other replay clients keep their own threads and cursors
 
 ### `backpressure.mode`
 
@@ -491,6 +506,7 @@ If omitted:
 - `ingest.max-clients: 32`
 - `replay.listen: 0.0.0.0:7002`
 - `replay.max-clients: 32`
+- `replay.client-timeout-ms: 10000`
 - `replay.poll_ms: 250`
 
 ## Notes
@@ -515,6 +531,7 @@ If omitted:
 - `ingest.max-batch-bytes` rejects oversized ingest payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling
 - `replay.max-clients` caps concurrent replay clients
+- `replay.client-timeout-ms` caps how long one replay client can block on socket I/O
 - `tls.*` controls optional TLS on the replay listener and bridge source connection
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `file.*` settings are ignored unless `output: file`
