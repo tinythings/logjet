@@ -1,4 +1,4 @@
-.PHONY: build dev devel check fix test setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo
+.PHONY: build dev devel check fix test setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo man
 
 DEFAULT_TARGET := build
 ARM_TARGET ?= aarch64-unknown-linux-musl
@@ -41,6 +41,11 @@ x86: setup setup-x86
 
 demo: setup
 	cargo build -p otlp-demo
+
+man:
+	@command -v pandoc >/dev/null 2>&1 || { echo "pandoc not found. Install pandoc to build manpages."; exit 1; }
+	@mkdir -p doc/manpage
+	pandoc --standalone --to man doc/manpage/logjetd.1.md -o doc/manpage/logjetd.1
 
 clean:
 	cargo clean
