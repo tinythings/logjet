@@ -65,6 +65,7 @@ Memory model:
 Current behaviour:
 
 - clients send a small replay request with `from_seq`
+- clients can request `keep` or `drain`
 - replays retained data in sequence order
 - continues polling for new records
 - supports multiple clients in a basic way
@@ -85,9 +86,10 @@ Current behaviour:
 
 - connects to another `logjetd` replay listener
 - requests replay starting after the last sequence already forwarded
-- drains retained backlog first
+- can keep upstream records or drain them, depending on `upstream.mode`
 - stays attached and forwards new log records live
 - posts raw stored OTLP protobuf payloads to `collector.url`
+- acknowledges records in `drain` mode only after successful collector export
 - reconnects after disconnect and resumes from the last in-process forwarded sequence
 
 This is the current path for:
@@ -150,6 +152,7 @@ Current config areas:
 - collector URL and timeout
 - collector TLS trust/client-cert settings
 - upstream replay source and retry behaviour
+- upstream keep-or-drain behaviour
 - replay/bridge TLS settings
 - OTLP ingest TLS settings
 
@@ -244,7 +247,7 @@ Useful when:
 
 These are not implemented yet:
 
-- persisted resume checkpoints or acknowledgements across bridge restarts
+- persisted resume checkpoints across bridge restarts
 - advanced slow-consumer handling
 - disk-budget retention management for rotated files
 - production-grade service lifecycle handling

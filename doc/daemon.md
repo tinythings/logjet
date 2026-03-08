@@ -61,21 +61,24 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - binds to `replay.listen`
 - accepts TCP clients
 - expects a small replay request carrying `from_seq`
+- replay requests can ask to `keep` or `drain`
 - replays retained records in sequence order
 - continues polling for newly ingested records
 - can optionally wrap the replay transport in TLS
 
-Replay is strictly sequential today. Resume exists per connection via `from_seq`,
-but there is no persisted checkpoint yet.
+Replay is strictly sequential today. Resume exists per connection via `from_seq`.
+In `drain` mode, records are consumed only after the downstream side acknowledges
+successful export. There is no persisted checkpoint yet.
 
 ### Continuous Bridge
 
 - `logjetd bridge` connects to another `logjetd` replay listener
-- drains retained backlog first
+- requests either `keep` or `drain` mode from the upstream side
 - continues forwarding newly replayed records
 - forwards OTLP log payloads to `collector.url`
 - reconnects after disconnect using the last in-process forwarded sequence
 - source address comes from `--source` or `upstream.replay`
+- `upstream.mode: drain` removes upstream records after successful collector export and acknowledgement
 - can optionally use TLS with `tls.*`
 - collector export can optionally use HTTPS with `collector.*`
 
@@ -109,14 +112,14 @@ Important:
 
 - records are written to `.logjet` files
 - files rotate when `file.size` is exceeded
-- old files are not deleted by `logjetd`
-- file mode always keeps everything written
+- fully consumed closed files can be deleted when bridge mode uses `upstream.mode: drain`
 - naming scheme is:
   - `bar.logjet`
   - `bar-1.logjet`
   - `bar-2.logjet`
 
-Current file mode is append-only output with file rotation, not a ring.
+Current file mode is append-only output with file rotation. In drain mode, closed
+consumed segments can disappear after successful forwarding.
 
 ## Current Limits
 
@@ -127,6 +130,7 @@ What exists now:
 - OTLP/gRPC ingest
 - TCP replay
 - continuous daemon-to-daemon bridge to OTLP/HTTP collectors
+- configurable keep-or-drain bridge mode
 - optional TLS on replay/bridge transport
 - TLS-enabled OTLP ingest
 - HTTPS collector export
@@ -138,4 +142,3 @@ What exists now:
 What does not exist yet:
 
 - persisted reconnect resume from saved cursor
-- client acknowledgement protocol
