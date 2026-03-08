@@ -24,6 +24,9 @@ It can:
 .IP \[bu] 2
 accept OTLP/HTTP log batches on \f[C]POST /v1/logs\f[R]
 .IP \[bu] 2
+accept OTLP/gRPC log batches on the standard
+\f[C]LogsService/Export\f[R] endpoint
+.IP \[bu] 2
 store raw OTLP protobuf payloads either in memory or in append-only
 \f[C].logjet\f[R] files
 .IP \[bu] 2
@@ -49,6 +52,8 @@ If no explicit command is given, \f[C]serve\f[R] is the default.
 Current serve behavior:
 .IP \[bu] 2
 OTLP/HTTP ingest is supported with \f[C]ingest.protocol: otlp-http\f[R]
+.IP \[bu] 2
+OTLP/gRPC ingest is supported with \f[C]ingest.protocol: otlp-grpc\f[R]
 .IP \[bu] 2
 a replay listener socket is exposed for downstream clients
 .IP \[bu] 2
@@ -171,8 +176,8 @@ both
 .IP \[bu] 2
 file mode always keeps all rotated files
 .IP \[bu] 2
-\f[C]ingest.protocol\f[R] currently supports \f[C]wire\f[R] and
-\f[C]otlp-http\f[R]
+\f[C]ingest.protocol\f[R] currently supports \f[C]wire\f[R],
+\f[C]otlp-http\f[R], and \f[C]otlp-grpc\f[R]
 .IP \[bu] 2
 \f[C]collector.url\f[R] configures replay destination URL
 .IP \[bu] 2
@@ -209,6 +214,8 @@ old rotated files are kept
 .IP \[bu] 2
 OTLP/HTTP log ingest on \f[C]POST /v1/logs\f[R]
 .IP \[bu] 2
+OTLP/gRPC log ingest on the standard logs export service
+.IP \[bu] 2
 append-only \f[C].logjet\f[R] file output with size-based rotation
 .IP \[bu] 2
 in-memory ring buffering with \f[C]buffer.keep\f[R]
@@ -225,8 +232,6 @@ inspection of \f[C].logjet\f[R] files and directories
 .SH CURRENT LIMITATIONS
 .IP \[bu] 2
 continuous OTLP egress from the daemon is not implemented
-.IP \[bu] 2
-OTLP/gRPC ingest is not implemented
 .IP \[bu] 2
 replay listener traffic is not OTLP
 .IP \[bu] 2
