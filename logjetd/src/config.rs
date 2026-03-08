@@ -62,6 +62,7 @@ pub struct CollectorConfig {
 pub struct UpstreamConfig {
     pub replay_addr: Option<String>,
     pub mode: UpstreamMode,
+    pub state_file: Option<PathBuf>,
     pub retry_ms: u64,
     pub connect_timeout_ms: u64,
 }
@@ -140,6 +141,8 @@ struct RawConfig {
     upstream_replay_addr: Option<String>,
     #[serde(rename = "upstream.mode")]
     upstream_mode: Option<String>,
+    #[serde(rename = "upstream.state-file")]
+    upstream_state_file: Option<PathBuf>,
     #[serde(rename = "upstream.retry-ms")]
     upstream_retry_ms: Option<u64>,
     #[serde(rename = "upstream.connect-timeout-ms")]
@@ -188,6 +191,7 @@ impl Config {
                 collector_server_name: None,
                 upstream_replay_addr: None,
                 upstream_mode: None,
+                upstream_state_file: None,
                 upstream_retry_ms: None,
                 upstream_connect_timeout_ms: None,
                 tls_enable: None,
@@ -239,6 +243,7 @@ impl Config {
                 "drain" => UpstreamMode::Drain,
                 other => return Err(format!("invalid upstream mode: {other}").into()),
             },
+            state_file: raw.upstream_state_file,
             retry_ms: raw.upstream_retry_ms.unwrap_or(1_000),
             connect_timeout_ms: raw.upstream_connect_timeout_ms.unwrap_or(5_000),
         };
