@@ -33,6 +33,10 @@ It also contains scenario demos under subdirectories:
   - replay stored `.logjet` files into a collector
 - [`bridge-resume`](./bridge-resume)
   - consumer restart resumes from persisted sequence state without replaying from zero
+- [`backpressure`](./backpressure)
+  - slow collector demo showing `block` versus `disconnect`
+- [`ingest-guardrails`](./ingest-guardrails)
+  - oversized-batch rejection and concurrent ingest-client cap
 - [`remote-drain`](./remote-drain)
   - appliance-side `logjetd` drained by a remote-side `logjetd bridge`
 - [`remote-drain-tls`](./remote-drain-tls)
