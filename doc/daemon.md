@@ -7,7 +7,7 @@
 `logjetd` accepts telemetry on an ingest socket, stores backlog, and can replay
 that backlog later.
 
-It currently supports two storage modes:
+It supports two storage modes:
 
 - `buffer`: in-memory ring buffer
 - `file`: on-disk `.logjet` segment files
@@ -53,6 +53,7 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - supports `ingest.protocol: wire`
 - supports `ingest.protocol: otlp-http`
 - supports `ingest.protocol: otlp-grpc`
+- supports TLS on OTLP/HTTP and OTLP/gRPC ingest with `ingest.*`
 - stores raw OTLP protobuf bytes in configured storage
 
 ### Replay
@@ -76,6 +77,7 @@ but there is no persisted checkpoint yet.
 - reconnects after disconnect using the last in-process forwarded sequence
 - source address comes from `--source` or `upstream.replay`
 - can optionally use TLS with `tls.*`
+- collector export can optionally use HTTPS with `collector.*`
 
 ### File Blast Replay
 
@@ -126,6 +128,8 @@ What exists now:
 - TCP replay
 - continuous daemon-to-daemon bridge to OTLP/HTTP collectors
 - optional TLS on replay/bridge transport
+- TLS-enabled OTLP ingest
+- HTTPS collector export
 - one-shot file replay to OTLP/HTTP collectors
 - in-memory ring buffering
 - `.logjet` file output with rotation
@@ -135,4 +139,3 @@ What does not exist yet:
 
 - persisted reconnect resume from saved cursor
 - client acknowledgement protocol
-- TLS for OTLP ingest and collector export

@@ -17,6 +17,10 @@ file.size: 100          # KiB per file segment
 file.name: bar.logjet   # base file name
 collector.url: http://127.0.0.1:4318/v1/logs
 collector.timeout-ms: 10000
+collector.ca-file: /etc/logjet/collector-ca.pem
+collector.cert-file: /etc/logjet/collector.pem
+collector.key-file: /etc/logjet/collector.key
+collector.server-name: vector.internal
 upstream.replay: 10.0.0.15:7002
 upstream.retry-ms: 1000
 upstream.connect-timeout-ms: 5000
@@ -28,6 +32,11 @@ tls.require-client-cert: false
 tls.server-name: appliance.internal
 ingest.protocol: otlp-http   # "wire", "otlp-http", or "otlp-grpc"
 ingest.listen: 127.0.0.1:7001
+ingest.tls-enable: false
+ingest.ca-file: /etc/logjet/ingest-ca.pem
+ingest.cert-file: /etc/logjet/ingest.pem
+ingest.key-file: /etc/logjet/ingest.key
+ingest.require-client-cert: false
 replay.listen: 0.0.0.0:7002
 replay.poll_ms: 250
 ```
@@ -133,6 +142,7 @@ Accepted forms:
 
 - full URL:
   - `http://127.0.0.1:4318/v1/logs`
+  - `https://127.0.0.1:4318/v1/logs`
 - host and port only:
   - `127.0.0.1:4318`
 
@@ -142,9 +152,7 @@ If only host and port are given, replay defaults to:
 /v1/logs
 ```
 
-Current limitation:
-
-- `https://` is not supported yet
+If the URL starts with `https://`, collector export uses TLS.
 
 ### `collector.timeout-ms`
 
@@ -153,6 +161,22 @@ OTLP payloads to `collector.url`.
 
 It is also used by `logjetd bridge` when posting replayed OTLP payloads to the
 collector.
+
+### `collector.ca-file`
+
+CA file used when `collector.url` starts with `https://`.
+
+### `collector.cert-file`
+
+Optional client certificate for HTTPS collector export.
+
+### `collector.key-file`
+
+Private key matching `collector.cert-file`.
+
+### `collector.server-name`
+
+Override server name used for HTTPS collector certificate validation.
 
 ### `upstream.replay`
 
@@ -187,11 +211,8 @@ This affects:
 - the replay listener exposed by `serve`
 - the upstream replay connection used by `bridge`
 
-It does not affect:
-
-- OTLP/HTTP ingest
-- OTLP/gRPC ingest
-- OTLP/HTTP export to `collector.url`
+Use `ingest.*` for OTLP listener TLS and `collector.*` for HTTPS collector
+export.
 
 ### `tls.ca-file`
 
@@ -252,6 +273,32 @@ Values:
 If you want a normal OpenTelemetry producer to send logs directly to `logjetd`,
 use either `otlp-http` or `otlp-grpc`.
 
+### `ingest.tls-enable`
+
+Enable TLS for OTLP ingest listeners.
+
+Behavior:
+
+- with `ingest.protocol: otlp-http`, `logjetd` accepts HTTPS on `/v1/logs`
+- with `ingest.protocol: otlp-grpc`, `logjetd` accepts gRPC over TLS
+
+### `ingest.ca-file`
+
+CA file used to verify client certificates when `ingest.require-client-cert:
+true`.
+
+### `ingest.cert-file`
+
+Server certificate for TLS-enabled OTLP ingest.
+
+### `ingest.key-file`
+
+Private key matching `ingest.cert-file`.
+
+### `ingest.require-client-cert`
+
+Require client certificates on TLS-enabled OTLP ingest listeners.
+
 ### `ingest.listen`
 
 Address and port where the ingest listener binds.
@@ -299,6 +346,10 @@ If omitted:
 - `file.name: bar.logjet`
 - `collector.url: http://127.0.0.1:4318/v1/logs`
 - `collector.timeout-ms: 10000`
+- `collector.ca-file: unset`
+- `collector.cert-file: unset`
+- `collector.key-file: unset`
+- `collector.server-name: unset`
 - `upstream.replay: unset`
 - `upstream.retry-ms: 1000`
 - `upstream.connect-timeout-ms: 5000`
@@ -310,6 +361,11 @@ If omitted:
 - `tls.server-name: unset`
 - `ingest.protocol: wire`
 - `ingest.listen: 127.0.0.1:7001`
+- `ingest.tls-enable: false`
+- `ingest.ca-file: unset`
+- `ingest.cert-file: unset`
+- `ingest.key-file: unset`
+- `ingest.require-client-cert: false`
 - `replay.listen: 0.0.0.0:7002`
 - `replay.poll_ms: 250`
 
@@ -322,9 +378,11 @@ If omitted:
 - `buffer.messages` limits the rotating in-memory tail by message count
 - `collector.url` is used by `logjetd replay` when `--dest` is omitted
 - `collector.timeout-ms` controls replay and bridge HTTP socket timeout
+- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to HTTPS collector export
 - `upstream.replay` is used by `logjetd bridge` when `--source` is omitted
 - `upstream.retry-ms` controls bridge reconnect delay
 - `upstream.connect-timeout-ms` controls bridge source connect timeout
+- `ingest.tls-*` controls TLS on OTLP/HTTP and OTLP/gRPC ingest
 - `tls.*` controls optional TLS on the replay listener and bridge source connection
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `file.*` settings are ignored unless `output: file`
