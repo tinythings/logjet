@@ -9,7 +9,7 @@ build: setup
 	cargo build $(CORE_WORKSPACE) --release
 
 dev: setup
-	cargo build $(CORE_WORKSPACE)
+	cargo build --verbose $(CORE_WORKSPACE)
 
 devel: dev
 
