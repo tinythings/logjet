@@ -9,8 +9,8 @@ use std::time::Duration;
 use logjet::{LogjetReader, ReaderConfig, RecordType};
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
-use crate::config::{CollectorConfig, TlsConfig, UpstreamConfig};
-use crate::protocol::{ReplayRequest, read_record, write_replay_request};
+use crate::config::{CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode};
+use crate::protocol::{ReplayAck, ReplayRequest, read_record, write_replay_ack, write_replay_request};
 use crate::spool::list_named_segments;
 use crate::tls::{load_client_config, load_collector_client_config, parse_collector_server_name, parse_server_name};
 
@@ -26,6 +26,7 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
         },
         endpoint,
         collector: collector.clone(),
+        upstream_mode: UpstreamMode::Keep,
     };
 
     for segment in list_named_segments(path, name)? {
@@ -73,6 +74,7 @@ pub fn bridge_wire_to_otlp_http(
         },
         endpoint,
         collector: collector.clone(),
+        upstream_mode: upstream.mode,
     };
     let mut last_seq = 0u64;
 
@@ -132,11 +134,14 @@ fn bridge_transport<T: io::Read + io::Write>(
     transport: &mut T,
     collector_transport: &CollectorTransport,
 ) -> io::Result<()> {
-    write_replay_request(transport, &ReplayRequest { from_seq: *last_seq })?;
+    let consume = collector_transport.upstream_mode == UpstreamMode::Drain;
+    write_replay_request(transport, &ReplayRequest { from_seq: *last_seq, consume })?;
     transport.flush()?;
     eprintln!(
-        "bridge connected to {} and requested records after seq={}",
-        source, *last_seq
+        "bridge connected to {} and requested records after seq={} mode={}",
+        source,
+        *last_seq,
+        if consume { "drain" } else { "keep" }
     );
 
     while let Some(record) = read_record(transport)? {
@@ -144,6 +149,10 @@ fn bridge_transport<T: io::Read + io::Write>(
             post_raw_otlp_http(collector_transport, &record.payload)?;
         }
         *last_seq = record.seq;
+        if consume {
+            write_replay_ack(transport, &ReplayAck { ack_seq: record.seq })?;
+            transport.flush()?;
+        }
     }
 
     Ok(())
@@ -201,6 +210,7 @@ struct CollectorTransport {
     timeout: Duration,
     tls_client: Option<Arc<ClientConfig>>,
     collector: CollectorConfig,
+    upstream_mode: UpstreamMode,
 }
 
 impl CollectorEndpoint {

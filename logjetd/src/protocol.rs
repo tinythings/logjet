@@ -6,6 +6,8 @@ pub const WIRE_MAGIC: [u8; 8] = *b"LJNETV01";
 pub const WIRE_VERSION: u8 = 1;
 pub const REPLAY_REQUEST_MAGIC: [u8; 8] = *b"LJRPL001";
 pub const REPLAY_REQUEST_VERSION: u8 = 1;
+pub const REPLAY_ACK_MAGIC: [u8; 8] = *b"LJRPA001";
+pub const REPLAY_ACK_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WireRecord {
@@ -18,6 +20,12 @@ pub struct WireRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplayRequest {
     pub from_seq: u64,
+    pub consume: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayAck {
+    pub ack_seq: u64,
 }
 
 pub fn read_record<R: Read>(reader: &mut R) -> io::Result<Option<WireRecord>> {
@@ -104,6 +112,7 @@ pub fn read_replay_request<R: Read>(reader: &mut R) -> io::Result<ReplayRequest>
     }
 
     Ok(ReplayRequest {
+        consume: header[1] & 0x01 != 0,
         from_seq: u64::from_le_bytes([
             header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15],
         ]),
@@ -113,8 +122,44 @@ pub fn read_replay_request<R: Read>(reader: &mut R) -> io::Result<ReplayRequest>
 pub fn write_replay_request<W: Write>(writer: &mut W, request: &ReplayRequest) -> io::Result<()> {
     writer.write_all(&REPLAY_REQUEST_MAGIC)?;
     writer.write_all(&[REPLAY_REQUEST_VERSION])?;
-    writer.write_all(&[0u8; 7])?;
+    writer.write_all(&[u8::from(request.consume)])?;
+    writer.write_all(&[0u8; 6])?;
     writer.write_all(&request.from_seq.to_le_bytes())?;
+    Ok(())
+}
+
+pub fn read_replay_ack<R: Read>(reader: &mut R) -> io::Result<ReplayAck> {
+    let mut magic = [0u8; 8];
+    reader.read_exact(&mut magic)?;
+    if magic != REPLAY_ACK_MAGIC {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "invalid replay ack magic",
+        ));
+    }
+
+    let mut header = [0u8; 16];
+    reader.read_exact(&mut header)?;
+    let version = header[0];
+    if version != REPLAY_ACK_VERSION {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!("unsupported replay ack version: {version}"),
+        ));
+    }
+
+    Ok(ReplayAck {
+        ack_seq: u64::from_le_bytes([
+            header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15],
+        ]),
+    })
+}
+
+pub fn write_replay_ack<W: Write>(writer: &mut W, ack: &ReplayAck) -> io::Result<()> {
+    writer.write_all(&REPLAY_ACK_MAGIC)?;
+    writer.write_all(&[REPLAY_ACK_VERSION])?;
+    writer.write_all(&[0u8; 7])?;
+    writer.write_all(&ack.ack_seq.to_le_bytes())?;
     Ok(())
 }
 
