@@ -29,6 +29,8 @@ It also contains scenario demos under subdirectories:
   - appliance-side `logjetd` drained by a remote-side `logjetd bridge`
 - [`remote-drain-tls`](./remote-drain-tls)
   - same remote-drain topology, but with TLS and mutual TLS on the replay link
+- [`secure-pipeline`](./secure-pipeline)
+  - HTTPS OTLP ingest into `logjetd`, then HTTPS collector export on replay
 
 ## Enjoy It
 
