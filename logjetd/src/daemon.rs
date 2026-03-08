@@ -1,4 +1,5 @@
-use std::io::{self, BufReader};
+use std::fs;
+use std::io::{self, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -13,13 +14,14 @@ use opentelemetry_proto::tonic::collector::logs::v1::{
 };
 use prost::Message;
 use tiny_http::{Method, Response, Server, StatusCode};
+use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response as GrpcResponse, Status};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
-use crate::config::{Config, IngestProtocol};
+use crate::config::{Config, IngestProtocol, IngestTlsConfig};
 use crate::protocol::{read_record, read_replay_request};
 use crate::spool::Spool;
-use crate::tls::load_server_config;
+use crate::tls::{load_ingest_server_config, load_server_config};
 use crate::{protocol::WireRecord};
 
 #[derive(Debug, Clone)]
@@ -45,6 +47,7 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
     ingest_loop(
         config.config.ingest_addr,
         config.config.ingest_protocol,
+        config.config.ingest_tls,
         spool,
         next_seq,
     )?;
@@ -56,6 +59,7 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
 fn ingest_loop(
     bind_addr: String,
     protocol: IngestProtocol,
+    ingest_tls: IngestTlsConfig,
     spool: Arc<Mutex<Spool>>,
     next_seq: Arc<AtomicU64>,
 ) -> io::Result<()> {
@@ -77,6 +81,9 @@ fn ingest_loop(
             }
         }
         IngestProtocol::OtlpHttp => {
+            if ingest_tls.enable {
+                return otlp_http_tls_loop(bind_addr, ingest_tls, spool, next_seq);
+            }
             let server = Server::http(&bind_addr)
                 .map_err(|err| io::Error::other(err.to_string()))?;
             eprintln!("logjetd ingest listening on http://{bind_addr}/v1/logs using otlp-http");
@@ -99,11 +106,7 @@ fn ingest_loop(
                             ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
                             payload: body,
                         };
-
-                        let mut spool = spool
-                            .lock()
-                            .map_err(|_| io::Error::other("spool mutex poisoned"))?;
-                        spool.append(record)?;
+                        append_batch_record(&spool, record)?;
 
                         let response = Response::empty(200);
                         request
@@ -125,7 +128,8 @@ fn ingest_loop(
                 io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC bind addr: {err}"))
             })?;
             eprintln!(
-                "logjetd ingest listening on grpc://{bind_addr} using otlp-grpc"
+                "logjetd ingest listening on {}://{bind_addr} using otlp-grpc",
+                if ingest_tls.enable { "grpcs" } else { "grpc" }
             );
 
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -133,19 +137,225 @@ fn ingest_loop(
                 .build()
                 .map_err(|err| io::Error::other(err.to_string()))?;
             let service = OtlpGrpcLogsService { spool, next_seq };
+            let grpc_tls = if ingest_tls.enable {
+                Some(build_grpc_server_tls_config(&ingest_tls)?)
+            } else {
+                None
+            };
 
             runtime.block_on(async move {
-                tonic::transport::Server::builder()
-                    .add_service(LogsServiceServer::new(service))
-                    .serve(addr)
-                    .await
-                    .map_err(|err| io::Error::other(err.to_string()))
+                let builder = tonic::transport::Server::builder();
+                let mut builder = if let Some(tls) = grpc_tls {
+                    builder
+                        .tls_config(tls)
+                        .map_err(|err| io::Error::other(err.to_string()))?
+                } else {
+                    builder
+                };
+
+                builder
+                .add_service(LogsServiceServer::new(service))
+                .serve(addr)
+                .await
+                .map_err(|err| io::Error::other(err.to_string()))
             })?;
         }
     }
 
     Ok(())
 }
+
+fn otlp_http_tls_loop(
+    bind_addr: String,
+    ingest_tls: IngestTlsConfig,
+    spool: Arc<Mutex<Spool>>,
+    next_seq: Arc<AtomicU64>,
+) -> io::Result<()> {
+    let listener = TcpListener::bind(&bind_addr)?;
+    let tls_server = load_ingest_server_config(&ingest_tls)?;
+    eprintln!("logjetd ingest listening on https://{bind_addr}/v1/logs using otlp-http");
+
+    for stream in listener.incoming() {
+        let stream = stream?;
+        let spool = Arc::clone(&spool);
+        let next_seq = Arc::clone(&next_seq);
+        let tls_server = tls_server.clone();
+        thread::Builder::new()
+            .name("logjetd-otlp-http-tls-client".to_string())
+            .spawn(move || {
+                if let Err(err) = handle_otlp_http_tls_client(stream, tls_server, spool, next_seq) {
+                    eprintln!("logjetd otlp-http tls client error: {err}");
+                }
+            })?;
+    }
+
+    Ok(())
+}
+
+fn handle_otlp_http_tls_client(
+    stream: TcpStream,
+    tls_server: Arc<ServerConfig>,
+    spool: Arc<Mutex<Spool>>,
+    next_seq: Arc<AtomicU64>,
+) -> io::Result<()> {
+    let conn = ServerConnection::new(tls_server)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+    let mut transport = StreamOwned::new(conn, stream);
+    let result = handle_otlp_http_transport(&mut transport, spool, next_seq);
+    transport.conn.send_close_notify();
+    let _ = transport.flush();
+    result
+}
+
+fn handle_otlp_http_transport<T: Read + io::Write>(
+    transport: &mut T,
+    spool: Arc<Mutex<Spool>>,
+    next_seq: Arc<AtomicU64>,
+) -> io::Result<()> {
+    let request = read_http_request(transport)?;
+    if request.method != "POST" || request.path != "/v1/logs" {
+        write_http_response(transport, 404, "not found")?;
+        return Ok(());
+    }
+
+    match ExportLogsServiceRequest::decode(request.body.as_slice()) {
+        Ok(batch) => {
+            let record = WireRecord {
+                record_type: logjet::RecordType::Logs,
+                seq: next_seq.fetch_add(1, Ordering::Relaxed),
+                ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
+                payload: request.body,
+            };
+            append_batch_record(&spool, record)?;
+            write_http_response(transport, 200, "")?;
+        }
+        Err(err) => {
+            write_http_response(transport, 400, &format!("decode error: {err}"))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn append_batch_record(spool: &Arc<Mutex<Spool>>, record: WireRecord) -> io::Result<()> {
+    let mut spool = spool
+        .lock()
+        .map_err(|_| io::Error::other("spool mutex poisoned"))?;
+    spool.append(record)
+}
+
+struct ParsedHttpRequest {
+    method: String,
+    path: String,
+    body: Vec<u8>,
+}
+
+fn read_http_request<T: Read>(transport: &mut T) -> io::Result<ParsedHttpRequest> {
+    const MAX_HEADER_BYTES: usize = 16 * 1024;
+    let mut buffer = Vec::new();
+    let mut byte = [0u8; 1];
+
+    loop {
+        transport.read_exact(&mut byte)?;
+        buffer.push(byte[0]);
+        if buffer.len() > MAX_HEADER_BYTES {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "http header too large"));
+        }
+        if buffer.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+
+    let header_end = buffer.len();
+    let header_text = std::str::from_utf8(&buffer[..header_end - 4])
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "http header is not valid utf-8"))?;
+    let mut lines = header_text.lines();
+    let request_line = lines
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing http request line"))?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing http method"))?
+        .to_string();
+    let path = parts
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing http path"))?
+        .to_string();
+
+    let mut content_length = None;
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            content_length = Some(value.trim().parse::<usize>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid content-length")
+            })?);
+        }
+    }
+
+    let content_length = content_length
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content-length"))?;
+    let mut body = Vec::with_capacity(content_length);
+    transport
+        .take(content_length as u64)
+        .read_to_end(&mut body)?;
+    if body.len() != content_length {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short http body"));
+    }
+
+    Ok(ParsedHttpRequest { method, path, body })
+}
+
+fn write_http_response<T: io::Write>(transport: &mut T, status: u16, body: &str) -> io::Result<()> {
+    let status_text = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "Error",
+    };
+    write!(
+        transport,
+        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status,
+        status_text,
+        body.len(),
+        body
+    )?;
+    transport.flush()
+}
+
+fn build_grpc_server_tls_config(ingest_tls: &IngestTlsConfig) -> io::Result<ServerTlsConfig> {
+    let cert_file = ingest_tls.cert_file.as_deref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ingest.cert-file is required when ingest.tls-enable is true",
+        )
+    })?;
+    let key_file = ingest_tls.key_file.as_deref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ingest.key-file is required when ingest.tls-enable is true",
+        )
+    })?;
+
+    let identity = Identity::from_pem(fs::read(cert_file)?, fs::read(key_file)?);
+    let mut tls = ServerTlsConfig::new().identity(identity);
+    if ingest_tls.require_client_cert {
+        let ca_file = ingest_tls.ca_file.as_deref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ingest.ca-file is required when ingest.require-client-cert is true",
+            )
+        })?;
+        tls = tls.client_ca_root(Certificate::from_pem(fs::read(ca_file)?));
+    }
+    Ok(tls)
+}
+
+#[cfg(test)]
+#[path = "daemon_utst.rs"]
+mod daemon_utst;
 
 fn replay_loop(
     bind_addr: String,
