@@ -66,12 +66,14 @@ pub struct CollectorConfig {
 pub struct BackpressureConfig {
     pub enabled: bool,
     pub mode: BackpressureMode,
+    pub max_buffered_records: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackpressureMode {
     Block,
     Disconnect,
+    DropNewest,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +173,8 @@ struct RawConfig {
     backpressure_enabled: Option<bool>,
     #[serde(rename = "backpressure.mode")]
     backpressure_mode: Option<String>,
+    #[serde(rename = "backpressure.max-buffered-records")]
+    backpressure_max_buffered_records: Option<usize>,
     #[serde(rename = "upstream.replay")]
     upstream_replay_addr: Option<String>,
     #[serde(rename = "upstream.mode")]
@@ -229,6 +233,7 @@ impl Config {
                 collector_server_name: None,
                 backpressure_enabled: None,
                 backpressure_mode: None,
+                backpressure_max_buffered_records: None,
                 upstream_replay_addr: None,
                 upstream_mode: None,
                 upstream_state_file: None,
@@ -299,9 +304,14 @@ impl Config {
             mode: match raw.backpressure_mode.as_deref().unwrap_or("disconnect") {
                 "block" => BackpressureMode::Block,
                 "disconnect" => BackpressureMode::Disconnect,
+                "drop-newest" => BackpressureMode::DropNewest,
                 other => return Err(format!("invalid backpressure mode: {other}").into()),
             },
+            max_buffered_records: raw.backpressure_max_buffered_records.unwrap_or(16),
         };
+        if backpressure.max_buffered_records == 0 {
+            return Err("backpressure.max-buffered-records must be greater than zero".into());
+        }
         let upstream = UpstreamConfig {
             replay_addr: raw.upstream_replay_addr,
             mode: match raw.upstream_mode.as_deref().unwrap_or("keep") {
