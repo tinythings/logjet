@@ -4,8 +4,8 @@
 
 ## What It Does
 
-`logjetd` accepts a simple TCP-framed record stream on an ingest socket and
-replays backlog plus live records on a replay socket.
+`logjetd` accepts telemetry on an ingest socket, stores backlog, and can replay
+that backlog later.
 
 It currently supports two storage modes:
 
@@ -43,9 +43,10 @@ logjetd inspect /var/lib/logjet
 ### Ingest
 
 - binds to `ingest.listen`
-- accepts TCP clients
-- reads framed records
-- appends them into configured storage
+- supports `ingest.protocol: wire`
+- supports `ingest.protocol: otlp-http`
+- supports `ingest.protocol: otlp-grpc`
+- stores raw OTLP protobuf bytes in configured storage
 
 ### Replay
 
@@ -55,6 +56,15 @@ logjetd inspect /var/lib/logjet
 - continues polling for newly ingested records
 
 Replay is strictly sequential today. There is no checkpoint or resume token yet.
+
+### File Blast Replay
+
+- `logjetd replay --path ... --name ...`
+- reads ordered rotated `.logjet` files
+- sends stored OTLP log batches to a collector URL
+- uses `collector.url` by default
+- `--dest` can override the collector destination
+- sends as fast as possible, with no original timing preservation
 
 ## Storage Modes
 
@@ -90,16 +100,17 @@ Current file mode is append-only output with file rotation, not a ring.
 
 What exists now:
 
-- TCP ingest
+- wire-protocol ingest
+- OTLP/HTTP ingest
+- OTLP/gRPC ingest
 - TCP replay
+- one-shot file replay to OTLP/HTTP collectors
 - in-memory ring buffering
 - `.logjet` file output with rotation
 - YAML config
 
 What does not exist yet:
 
-- OTLP/gRPC ingest
-- OTLP/HTTP ingest
-- downstream OTLP export client
+- continuous downstream OTLP export from the daemon
 - client acknowledgement protocol
 - reconnect resume from saved cursor
