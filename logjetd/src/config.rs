@@ -61,8 +61,15 @@ pub struct CollectorConfig {
 #[derive(Debug, Clone)]
 pub struct UpstreamConfig {
     pub replay_addr: Option<String>,
+    pub mode: UpstreamMode,
     pub retry_ms: u64,
     pub connect_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpstreamMode {
+    Keep,
+    Drain,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +138,8 @@ struct RawConfig {
     collector_server_name: Option<String>,
     #[serde(rename = "upstream.replay")]
     upstream_replay_addr: Option<String>,
+    #[serde(rename = "upstream.mode")]
+    upstream_mode: Option<String>,
     #[serde(rename = "upstream.retry-ms")]
     upstream_retry_ms: Option<u64>,
     #[serde(rename = "upstream.connect-timeout-ms")]
@@ -178,6 +187,7 @@ impl Config {
                 collector_key_file: None,
                 collector_server_name: None,
                 upstream_replay_addr: None,
+                upstream_mode: None,
                 upstream_retry_ms: None,
                 upstream_connect_timeout_ms: None,
                 tls_enable: None,
@@ -224,6 +234,11 @@ impl Config {
         };
         let upstream = UpstreamConfig {
             replay_addr: raw.upstream_replay_addr,
+            mode: match raw.upstream_mode.as_deref().unwrap_or("keep") {
+                "keep" => UpstreamMode::Keep,
+                "drain" => UpstreamMode::Drain,
+                other => return Err(format!("invalid upstream mode: {other}").into()),
+            },
             retry_ms: raw.upstream_retry_ms.unwrap_or(1_000),
             connect_timeout_ms: raw.upstream_connect_timeout_ms.unwrap_or(5_000),
         };
