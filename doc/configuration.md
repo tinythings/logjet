@@ -47,7 +47,6 @@ ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
 replay.max-clients: 32
 replay.client-timeout-ms: 10000
-replay.poll_ms: 250
 ```
 
 ## Key Meanings
@@ -218,7 +217,7 @@ Important:
 Maximum number of replay clients handled at the same time.
 
 Use this to stop too many downstream replay or bridge connections from
-consuming threads and file-polling work.
+consuming threads and replay-side resources.
 
 Important:
 
@@ -466,22 +465,9 @@ Address and port where the daemon replay listener binds.
 
 This replay listener is for the current internal `wire` protocol, not OTLP.
 Clients first send a small replay request containing the last sequence they
-already have, then the server streams newer records.
-
-### `replay.poll_ms`
-
-Polling interval in milliseconds used by the replay listener while waiting for
-new records to appear in storage.
-
-Smaller values:
-
-- lower replay latency
-- higher wakeup overhead
-
-Larger values:
-
-- lower CPU wakeup overhead
-- higher replay latency
+already have, then the server streams newer records. After the retained backlog
+is sent, the replay listener waits for direct wakeups from ingest instead of
+sleeping and polling storage.
 
 ## Defaults
 
@@ -526,7 +512,6 @@ If omitted:
 - `replay.listen: 0.0.0.0:7002`
 - `replay.max-clients: 32`
 - `replay.client-timeout-ms: 10000`
-- `replay.poll_ms: 250`
 
 ## Notes
 
