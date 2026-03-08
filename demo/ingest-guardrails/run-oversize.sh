@@ -33,7 +33,7 @@ echo
 echo "sending one small OTLP batch that should be accepted"
 "$EMITTER" 127.0.0.1:4318 --once --service-name SMALL --message "small batch accepted"
 
-OVERSIZED_PAYLOAD="OVERSIZED $(printf 'X%.0s' $(seq 1 600))"
+OVERSIZED_PAYLOAD="OVERSIZED $(awk 'BEGIN { for (i = 0; i < 600; i++) printf "X" }')"
 
 echo
 echo "sending one oversized OTLP batch that should be rejected"

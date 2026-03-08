@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 LOGJETD="$ROOT_DIR/target/debug/logjetd"
@@ -8,7 +8,7 @@ CONFIG="$(cd "$(dirname "$0")" && pwd)/logjetd.conf"
 LOG_DIR="$(cd "$(dirname "$0")" && pwd)/logs"
 
 cleanup() {
-    if [[ -n "${LOGJETD_PID:-}" ]]; then
+    if [ -n "${LOGJETD_PID:-}" ]; then
         kill "$LOGJETD_PID" >/dev/null 2>&1 || true
         wait "$LOGJETD_PID" 2>/dev/null || true
     fi
