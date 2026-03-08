@@ -166,6 +166,7 @@ collector.key-file: /etc/logjet/collector.key
 collector.server-name: vector.internal
 upstream.replay: 10.0.0.15:7002
 upstream.mode: keep
+upstream.state-file: /var/lib/logjet/bridge.state
 upstream.retry-ms: 1000
 upstream.connect-timeout-ms: 5000
 tls.enable: false
@@ -198,6 +199,7 @@ Rules:
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure HTTPS collector export
 - `upstream.replay` configures the default bridge source
 - `upstream.mode` configures whether bridge keeps or drains upstream retained records
+- `upstream.state-file` stores persisted bridge resume state
 - `upstream.retry-ms` configures bridge reconnect delay
 - `upstream.connect-timeout-ms` configures bridge source connect timeout
 - `ingest.*` configures optional TLS on OTLP/HTTP and OTLP/gRPC ingest
@@ -236,6 +238,7 @@ Append-only file behaviour:
 - replay listener for downstream consumers using the internal framed protocol
 - continuous bridge mode from replay listener to OTLP/HTTP collectors
 - acknowledged drain mode through `upstream.mode: drain`
+- persisted bridge resume through `upstream.state-file`
 - optional TLS on replay/bridge transport
 - HTTPS OTLP collector export
 - one-shot file replay to OTLP/HTTP collectors with `logjetd replay`
@@ -245,7 +248,7 @@ Append-only file behaviour:
 # CURRENT LIMITATIONS
 
 - replay listener traffic is not OTLP
-- persisted resume checkpoints are not implemented
+- upstream storage reset and rollover handling is still basic
 - slow-consumer handling is basic
 - file mode does not delete old rotated files
 - certificate management and deployment policy are still operator-managed
