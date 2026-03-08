@@ -8,9 +8,11 @@ pub struct Config {
     pub ingest_addr: String,
     pub ingest_protocol: IngestProtocol,
     pub ingest_tls: IngestTlsConfig,
+    pub ingest_limits: IngestLimits,
     pub replay_addr: String,
     pub poll_interval_ms: u64,
     pub collector: CollectorConfig,
+    pub backpressure: BackpressureConfig,
     pub upstream: UpstreamConfig,
     pub tls: TlsConfig,
     pub storage: StorageConfig,
@@ -58,6 +60,18 @@ pub struct CollectorConfig {
     pub server_name: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackpressureConfig {
+    pub enabled: bool,
+    pub mode: BackpressureMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackpressureMode {
+    Block,
+    Disconnect,
+}
+
 #[derive(Debug, Clone)]
 pub struct UpstreamConfig {
     pub replay_addr: Option<String>,
@@ -92,6 +106,12 @@ pub struct IngestTlsConfig {
     pub require_client_cert: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IngestLimits {
+    pub max_batch_bytes: usize,
+    pub max_clients: usize,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     output: Option<String>,
@@ -121,6 +141,10 @@ struct RawConfig {
     ingest_key_file: Option<PathBuf>,
     #[serde(rename = "ingest.require-client-cert")]
     ingest_require_client_cert: Option<bool>,
+    #[serde(rename = "ingest.max-batch-bytes")]
+    ingest_max_batch_bytes: Option<usize>,
+    #[serde(rename = "ingest.max-clients")]
+    ingest_max_clients: Option<usize>,
     #[serde(rename = "replay.listen")]
     replay_addr: Option<String>,
     #[serde(rename = "replay.poll_ms")]
@@ -137,6 +161,10 @@ struct RawConfig {
     collector_key_file: Option<PathBuf>,
     #[serde(rename = "collector.server-name")]
     collector_server_name: Option<String>,
+    #[serde(rename = "backpressure.enabled")]
+    backpressure_enabled: Option<bool>,
+    #[serde(rename = "backpressure.mode")]
+    backpressure_mode: Option<String>,
     #[serde(rename = "upstream.replay")]
     upstream_replay_addr: Option<String>,
     #[serde(rename = "upstream.mode")]
@@ -181,6 +209,8 @@ impl Config {
                 ingest_cert_file: None,
                 ingest_key_file: None,
                 ingest_require_client_cert: None,
+                ingest_max_batch_bytes: None,
+                ingest_max_clients: None,
                 replay_addr: None,
                 poll_interval_ms: None,
                 collector_url: None,
@@ -189,6 +219,8 @@ impl Config {
                 collector_cert_file: None,
                 collector_key_file: None,
                 collector_server_name: None,
+                backpressure_enabled: None,
+                backpressure_mode: None,
                 upstream_replay_addr: None,
                 upstream_mode: None,
                 upstream_state_file: None,
@@ -222,6 +254,16 @@ impl Config {
             key_file: raw.ingest_key_file,
             require_client_cert: raw.ingest_require_client_cert.unwrap_or(false),
         };
+        let ingest_limits = IngestLimits {
+            max_batch_bytes: raw.ingest_max_batch_bytes.unwrap_or(1024 * 1024),
+            max_clients: raw.ingest_max_clients.unwrap_or(32),
+        };
+        if ingest_limits.max_batch_bytes == 0 {
+            return Err("ingest.max-batch-bytes must be greater than zero".into());
+        }
+        if ingest_limits.max_clients == 0 {
+            return Err("ingest.max-clients must be greater than zero".into());
+        }
         let replay_addr = raw
             .replay_addr
             .unwrap_or_else(|| "0.0.0.0:7002".to_string());
@@ -235,6 +277,14 @@ impl Config {
             cert_file: raw.collector_cert_file,
             key_file: raw.collector_key_file,
             server_name: raw.collector_server_name,
+        };
+        let backpressure = BackpressureConfig {
+            enabled: raw.backpressure_enabled.unwrap_or(false),
+            mode: match raw.backpressure_mode.as_deref().unwrap_or("disconnect") {
+                "block" => BackpressureMode::Block,
+                "disconnect" => BackpressureMode::Disconnect,
+                other => return Err(format!("invalid backpressure mode: {other}").into()),
+            },
         };
         let upstream = UpstreamConfig {
             replay_addr: raw.upstream_replay_addr,
@@ -279,9 +329,11 @@ impl Config {
             ingest_addr,
             ingest_protocol,
             ingest_tls,
+            ingest_limits,
             replay_addr,
             poll_interval_ms,
             collector,
+            backpressure,
             upstream,
             tls,
             storage,
