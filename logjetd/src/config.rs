@@ -7,6 +7,7 @@ use serde::Deserialize;
 pub struct Config {
     pub ingest_addr: String,
     pub ingest_protocol: IngestProtocol,
+    pub ingest_tls: IngestTlsConfig,
     pub replay_addr: String,
     pub poll_interval_ms: u64,
     pub collector: CollectorConfig,
@@ -51,6 +52,10 @@ pub struct FileConfig {
 pub struct CollectorConfig {
     pub url: String,
     pub timeout_ms: u64,
+    pub ca_file: Option<PathBuf>,
+    pub cert_file: Option<PathBuf>,
+    pub key_file: Option<PathBuf>,
+    pub server_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +73,15 @@ pub struct TlsConfig {
     pub key_file: Option<PathBuf>,
     pub require_client_cert: bool,
     pub server_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IngestTlsConfig {
+    pub enable: bool,
+    pub ca_file: Option<PathBuf>,
+    pub cert_file: Option<PathBuf>,
+    pub key_file: Option<PathBuf>,
+    pub require_client_cert: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +103,16 @@ struct RawConfig {
     ingest_addr: Option<String>,
     #[serde(rename = "ingest.protocol")]
     ingest_protocol: Option<String>,
+    #[serde(rename = "ingest.tls-enable")]
+    ingest_tls_enable: Option<bool>,
+    #[serde(rename = "ingest.ca-file")]
+    ingest_ca_file: Option<PathBuf>,
+    #[serde(rename = "ingest.cert-file")]
+    ingest_cert_file: Option<PathBuf>,
+    #[serde(rename = "ingest.key-file")]
+    ingest_key_file: Option<PathBuf>,
+    #[serde(rename = "ingest.require-client-cert")]
+    ingest_require_client_cert: Option<bool>,
     #[serde(rename = "replay.listen")]
     replay_addr: Option<String>,
     #[serde(rename = "replay.poll_ms")]
@@ -97,6 +121,14 @@ struct RawConfig {
     collector_url: Option<String>,
     #[serde(rename = "collector.timeout-ms")]
     collector_timeout_ms: Option<u64>,
+    #[serde(rename = "collector.ca-file")]
+    collector_ca_file: Option<PathBuf>,
+    #[serde(rename = "collector.cert-file")]
+    collector_cert_file: Option<PathBuf>,
+    #[serde(rename = "collector.key-file")]
+    collector_key_file: Option<PathBuf>,
+    #[serde(rename = "collector.server-name")]
+    collector_server_name: Option<String>,
     #[serde(rename = "upstream.replay")]
     upstream_replay_addr: Option<String>,
     #[serde(rename = "upstream.retry-ms")]
@@ -132,10 +164,19 @@ impl Config {
                 file_name: None,
                 ingest_addr: None,
                 ingest_protocol: None,
+                ingest_tls_enable: None,
+                ingest_ca_file: None,
+                ingest_cert_file: None,
+                ingest_key_file: None,
+                ingest_require_client_cert: None,
                 replay_addr: None,
                 poll_interval_ms: None,
                 collector_url: None,
                 collector_timeout_ms: None,
+                collector_ca_file: None,
+                collector_cert_file: None,
+                collector_key_file: None,
+                collector_server_name: None,
                 upstream_replay_addr: None,
                 upstream_retry_ms: None,
                 upstream_connect_timeout_ms: None,
@@ -160,6 +201,13 @@ impl Config {
             "otlp-grpc" => IngestProtocol::OtlpGrpc,
             other => return Err(format!("invalid ingest protocol: {other}").into()),
         };
+        let ingest_tls = IngestTlsConfig {
+            enable: raw.ingest_tls_enable.unwrap_or(false),
+            ca_file: raw.ingest_ca_file,
+            cert_file: raw.ingest_cert_file,
+            key_file: raw.ingest_key_file,
+            require_client_cert: raw.ingest_require_client_cert.unwrap_or(false),
+        };
         let replay_addr = raw
             .replay_addr
             .unwrap_or_else(|| "0.0.0.0:7002".to_string());
@@ -169,6 +217,10 @@ impl Config {
                 .collector_url
                 .unwrap_or_else(|| "http://127.0.0.1:4318/v1/logs".to_string()),
             timeout_ms: raw.collector_timeout_ms.unwrap_or(10_000),
+            ca_file: raw.collector_ca_file,
+            cert_file: raw.collector_cert_file,
+            key_file: raw.collector_key_file,
+            server_name: raw.collector_server_name,
         };
         let upstream = UpstreamConfig {
             replay_addr: raw.upstream_replay_addr,
@@ -206,6 +258,7 @@ impl Config {
         Ok(Self {
             ingest_addr,
             ingest_protocol,
+            ingest_tls,
             replay_addr,
             poll_interval_ms,
             collector,
