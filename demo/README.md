@@ -6,6 +6,10 @@ This directory contains two binaries for a two-terminal OTLP demo over TCP.
   - emits a real OTLP/HTTP protobuf log batch every second
   - prints the exact log content it is sending, without ANSI colors
 
+- `otlp-bofh-grpc-emitter`
+  - emits a real OTLP/gRPC log batch every second
+  - prints the exact log content it is sending, without ANSI colors
+
 - `otlp-demo-collector`
   - listens on a TCP socket for OTLP/HTTP `POST /v1/logs`
   - decodes the protobuf payload
@@ -27,6 +31,12 @@ Terminal 2: start the emitter
 cargo run -p otlp-demo --bin otlp-bofh-emitter -- 127.0.0.1:4318
 ```
 
+Or use the gRPC emitter against an OTLP/gRPC logs endpoint:
+
+```bash
+cargo run -p otlp-demo --bin otlp-bofh-grpc-emitter -- 127.0.0.1:4317
+```
+
 The emitter prints plain output like:
 
 ```text
@@ -46,5 +56,6 @@ If you do not pass an address:
 ## Notes
 
 - the transport is OTLP/HTTP protobuf
+- the gRPC emitter uses OTLP/gRPC logs export
 - the collector is intentionally tiny and is only for demos and quick local setups
 - this is useful when setting up a real collector like Vector would be overkill

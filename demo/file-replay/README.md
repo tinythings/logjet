@@ -8,7 +8,6 @@ as fast as possible. This demo depends on the first demo.
 From the project root:
 
 ```bash
-make devel
 make demo
 ```
 
