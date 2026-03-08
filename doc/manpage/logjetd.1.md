@@ -14,6 +14,8 @@ logjetd - OTLP ingest, `.logjet` storage, replay, and file blasting daemon
 
 `logjetd` `replay` [`-c`|`--config` *path*] `--path` *dir* `--name` *base.logjet* [`--dest` *url-or-host:port*]
 
+`logjetd` `bridge` [`-c`|`--config` *path*] [`--source` *host:port*]
+
 # DESCRIPTION
 
 `logjetd` is a small telemetry daemon for constrained systems.
@@ -24,6 +26,7 @@ It can:
 - accept OTLP/gRPC log batches on the standard `LogsService/Export` endpoint
 - store raw OTLP protobuf payloads either in memory or in append-only `.logjet` files
 - expose a replay listener for downstream consumers over the current internal wire protocol
+- connect to another `logjetd` replay listener and forward backlog plus live records into an OTLP/HTTP collector
 - inspect `.logjet` files and directories
 - replay stored `.logjet` files into an OTLP/HTTP collector as a one-shot operation
 
@@ -45,6 +48,20 @@ Current serve behavior:
 - OTLP/gRPC ingest is supported with `ingest.protocol: otlp-grpc`
 - a replay listener socket is exposed for downstream clients
 - replay listener traffic currently uses the internal framed protocol, not OTLP egress
+
+## bridge
+
+Connect to another `logjetd` replay listener, drain retained backlog, stay
+attached for live records, and forward OTLP log payloads to the configured
+collector.
+
+Example:
+
+```text
+logjetd --config ./logjetd.conf bridge --source 10.0.0.15:7002
+```
+
+If `--source` is omitted, bridge uses `upstream.replay` from configuration.
 
 ## inspect
 
@@ -114,6 +131,12 @@ Used only with the `replay` command.
 If a full `http://host:port/path` URL is given, replay uses that exact path.
 If only `host:port` is given, replay defaults to `/v1/logs`.
 
+## `--source` *host:port*
+
+Upstream `logjetd` replay listener for the `bridge` command.
+
+If omitted, `bridge` uses `upstream.replay` from configuration.
+
 # CONFIGURATION
 
 Default configuration path:
@@ -134,6 +157,9 @@ file.size: 10240
 file.name: vehicle.logjet
 collector.url: http://127.0.0.1:4318/v1/logs
 collector.timeout-ms: 10000
+upstream.replay: 10.0.0.15:7002
+upstream.retry-ms: 1000
+upstream.connect-timeout-ms: 5000
 ingest.protocol: otlp-http
 ingest.listen: 127.0.0.1:4318
 replay.listen: 0.0.0.0:7002
@@ -149,7 +175,10 @@ Rules:
 - file mode always keeps all rotated files
 - `ingest.protocol` currently supports `wire`, `otlp-http`, and `otlp-grpc`
 - `collector.url` configures replay destination URL
-- `collector.timeout-ms` configures replay socket timeout in milliseconds
+- `collector.timeout-ms` configures replay and bridge socket timeout in milliseconds
+- `upstream.replay` configures the default bridge source
+- `upstream.retry-ms` configures bridge reconnect delay
+- `upstream.connect-timeout-ms` configures bridge source connect timeout
 
 # STORAGE MODES
 
@@ -181,15 +210,15 @@ Append-only file behavior:
 - append-only `.logjet` file output with size-based rotation
 - in-memory ring buffering with `buffer.keep`
 - replay listener for downstream consumers using the internal framed protocol
+- continuous bridge mode from replay listener to OTLP/HTTP collectors
 - one-shot file replay to OTLP/HTTP collectors with `logjetd replay`
 - configurable replay destination via `collector.url`
 - inspection of `.logjet` files and directories
 
 # CURRENT LIMITATIONS
 
-- continuous OTLP egress from the daemon is not implemented
 - replay listener traffic is not OTLP
-- resume checkpoints and acknowledgements are not implemented
+- persisted resume checkpoints and acknowledgements are not implemented
 - slow-consumer handling is basic
 - file mode does not delete old rotated files
 
@@ -211,6 +240,12 @@ Replay files to a local collector:
 
 ```text
 logjetd --config ./logjetd.conf replay --path ./logs --name bofh.logjet
+```
+
+Bridge from a remote replay listener into a collector:
+
+```text
+logjetd --config ./logjetd.conf bridge --source 10.0.0.15:7002
 ```
 
 # FILES
