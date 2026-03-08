@@ -32,6 +32,7 @@ The daemon provides:
 - basic backpressure policy on bridge export
 - bounded bridge-side exporter queue with `block`, `disconnect`, and `drop-newest` policy
 - basic ingest guardrails for payload size and concurrent clients
+- ingest rate limiting with severity-aware overload shedding
 - basic replay-client caps
 - optional TLS on the replay/bridge transport
 - HTTPS collector export
