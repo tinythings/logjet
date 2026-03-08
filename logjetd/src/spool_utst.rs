@@ -77,6 +77,59 @@ fn replay_since_only_sends_newer_records() {
 }
 
 #[test]
+fn consume_through_removes_buffer_records() {
+    let mut spool = BufferSpool::new(BufferConfig {
+        limit: BufferLimit::Messages(8),
+        keep_messages: 2,
+    });
+
+    for seq in 1..=5 {
+        spool.append(WireRecord {
+            record_type: RecordType::Logs,
+            seq,
+            ts_unix_ns: seq,
+            payload: vec![seq as u8],
+        });
+    }
+
+    spool.consume_through(3);
+    let kept: Vec<u64> = spool.records.iter().map(|record| record.seq).collect();
+    assert_eq!(kept, vec![4, 5]);
+}
+
+#[test]
+fn file_spool_consume_state_survives_reopen() {
+    let dir = unique_temp_dir("file-consume");
+    let config = FileConfig {
+        dir: dir.clone(),
+        name: "bofh.logjet".to_string(),
+        segment_size_bytes: 1024 * 1024,
+    };
+
+    {
+        let mut spool = Spool::open(StorageConfig::File(config.clone())).unwrap();
+        for seq in 1..=3 {
+            spool.append(WireRecord {
+                record_type: RecordType::Logs,
+                seq,
+                ts_unix_ns: seq,
+                payload: vec![seq as u8],
+            })
+            .unwrap();
+        }
+        spool.consume_through(2).unwrap();
+    }
+
+    {
+        let spool = Spool::open(StorageConfig::File(config)).unwrap();
+        let next = spool.next_after(0).unwrap().unwrap();
+        assert_eq!(next.seq, 3);
+    }
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn list_named_segments_orders_numeric_suffixes() {
     let dir = unique_temp_dir("segments");
     fs::write(dir.join("bofh-2.logjet"), b"x").unwrap();
