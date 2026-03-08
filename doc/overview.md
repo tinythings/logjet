@@ -3,7 +3,7 @@
 `logjet` is split into two parts:
 
 - `logjet`: a Rust library and `.logjet` block format for storing raw OTLP protobuf batches
-- `logjetd`: a daemon that accepts records over TCP, keeps a backlog, and replays backlog plus live traffic to downstream clients
+- `logjetd`: a daemon that accepts OTLP logs, keeps a backlog, and replays or blasts stored data later
 
 ## Components
 
@@ -20,8 +20,11 @@ The library provides:
 
 The daemon provides:
 
-- ingest listener
+- OTLP/HTTP ingest listener
+- OTLP/gRPC ingest listener
+- internal wire-protocol ingest listener
 - replay listener
+- one-shot file replay to OTLP/HTTP collectors
 - configurable backlog storage
 - in-memory ring buffer mode
 - file output mode with `.logjet` segment rotation
@@ -37,6 +40,9 @@ Typical flow:
 3. a downstream consumer connects to the replay listener
 4. `logjetd` sends retained backlog first
 5. `logjetd` continues sending newly ingested records
+
+`logjetd` can also replay stored `.logjet` files later into an OTLP/HTTP
+collector without preserving original timing.
 
 This is optimized for:
 
