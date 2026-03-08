@@ -513,7 +513,7 @@ fn bridge_forwards_large_payloads_end_to_end() -> io::Result<()> {
         &large_message,
     )?;
 
-    wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 1))?;
+    wait_until(Duration::from_secs(5), || Ok(!collector.messages().is_empty()))?;
     assert_eq!(collector.messages(), vec![large_message]);
 
     Ok(())
