@@ -35,6 +35,8 @@ It also contains scenario demos under subdirectories:
   - one replay client stalls while another keeps flowing
 - [`file-replay`](./file-replay)
   - replay stored `.logjet` files into a collector
+- [`file-tooling`](./file-tooling)
+  - inspect rotated file segments and prune archived files deliberately
 - [`bridge-resume`](./bridge-resume)
   - consumer restart resumes from persisted sequence state without replaying from zero
 - [`upstream-reset-resume`](./upstream-reset-resume)
