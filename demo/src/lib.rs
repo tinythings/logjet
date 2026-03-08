@@ -31,16 +31,25 @@ const BOFH_EXCUSES: &[&str] = &[
 ];
 
 pub fn build_excuse_request(sequence: u64) -> ExportLogsServiceRequest {
-    build_excuse_request_for_service(sequence, "bofh-emitter")
+    build_excuse_request_for_service_with_severity(sequence, "bofh-emitter", "warn")
 }
 
 pub fn build_excuse_request_for_service(
     sequence: u64,
     service_name: &str,
 ) -> ExportLogsServiceRequest {
+    build_excuse_request_for_service_with_severity(sequence, service_name, "warn")
+}
+
+pub fn build_excuse_request_for_service_with_severity(
+    sequence: u64,
+    service_name: &str,
+    severity: &str,
+) -> ExportLogsServiceRequest {
     build_message_request_for_service(
         sequence,
         service_name,
+        severity,
         format!(
             "BOFH excuse #{sequence}: {}",
             BOFH_EXCUSES[(sequence as usize) % BOFH_EXCUSES.len()]
@@ -49,15 +58,17 @@ pub fn build_excuse_request_for_service(
 }
 
 pub fn build_message_request(sequence: u64, body: String) -> ExportLogsServiceRequest {
-    build_message_request_for_service(sequence, "bofh-emitter", body)
+    build_message_request_for_service(sequence, "bofh-emitter", "warn", body)
 }
 
 pub fn build_message_request_for_service(
     sequence: u64,
     service_name: &str,
+    severity: &str,
     body: String,
 ) -> ExportLogsServiceRequest {
     let nanos = unix_time_nanos();
+    let (severity_text, severity_number) = parse_demo_severity(severity);
 
     ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
@@ -79,8 +90,8 @@ pub fn build_message_request_for_service(
                 log_records: vec![LogRecord {
                     time_unix_nano: nanos,
                     observed_time_unix_nano: nanos,
-                    severity_number: SeverityNumber::Warn as i32,
-                    severity_text: "WARN".to_string(),
+                    severity_number,
+                    severity_text,
                     body: Some(AnyValue {
                         value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
                             body,
@@ -102,6 +113,18 @@ pub fn build_message_request_for_service(
             }],
             schema_url: String::new(),
         }],
+    }
+}
+
+fn parse_demo_severity(value: &str) -> (String, i32) {
+    match value {
+        "trace" => ("TRACE".to_string(), SeverityNumber::Trace as i32),
+        "debug" => ("DEBUG".to_string(), SeverityNumber::Debug as i32),
+        "info" => ("INFO".to_string(), SeverityNumber::Info as i32),
+        "warn" => ("WARN".to_string(), SeverityNumber::Warn as i32),
+        "error" => ("ERROR".to_string(), SeverityNumber::Error as i32),
+        "fatal" => ("FATAL".to_string(), SeverityNumber::Fatal as i32),
+        _ => ("WARN".to_string(), SeverityNumber::Warn as i32),
     }
 }
 
