@@ -163,7 +163,7 @@ collector.timeout-ms: 10000
 collector.ca-file: /etc/logjet/collector-ca.pem
 collector.cert-file: /etc/logjet/collector.pem
 collector.key-file: /etc/logjet/collector.key
-collector.server-name: vector.internal
+collector.server-name: collector.internal
 backpressure.enabled: false
 backpressure.mode: disconnect
 upstream.replay: 10.0.0.15:7002
@@ -252,6 +252,7 @@ Append-only file behaviour:
 - continuous bridge mode from replay listener to OTLP/HTTP collectors
 - acknowledged drain mode through `upstream.mode: drain`
 - persisted bridge resume through `upstream.state-file`
+- upstream restart and storage-replacement detection through replay stream identity
 - basic backpressure policy through `backpressure.mode`
 - optional TLS on replay/bridge transport
 - HTTPS OTLP collector export

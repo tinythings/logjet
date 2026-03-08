@@ -194,7 +194,7 @@ collector.timeout-ms: 10000
 collector.ca-file: /etc/logjet/collector-ca.pem
 collector.cert-file: /etc/logjet/collector.pem
 collector.key-file: /etc/logjet/collector.key
-collector.server-name: vector.internal
+collector.server-name: collector.internal
 backpressure.enabled: false
 backpressure.mode: disconnect
 upstream.replay: 10.0.0.15:7002
@@ -332,6 +332,9 @@ continuous bridge mode from replay listener to OTLP/HTTP collectors
 acknowledged drain mode through \f[C]upstream.mode: drain\f[R]
 .IP \[bu] 2
 persisted bridge resume through \f[C]upstream.state-file\f[R]
+.IP \[bu] 2
+upstream restart and storage-replacement detection through replay stream
+identity
 .IP \[bu] 2
 basic backpressure policy through \f[C]backpressure.mode\f[R]
 .IP \[bu] 2
