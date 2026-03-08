@@ -23,6 +23,7 @@ collector.key-file: /etc/logjet/collector.key
 collector.server-name: vector.internal
 upstream.replay: 10.0.0.15:7002
 upstream.mode: keep
+upstream.state-file: /var/lib/logjet/bridge.state
 upstream.retry-ms: 1000
 upstream.connect-timeout-ms: 5000
 tls.enable: false
@@ -209,6 +210,19 @@ Important:
 - in `drain` mode, the downstream bridge acknowledges each record only after successful collector export
 - in file mode, fully consumed closed segments are deleted; the current active segment stays logically empty until rotation or reopen
 
+### `upstream.state-file`
+
+Optional local file used by `logjetd bridge` to persist the last successfully
+forwarded sequence.
+
+Important:
+
+- default is unset
+- when set, bridge loads the saved sequence at start-up
+- bridge writes the new sequence after each successful collector export
+- this allows restart resume instead of restarting from sequence zero
+- the state file lives on the downstream bridge side, not the upstream appliance side
+
 ### `upstream.retry-ms`
 
 Reconnect delay in milliseconds for `logjetd bridge`.
@@ -371,6 +385,7 @@ If omitted:
 - `collector.server-name: unset`
 - `upstream.replay: unset`
 - `upstream.mode: keep`
+- `upstream.state-file: unset`
 - `upstream.retry-ms: 1000`
 - `upstream.connect-timeout-ms: 5000`
 - `tls.enable: false`
@@ -402,6 +417,7 @@ If omitted:
 - `upstream.replay` is used by `logjetd bridge` when `--source` is omitted
 - `upstream.mode: keep` leaves upstream retained records in place after replay
 - `upstream.mode: drain` consumes upstream retained records after successful bridge export
+- `upstream.state-file` stores the last forwarded sequence on the downstream bridge side
 - `upstream.retry-ms` controls bridge reconnect delay
 - `upstream.connect-timeout-ms` controls bridge source connect timeout
 - `ingest.tls-*` controls TLS on OTLP/HTTP and OTLP/gRPC ingest
