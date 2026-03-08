@@ -1,4 +1,7 @@
-use super::CollectorEndpoint;
+use super::{CollectorEndpoint, read_bridge_state, write_bridge_state};
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn host_port_defaults_to_v1_logs() {
@@ -35,4 +38,30 @@ fn missing_authority_is_rejected() {
         .unwrap()
         .to_string();
     assert!(err.contains("missing host:port"));
+}
+
+#[test]
+fn bridge_state_round_trip() {
+    let path = unique_temp_path("bridge-state");
+    assert_eq!(read_bridge_state(Some(&path)).unwrap(), 0);
+    write_bridge_state(Some(&path), 42).unwrap();
+    assert_eq!(read_bridge_state(Some(&path)).unwrap(), 42);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn invalid_bridge_state_is_rejected() {
+    let path = unique_temp_path("bridge-state-invalid");
+    fs::write(&path, "not-a-number").unwrap();
+    let err = read_bridge_state(Some(&path)).err().unwrap();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    fs::remove_file(path).unwrap();
+}
+
+fn unique_temp_path(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("logjetd-{label}-{nanos}-{}.state", std::process::id()))
 }
