@@ -43,6 +43,16 @@ pub struct SegmentInfo {
     pub path: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct SegmentSummary {
+    pub id: u64,
+    pub path: PathBuf,
+    pub size_bytes: u64,
+    pub record_count: u64,
+    pub first_seq: Option<u64>,
+    pub last_seq: Option<u64>,
+}
+
 impl Spool {
     pub fn open(config: StorageConfig) -> io::Result<Self> {
         match config {
@@ -429,6 +439,119 @@ pub fn inspect_path(path: &Path) -> io::Result<()> {
     }
 
     inspect_file(path)
+}
+
+pub fn print_named_segments(dir: &Path, file_name: &str) -> io::Result<()> {
+    for summary in summarise_named_segments(dir, file_name)? {
+        println!(
+            "segment={} file={} size_bytes={} records={} first_seq={} last_seq={}",
+            summary.id,
+            summary.path.display(),
+            summary.size_bytes,
+            summary.record_count,
+            summary
+                .first_seq
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            summary
+                .last_seq
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        );
+    }
+    Ok(())
+}
+
+pub fn summarise_named_segments(dir: &Path, file_name: &str) -> io::Result<Vec<SegmentSummary>> {
+    let mut summaries = Vec::new();
+    for segment in list_named_segments(dir, file_name)? {
+        let file = File::open(&segment.path)?;
+        let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
+        let mut first_seq = None;
+        let mut last_seq = None;
+        let mut record_count = 0u64;
+
+        while let Some(record) = reader.next_record().map_err(to_io_error)? {
+            if first_seq.is_none() {
+                first_seq = Some(record.seq);
+            }
+            last_seq = Some(record.seq);
+            record_count = record_count.saturating_add(1);
+        }
+
+        summaries.push(SegmentSummary {
+            id: segment.id,
+            path: segment.path.clone(),
+            size_bytes: fs::metadata(&segment.path)?.len(),
+            record_count,
+            first_seq,
+            last_seq,
+        });
+    }
+    Ok(summaries)
+}
+
+pub fn prune_named_segments(
+    dir: &Path,
+    file_name: &str,
+    keep_files: Option<usize>,
+    keep_bytes: Option<u64>,
+    dry_run: bool,
+) -> io::Result<Vec<PathBuf>> {
+    if keep_files.is_none() && keep_bytes.is_none() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "set --keep-files or --keep-bytes",
+        ));
+    }
+    if keep_files.is_some() && keep_bytes.is_some() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "use either --keep-files or --keep-bytes, not both",
+        ));
+    }
+
+    let summaries = summarise_named_segments(dir, file_name)?;
+    if summaries.len() <= 1 {
+        return Ok(Vec::new());
+    }
+
+    let mut remove_ids = Vec::new();
+    if let Some(limit) = keep_files {
+        let keep = limit.max(1);
+        if summaries.len() > keep {
+            let remove_count = summaries.len() - keep;
+            remove_ids.extend((0..remove_count).collect::<Vec<_>>());
+        }
+    } else if let Some(limit_bytes) = keep_bytes {
+        let mut kept_total = 0u64;
+        let mut keep_flags = vec![false; summaries.len()];
+        for index in (0..summaries.len()).rev() {
+            let summary = &summaries[index];
+            if index == summaries.len() - 1 || kept_total < limit_bytes {
+                keep_flags[index] = true;
+                kept_total = kept_total.saturating_add(summary.size_bytes);
+            }
+        }
+        for (index, keep) in keep_flags.into_iter().enumerate() {
+            if !keep {
+                remove_ids.push(index);
+            }
+        }
+    }
+
+    let removed_paths = remove_ids
+        .into_iter()
+        .map(|index| summaries[index].path.clone())
+        .collect::<Vec<_>>();
+
+    if !dry_run {
+        for path in &removed_paths {
+            fs::remove_file(path)?;
+        }
+    }
+
+    Ok(removed_paths)
 }
 
 fn inspect_file(path: &Path) -> io::Result<()> {
