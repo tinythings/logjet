@@ -219,6 +219,7 @@ ingest.max-batch-bytes: 1048576
 ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
 replay.max-clients: 32
+replay.client-timeout-ms: 10000
 replay.poll_ms: 250
 \f[R]
 .fi
@@ -245,6 +246,9 @@ before they are stored
 \f[C]ingest.max-clients\f[R] caps concurrent ingest handling
 .IP \[bu] 2
 \f[C]replay.max-clients\f[R] caps concurrent replay clients
+.IP \[bu] 2
+\f[C]replay.client-timeout-ms\f[R] caps how long one replay client can
+block on socket I/O
 .IP \[bu] 2
 \f[C]collector.url\f[R] configures replay destination URL
 .IP \[bu] 2
@@ -326,6 +330,8 @@ protocol
 independent replay cursor per connected client
 .IP \[bu] 2
 basic replay-client caps through \f[C]replay.max-clients\f[R]
+.IP \[bu] 2
+basic replay-client timeout through \f[C]replay.client-timeout-ms\f[R]
 .IP \[bu] 2
 continuous bridge mode from replay listener to OTLP/HTTP collectors
 .IP \[bu] 2
