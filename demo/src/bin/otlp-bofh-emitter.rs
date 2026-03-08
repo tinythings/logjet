@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use prost::Message;
 
-use otlp_demo::{build_excuse_request, build_message_request, format_batch_plain};
+use otlp_demo::{
+    build_excuse_request, build_excuse_request_for_service, build_message_request_for_service,
+    format_batch_plain,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
@@ -13,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut count = None;
     let mut interval_ms = 1_000u64;
     let mut once_message = None;
+    let mut service_name = "bofh-emitter".to_string();
     let mut ca_file = None;
     let mut server_name = None;
 
@@ -37,6 +41,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--message" => {
                 once_message = Some(args.next().ok_or("missing value for --message")?);
             }
+            "--service-name" => {
+                service_name = args.next().ok_or("missing value for --service-name")?;
+            }
             "--ca-file" => {
                 ca_file = Some(PathBuf::from(args.next().ok_or("missing value for --ca-file")?));
             }
@@ -58,8 +65,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sequence = 1u64;
     loop {
         let request = match &once_message {
-            Some(message) => build_message_request(sequence, message.clone()),
-            None => build_excuse_request(sequence),
+            Some(message) => build_message_request_for_service(sequence, &service_name, message.clone()),
+            None if service_name == "bofh-emitter" => build_excuse_request(sequence),
+            None => build_excuse_request_for_service(sequence, &service_name),
         };
         print!("{}", format_batch_plain(&request));
         match otlp_demo::post_raw_otlp_http(
