@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use opentelemetry_proto::tonic::collector::logs::v1::{
     logs_service_server::{LogsService, LogsServiceServer},
@@ -18,7 +18,7 @@ use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response as GrpcResponse, Status};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
-use crate::config::{Config, IngestLimits, IngestProtocol, IngestTlsConfig};
+use crate::config::{Config, IngestLimits, IngestOverloadConfig, IngestProtocol, IngestTlsConfig, SeverityFloor};
 use crate::protocol::{
     ReplayHello, read_record_with_limit, read_replay_ack, read_replay_request, write_record,
     write_replay_hello,
@@ -37,6 +37,46 @@ struct SharedSpool {
     spool: Mutex<Spool>,
     wake_state: Mutex<u64>,
     wake_cv: Condvar,
+}
+
+struct SharedIngestPolicy {
+    inner: Mutex<IngestPolicyState>,
+    config: IngestOverloadConfig,
+}
+
+#[derive(Debug)]
+struct IngestPolicyState {
+    window_start: Instant,
+    accepted_in_window: u64,
+    stats: IngestOverloadStats,
+    next_report_at: Instant,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct IngestOverloadStats {
+    accepted: u64,
+    priority_bypass: u64,
+    rate_limited: u64,
+    oversize_rejected: u64,
+    client_cap_rejected: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BatchPriority {
+    Unknown = 0,
+    Trace = 1,
+    Debug = 2,
+    Info = 3,
+    Warn = 4,
+    Error = 5,
+    Fatal = 6,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IngestDecision {
+    Accept,
+    AcceptPriorityBypass,
+    RejectRateLimited,
 }
 
 impl SharedSpool {
@@ -80,10 +120,108 @@ impl SharedSpool {
     }
 }
 
+impl SharedIngestPolicy {
+    fn new(config: IngestOverloadConfig) -> Self {
+        let now = Instant::now();
+        Self {
+            inner: Mutex::new(IngestPolicyState {
+                window_start: now,
+                accepted_in_window: 0,
+                stats: IngestOverloadStats::default(),
+                next_report_at: now + Duration::from_millis(config.report_every_ms.max(1)),
+            }),
+            config,
+        }
+    }
+
+    fn decide(&self, priority: BatchPriority) -> io::Result<IngestDecision> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("ingest policy mutex poisoned"))?;
+        let now = Instant::now();
+        if now.duration_since(state.window_start) >= Duration::from_secs(1) {
+            state.window_start = now;
+            state.accepted_in_window = 0;
+        }
+
+        let decision = if self.config.max_batches_per_second == 0
+            || state.accepted_in_window < self.config.max_batches_per_second
+        {
+            state.accepted_in_window = state.accepted_in_window.saturating_add(1);
+            state.stats.accepted = state.stats.accepted.saturating_add(1);
+            IngestDecision::Accept
+        } else if priority >= batch_priority_floor(self.config.priority_severity_floor) {
+            state.stats.priority_bypass = state.stats.priority_bypass.saturating_add(1);
+            IngestDecision::AcceptPriorityBypass
+        } else {
+            state.stats.rate_limited = state.stats.rate_limited.saturating_add(1);
+            IngestDecision::RejectRateLimited
+        };
+
+        if matches!(decision, IngestDecision::AcceptPriorityBypass | IngestDecision::RejectRateLimited) {
+            maybe_report_overload(&self.config, &mut state);
+        }
+
+        Ok(decision)
+    }
+
+    fn note_oversize(&self) -> io::Result<()> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("ingest policy mutex poisoned"))?;
+        state.stats.oversize_rejected = state.stats.oversize_rejected.saturating_add(1);
+        maybe_report_overload(&self.config, &mut state);
+        Ok(())
+    }
+
+    fn note_client_cap(&self) -> io::Result<()> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("ingest policy mutex poisoned"))?;
+        state.stats.client_cap_rejected = state.stats.client_cap_rejected.saturating_add(1);
+        maybe_report_overload(&self.config, &mut state);
+        Ok(())
+    }
+}
+
+fn maybe_report_overload(config: &IngestOverloadConfig, state: &mut IngestPolicyState) {
+    if config.report_every_ms == 0 {
+        return;
+    }
+    let now = Instant::now();
+    if now < state.next_report_at {
+        return;
+    }
+    eprintln!(
+        "logjetd ingest overload stats accepted={} priority-bypass={} rate-limited={} oversize-rejected={} client-cap-rejected={}",
+        state.stats.accepted,
+        state.stats.priority_bypass,
+        state.stats.rate_limited,
+        state.stats.oversize_rejected,
+        state.stats.client_cap_rejected
+    );
+    state.next_report_at = now + Duration::from_millis(config.report_every_ms.max(1));
+}
+
+fn batch_priority_floor(floor: SeverityFloor) -> BatchPriority {
+    match floor {
+        SeverityFloor::Trace => BatchPriority::Trace,
+        SeverityFloor::Debug => BatchPriority::Debug,
+        SeverityFloor::Info => BatchPriority::Info,
+        SeverityFloor::Warn => BatchPriority::Warn,
+        SeverityFloor::Error => BatchPriority::Error,
+        SeverityFloor::Fatal => BatchPriority::Fatal,
+    }
+}
+
 pub fn serve(config: DaemonConfig) -> io::Result<()> {
     let spool_inner = Spool::open(config.config.storage.clone())?;
     let next_seq_seed = spool_inner.next_sequence_seed()?;
     let spool = Arc::new(SharedSpool::new(spool_inner));
+    let ingest_policy = Arc::new(SharedIngestPolicy::new(config.config.ingest_overload));
     let next_seq = Arc::new(AtomicU64::new(next_seq_seed));
 
     let replay_spool = Arc::clone(&spool);
@@ -110,6 +248,7 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
         config.config.ingest_protocol,
         config.config.ingest_tls,
         config.config.ingest_limits,
+        ingest_policy,
         spool,
         next_seq,
     )?;
@@ -123,6 +262,7 @@ fn ingest_loop(
     protocol: IngestProtocol,
     ingest_tls: IngestTlsConfig,
     ingest_limits: IngestLimits,
+    ingest_policy: Arc<SharedIngestPolicy>,
     spool: Arc<SharedSpool>,
     next_seq: Arc<AtomicU64>,
 ) -> io::Result<()> {
@@ -139,12 +279,13 @@ fn ingest_loop(
             for stream in listener.incoming() {
                 let stream = stream?;
                 let spool = Arc::clone(&spool);
+                let ingest_policy = Arc::clone(&ingest_policy);
                 let limiter = Arc::clone(&limiter);
                 let max_batch_bytes = ingest_limits.max_batch_bytes;
                 thread::Builder::new()
                     .name("logjetd-ingest-client".to_string())
                     .spawn(move || {
-                        if let Err(err) = handle_ingest_client(stream, spool, limiter, max_batch_bytes) {
+                        if let Err(err) = handle_ingest_client(stream, spool, ingest_policy, limiter, max_batch_bytes) {
                             eprintln!("logjetd ingest client error: {err}");
                         }
                     })?;
@@ -152,7 +293,7 @@ fn ingest_loop(
         }
         IngestProtocol::OtlpHttp => {
             if ingest_tls.enable {
-                return otlp_http_tls_loop(bind_addr, ingest_tls, ingest_limits, spool, next_seq, limiter);
+                return otlp_http_tls_loop(bind_addr, ingest_tls, ingest_limits, ingest_policy, spool, next_seq, limiter);
             }
             let server = Server::http(&bind_addr)
                 .map_err(|err| io::Error::other(err.to_string()))?;
@@ -175,6 +316,7 @@ fn ingest_loop(
                     .take((ingest_limits.max_batch_bytes + 1) as u64)
                     .read_to_end(&mut body)?;
                 if body.len() > ingest_limits.max_batch_bytes {
+                    ingest_policy.note_oversize()?;
                     let response = Response::from_string("payload too large")
                         .with_status_code(StatusCode(413));
                     request
@@ -184,6 +326,15 @@ fn ingest_loop(
                 }
                 match ExportLogsServiceRequest::decode(body.as_slice()) {
                     Ok(batch) => {
+                        let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
+                        if matches!(decision, IngestDecision::RejectRateLimited) {
+                            let response = Response::from_string("rate limit exceeded")
+                                .with_status_code(StatusCode(429));
+                            request
+                                .respond(response)
+                                .map_err(|err| io::Error::other(err.to_string()))?;
+                            continue;
+                        }
                         let record = WireRecord {
                             record_type: logjet::RecordType::Logs,
                             seq: next_seq.fetch_add(1, Ordering::Relaxed),
@@ -223,7 +374,11 @@ fn ingest_loop(
                 .enable_all()
                 .build()
                 .map_err(|err| io::Error::other(err.to_string()))?;
-            let service = OtlpGrpcLogsService { spool, next_seq };
+            let service = OtlpGrpcLogsService {
+                spool,
+                next_seq,
+                ingest_policy,
+            };
             let grpc_tls = if ingest_tls.enable {
                 Some(build_grpc_server_tls_config(&ingest_tls)?)
             } else {
@@ -260,6 +415,7 @@ fn otlp_http_tls_loop(
     bind_addr: String,
     ingest_tls: IngestTlsConfig,
     ingest_limits: IngestLimits,
+    ingest_policy: Arc<SharedIngestPolicy>,
     spool: Arc<SharedSpool>,
     next_seq: Arc<AtomicU64>,
     limiter: Arc<ConnectionLimiter>,
@@ -275,6 +431,7 @@ fn otlp_http_tls_loop(
     for stream in listener.incoming() {
         let stream = stream?;
         let spool = Arc::clone(&spool);
+        let ingest_policy = Arc::clone(&ingest_policy);
         let next_seq = Arc::clone(&next_seq);
         let tls_server = tls_server.clone();
         let limiter = Arc::clone(&limiter);
@@ -286,6 +443,7 @@ fn otlp_http_tls_loop(
                     stream,
                     tls_server,
                     spool,
+                    ingest_policy,
                     next_seq,
                     limiter,
                     max_batch_bytes,
@@ -302,18 +460,20 @@ fn handle_otlp_http_tls_client(
     stream: TcpStream,
     tls_server: Arc<ServerConfig>,
     spool: Arc<SharedSpool>,
+    ingest_policy: Arc<SharedIngestPolicy>,
     next_seq: Arc<AtomicU64>,
     limiter: Arc<ConnectionLimiter>,
     max_batch_bytes: usize,
 ) -> io::Result<()> {
     let Some(_permit) = limiter.try_acquire() else {
         eprintln!("logjetd ingest refused TLS client: ingest.max-clients reached");
+        ingest_policy.note_client_cap()?;
         return Ok(());
     };
     let conn = ServerConnection::new(tls_server)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     let mut transport = StreamOwned::new(conn, stream);
-    let result = handle_otlp_http_transport(&mut transport, spool, next_seq, max_batch_bytes);
+    let result = handle_otlp_http_transport(&mut transport, spool, ingest_policy, next_seq, max_batch_bytes);
     transport.conn.send_close_notify();
     let _ = transport.flush();
     result
@@ -322,12 +482,14 @@ fn handle_otlp_http_tls_client(
 fn handle_otlp_http_transport<T: Read + io::Write>(
     transport: &mut T,
     spool: Arc<SharedSpool>,
+    ingest_policy: Arc<SharedIngestPolicy>,
     next_seq: Arc<AtomicU64>,
     max_batch_bytes: usize,
 ) -> io::Result<()> {
     let request = match read_http_request(transport, max_batch_bytes) {
         Ok(request) => request,
         Err(err) if err.kind() == io::ErrorKind::InvalidData && err.to_string() == "payload too large" => {
+            ingest_policy.note_oversize()?;
             write_http_response(transport, 413, "payload too large")?;
             return Ok(());
         }
@@ -340,6 +502,11 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
 
     match ExportLogsServiceRequest::decode(request.body.as_slice()) {
         Ok(batch) => {
+            let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
+            if matches!(decision, IngestDecision::RejectRateLimited) {
+                write_http_response(transport, 429, "rate limit exceeded")?;
+                return Ok(());
+            }
             let record = WireRecord {
                 record_type: logjet::RecordType::Logs,
                 seq: next_seq.fetch_add(1, Ordering::Relaxed),
@@ -439,6 +606,7 @@ fn write_http_response<T: io::Write>(transport: &mut T, status: u16, body: &str)
         200 => "OK",
         400 => "Bad Request",
         413 => "Payload Too Large",
+        429 => "Too Many Requests",
         404 => "Not Found",
         503 => "Service Unavailable",
         _ => "Error",
@@ -528,17 +696,23 @@ fn replay_loop(
 fn handle_ingest_client(
     stream: TcpStream,
     spool: Arc<SharedSpool>,
+    ingest_policy: Arc<SharedIngestPolicy>,
     limiter: Arc<ConnectionLimiter>,
     max_batch_bytes: usize,
 ) -> io::Result<()> {
     let Some(_permit) = limiter.try_acquire() else {
         eprintln!("logjetd ingest refused wire client: ingest.max-clients reached");
+        ingest_policy.note_client_cap()?;
         return Ok(());
     };
     let peer = stream.peer_addr().ok();
     let mut reader = BufReader::new(stream);
 
     while let Some(record) = read_record_with_limit(&mut reader, max_batch_bytes)? {
+        if matches!(ingest_policy.decide(BatchPriority::Unknown)?, IngestDecision::RejectRateLimited) {
+            eprintln!("logjetd ingest dropped wire record seq={} because ingest rate limit was exceeded", record.seq);
+            continue;
+        }
         append_batch_record(&spool, record)?;
     }
 
@@ -718,6 +892,30 @@ fn extract_batch_timestamp(batch: &ExportLogsServiceRequest) -> Option<u64> {
     None
 }
 
+fn classify_otlp_batch_priority(batch: &ExportLogsServiceRequest) -> BatchPriority {
+    let mut highest = BatchPriority::Unknown;
+    for resource_logs in &batch.resource_logs {
+        for scope_logs in &resource_logs.scope_logs {
+            for record in &scope_logs.log_records {
+                highest = highest.max(priority_from_severity_number(record.severity_number));
+            }
+        }
+    }
+    highest
+}
+
+fn priority_from_severity_number(severity_number: i32) -> BatchPriority {
+    match severity_number {
+        21..=24 => BatchPriority::Fatal,
+        17..=20 => BatchPriority::Error,
+        13..=16 => BatchPriority::Warn,
+        9..=12 => BatchPriority::Info,
+        5..=8 => BatchPriority::Debug,
+        1..=4 => BatchPriority::Trace,
+        _ => BatchPriority::Unknown,
+    }
+}
+
 fn unix_time_nanos() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -729,6 +927,7 @@ fn unix_time_nanos() -> u64 {
 struct OtlpGrpcLogsService {
     spool: Arc<SharedSpool>,
     next_seq: Arc<AtomicU64>,
+    ingest_policy: Arc<SharedIngestPolicy>,
 }
 
 #[tonic::async_trait]
@@ -738,6 +937,16 @@ impl LogsService for OtlpGrpcLogsService {
         request: Request<ExportLogsServiceRequest>,
     ) -> Result<GrpcResponse<ExportLogsServiceResponse>, Status> {
         let batch = request.into_inner();
+        match self
+            .ingest_policy
+            .decide(classify_otlp_batch_priority(&batch))
+            .map_err(|err| Status::internal(err.to_string()))?
+        {
+            IngestDecision::Accept | IngestDecision::AcceptPriorityBypass => {}
+            IngestDecision::RejectRateLimited => {
+                return Err(Status::resource_exhausted("ingest rate limit exceeded"));
+            }
+        }
         let payload = batch.encode_to_vec();
         let record = WireRecord {
             record_type: logjet::RecordType::Logs,
