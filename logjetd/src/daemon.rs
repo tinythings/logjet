@@ -42,12 +42,22 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
     let replay_spool = Arc::clone(&spool);
     let replay_addr = config.config.replay_addr.clone();
     let replay_max_clients = config.config.replay_max_clients;
+    let replay_client_timeout_ms = config.config.replay_client_timeout_ms;
     let poll_interval_ms = config.config.poll_interval_ms;
     let tls = config.config.tls.clone();
 
     let replay_thread = thread::Builder::new()
         .name("logjetd-replay".to_string())
-        .spawn(move || replay_loop(replay_addr, replay_spool, replay_max_clients, poll_interval_ms, tls))?;
+        .spawn(move || {
+            replay_loop(
+                replay_addr,
+                replay_spool,
+                replay_max_clients,
+                replay_client_timeout_ms,
+                poll_interval_ms,
+                tls,
+            )
+        })?;
 
     eprintln!("logjetd using config {}", config.config_path.display());
     ingest_loop(
@@ -431,6 +441,7 @@ fn replay_loop(
     bind_addr: String,
     spool: Arc<Mutex<Spool>>,
     max_clients: usize,
+    client_timeout_ms: u64,
     poll_interval_ms: u64,
     tls: crate::config::TlsConfig,
 ) -> io::Result<()> {
@@ -442,10 +453,15 @@ fn replay_loop(
     } else {
         None
     };
-    eprintln!("logjetd replay listening on {bind_addr} max-clients={max_clients}");
+    eprintln!(
+        "logjetd replay listening on {bind_addr} max-clients={max_clients} client-timeout-ms={client_timeout_ms}"
+    );
 
     for stream in listener.incoming() {
         let stream = stream?;
+        let timeout = Duration::from_millis(client_timeout_ms);
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(timeout))?;
         let spool = Arc::clone(&spool);
         let tls_server = tls_server.clone();
         let limiter = Arc::clone(&limiter);
