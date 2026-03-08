@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use config::Config;
 use daemon::{DaemonConfig, serve};
 use replay::{bridge_wire_to_otlp_http, replay_path_to_otlp_http, validate_replay_path};
-use spool::inspect_path;
+use spool::{inspect_path, print_named_segments, prune_named_segments};
 
 fn main() -> ExitCode {
     match run() {
@@ -34,6 +34,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut replay_name = None;
     let mut replay_dest = None;
     let mut bridge_source = None;
+    let mut segment_path = None;
+    let mut segment_name = None;
+    let mut prune_path = None;
+    let mut prune_name = None;
+    let mut prune_keep_files = None;
+    let mut prune_keep_bytes = None;
+    let mut prune_dry_run = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -65,6 +72,43 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 break;
             }
+            "segments" => {
+                command = Some("segments");
+                while let Some(flag) = args.next() {
+                    match flag.as_str() {
+                        "--path" => segment_path = Some(PathBuf::from(args.next().ok_or("missing value for --path")?)),
+                        "--name" => segment_name = Some(args.next().ok_or("missing value for --name")?),
+                        _ => return Err(format!("unknown segments argument: {flag}").into()),
+                    }
+                }
+                break;
+            }
+            "prune" => {
+                command = Some("prune");
+                while let Some(flag) = args.next() {
+                    match flag.as_str() {
+                        "--path" => prune_path = Some(PathBuf::from(args.next().ok_or("missing value for --path")?)),
+                        "--name" => prune_name = Some(args.next().ok_or("missing value for --name")?),
+                        "--keep-files" => {
+                            prune_keep_files = Some(
+                                args.next()
+                                    .ok_or("missing value for --keep-files")?
+                                    .parse::<usize>()?,
+                            );
+                        }
+                        "--keep-bytes" => {
+                            prune_keep_bytes = Some(
+                                args.next()
+                                    .ok_or("missing value for --keep-bytes")?
+                                    .parse::<u64>()?,
+                            );
+                        }
+                        "--dry-run" => prune_dry_run = true,
+                        _ => return Err(format!("unknown prune argument: {flag}").into()),
+                    }
+                }
+                break;
+            }
             "bridge" => {
                 command = Some("bridge");
                 while let Some(flag) = args.next() {
@@ -90,6 +134,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("inspect") => {
             let path = PathBuf::from(command_arg.ok_or("missing path")?);
             inspect_path(&path)?;
+        }
+        Some("segments") => {
+            let path = segment_path.ok_or("missing --path")?;
+            let name = segment_name.ok_or("missing --name")?;
+            print_named_segments(&path, &name)?;
         }
         Some("replay") => {
             let config = Config::load(&config_path)?;
@@ -132,6 +181,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
             bridge_wire_to_otlp_http(&source, &config.collector, &config.backpressure, &config.upstream, &config.tls)?;
         }
+        Some("prune") => {
+            let path = prune_path.ok_or("missing --path")?;
+            let name = prune_name.ok_or("missing --name")?;
+            let removed = prune_named_segments(
+                &path,
+                &name,
+                prune_keep_files,
+                prune_keep_bytes,
+                prune_dry_run,
+            )?;
+            for entry in &removed {
+                if prune_dry_run {
+                    println!("would_remove={}", entry.display());
+                } else {
+                    println!("removed={}", entry.display());
+                }
+            }
+            println!("removed_count={}", removed.len());
+        }
         Some(other) => return Err(format!("unknown command: {other}").into()),
     }
 
@@ -144,13 +212,17 @@ fn print_usage() {
     println!("Usage:");
     println!("  logjetd [serve] [-c|--config <path>]");
     println!("  logjetd inspect <path>");
+    println!("  logjetd segments --path <dir> --name <base.logjet>");
     println!("  logjetd replay [-c|--config <path>] --path <dir> --name <base.logjet> [--dest <url-or-host:port>]");
+    println!("  logjetd prune --path <dir> --name <base.logjet> [--keep-files <n> | --keep-bytes <bytes>] [--dry-run]");
     println!("  logjetd bridge [-c|--config <path>] [--source <host:port>]");
     println!();
     println!("Commands:");
     println!("  serve    Run ingest and replay listeners using YAML configuration");
     println!("  inspect  Print stored record metadata from a .logjet file or spool directory");
+    println!("  segments Print ordered file-segment metadata for one rotated .logjet spool");
     println!("  replay   Read ordered .logjet files and blast OTLP log batches to an OTLP/HTTP collector");
+    println!("  prune    Remove oldest rotated file segments by count or total bytes");
     println!("  bridge   Connect to a replay listener, drain backlog, stay attached, and forward OTLP logs to the configured collector");
     println!();
     println!("Config path defaults to /etc/logjet.conf.");
