@@ -19,7 +19,7 @@ pub struct BufferSpool {
     limit: BufferLimit,
     keep_messages: usize,
     records: VecDeque<WireRecord>,
-    total_bytes: usize,
+    tail_bytes: usize,
 }
 
 #[derive(Debug)]
@@ -71,13 +71,17 @@ impl BufferSpool {
             limit: config.limit,
             keep_messages: config.keep_messages,
             records: VecDeque::new(),
-            total_bytes: 0,
+            tail_bytes: 0,
         }
     }
 
     fn append(&mut self, record: WireRecord) {
-        self.total_bytes = self.total_bytes.saturating_add(record_size(&record));
+        let was_tail = self.records.len() >= self.keep_messages;
+        let record_bytes = record_size(&record);
         self.records.push_back(record);
+        if was_tail {
+            self.tail_bytes = self.tail_bytes.saturating_add(record_bytes);
+        }
         self.enforce_limits();
     }
 
@@ -103,15 +107,19 @@ impl BufferSpool {
             let Some(record) = self.records.remove(drop_index) else {
                 break;
             };
-            self.total_bytes = self.total_bytes.saturating_sub(record_size(&record));
+            self.tail_bytes = self.tail_bytes.saturating_sub(record_size(&record));
         }
     }
 
     fn over_limit(&self) -> bool {
         match self.limit {
-            BufferLimit::Bytes(max_bytes) => self.total_bytes > max_bytes,
-            BufferLimit::Messages(max_messages) => self.records.len() > max_messages,
+            BufferLimit::Bytes(max_bytes) => self.tail_bytes > max_bytes,
+            BufferLimit::Messages(max_messages) => self.tail_len() > max_messages,
         }
+    }
+
+    fn tail_len(&self) -> usize {
+        self.records.len().saturating_sub(self.keep_messages)
     }
 }
 
@@ -365,7 +373,7 @@ mod tests {
             keep_messages: 2,
         });
 
-        for seq in 1..=6 {
+        for seq in 1..=8 {
             spool.append(WireRecord {
                 record_type: logjet::RecordType::Logs,
                 seq,
@@ -375,6 +383,6 @@ mod tests {
         }
 
         let kept: Vec<u64> = spool.records.iter().map(|record| record.seq).collect();
-        assert_eq!(kept, vec![1, 2, 5, 6]);
+        assert_eq!(kept, vec![1, 2, 5, 6, 7, 8]);
     }
 }

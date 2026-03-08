@@ -17,6 +17,7 @@ pub struct Config {
 pub enum IngestProtocol {
     Wire,
     OtlpHttp,
+    OtlpGrpc,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +111,7 @@ impl Config {
         let ingest_protocol = match raw.ingest_protocol.as_deref().unwrap_or("wire") {
             "wire" => IngestProtocol::Wire,
             "otlp-http" => IngestProtocol::OtlpHttp,
+            "otlp-grpc" => IngestProtocol::OtlpGrpc,
             other => return Err(format!("invalid ingest protocol: {other}").into()),
         };
         let replay_addr = raw
