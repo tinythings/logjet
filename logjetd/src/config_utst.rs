@@ -25,6 +25,7 @@ fn empty_config_file_uses_defaults() {
     assert!(config.collector.server_name.is_none());
     assert!(config.upstream.replay_addr.is_none());
     assert_eq!(config.upstream.mode, UpstreamMode::Keep);
+    assert!(config.upstream.state_file.is_none());
     assert_eq!(config.upstream.retry_ms, 1_000);
     assert_eq!(config.upstream.connect_timeout_ms, 5_000);
     assert!(!config.tls.enable);
@@ -65,6 +66,7 @@ fn file_mode_and_collector_settings_parse() {
     assert_eq!(config.collector.timeout_ms, 3210);
     assert_eq!(config.upstream.replay_addr.as_deref(), Some("10.0.0.15:7002"));
     assert_eq!(config.upstream.mode, UpstreamMode::Keep);
+    assert!(config.upstream.state_file.is_none());
     assert_eq!(config.upstream.retry_ms, 222);
     assert_eq!(config.upstream.connect_timeout_ms, 333);
     assert!(config.ingest_tls.enable);
@@ -121,10 +123,11 @@ fn https_collector_fields_parse_without_file_mode() {
 fn upstream_mode_drain_parses() {
     let path = write_temp_config(
         "upstream-drain",
-        "upstream.mode: drain\nupstream.replay: 127.0.0.1:7002\n",
+        "upstream.mode: drain\nupstream.replay: 127.0.0.1:7002\nupstream.state-file: ./bridge.state\n",
     );
     let config = Config::load(&path).unwrap();
     assert_eq!(config.upstream.mode, UpstreamMode::Drain);
+    assert_eq!(config.upstream.state_file.as_deref(), Some(Path::new("./bridge.state")));
     fs::remove_file(path).unwrap();
 }
 
