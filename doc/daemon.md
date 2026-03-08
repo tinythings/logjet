@@ -60,6 +60,7 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 
 - binds to `replay.listen`
 - caps concurrent replay clients through `replay.max-clients`
+- bounds blocked replay socket I/O per client through `replay.client-timeout-ms`
 - accepts TCP clients
 - sends a replay hello carrying upstream stream identity before the replay request
 - expects a small replay request carrying `from_seq`
