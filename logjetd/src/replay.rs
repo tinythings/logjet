@@ -2,14 +2,17 @@ use std::fs::File;
 use std::io::{self, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use logjet::{LogjetReader, ReaderConfig, RecordType};
+use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
-use crate::config::{CollectorConfig, UpstreamConfig};
+use crate::config::{CollectorConfig, TlsConfig, UpstreamConfig};
 use crate::protocol::{ReplayRequest, read_record, write_replay_request};
 use crate::spool::list_named_segments;
+use crate::tls::{load_client_config, parse_server_name};
 
 pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorConfig) -> io::Result<u64> {
     let mut sent = 0u64;
@@ -42,15 +45,29 @@ pub fn bridge_wire_to_otlp_http(
     source: &str,
     collector: &CollectorConfig,
     upstream: &UpstreamConfig,
+    tls: &TlsConfig,
 ) -> io::Result<()> {
     let endpoint = CollectorEndpoint::parse(&collector.url)?;
     let collector_timeout = Duration::from_millis(collector.timeout_ms);
     let connect_timeout = Duration::from_millis(upstream.connect_timeout_ms);
     let retry_delay = Duration::from_millis(upstream.retry_ms);
+    let tls_client = if tls.enable {
+        Some(load_client_config(tls)?)
+    } else {
+        None
+    };
     let mut last_seq = 0u64;
 
     loop {
-        match bridge_once(source, &endpoint, collector_timeout, connect_timeout, &mut last_seq) {
+        match bridge_once(
+            source,
+            &endpoint,
+            collector_timeout,
+            connect_timeout,
+            &mut last_seq,
+            tls,
+            tls_client.clone(),
+        ) {
             Ok(()) => {
                 eprintln!(
                     "bridge source {source} closed after seq={last_seq}; reconnecting in {} ms",
@@ -74,18 +91,40 @@ fn bridge_once(
     collector_timeout: Duration,
     connect_timeout: Duration,
     last_seq: &mut u64,
+    tls: &TlsConfig,
+    tls_client: Option<Arc<ClientConfig>>,
 ) -> io::Result<()> {
-    let mut stream = connect_with_timeout(source, connect_timeout)?;
+    let stream = connect_with_timeout(source, connect_timeout)?;
     stream.set_read_timeout(None)?;
     stream.set_write_timeout(Some(connect_timeout))?;
-    write_replay_request(&mut stream, &ReplayRequest { from_seq: *last_seq })?;
-    stream.flush()?;
+
+    if let Some(client_config) = tls_client {
+        let server_name = parse_server_name(tls, source)?;
+        let conn = ClientConnection::new(client_config, server_name)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+        let mut transport = StreamOwned::new(conn, stream);
+        return bridge_transport(source, endpoint, collector_timeout, last_seq, &mut transport);
+    }
+
+    let mut transport = stream;
+    bridge_transport(source, endpoint, collector_timeout, last_seq, &mut transport)
+}
+
+fn bridge_transport<T: io::Read + io::Write>(
+    source: &str,
+    endpoint: &CollectorEndpoint,
+    collector_timeout: Duration,
+    last_seq: &mut u64,
+    transport: &mut T,
+) -> io::Result<()> {
+    write_replay_request(transport, &ReplayRequest { from_seq: *last_seq })?;
+    transport.flush()?;
     eprintln!(
         "bridge connected to {} and requested records after seq={}",
         source, *last_seq
     );
 
-    while let Some(record) = read_record(&mut stream)? {
+    while let Some(record) = read_record(transport)? {
         if record.record_type == RecordType::Logs {
             post_raw_otlp_http(endpoint, collector_timeout, &record.payload)?;
         }

@@ -1,4 +1,4 @@
-use std::io::{self, BufReader, BufWriter, Write};
+use std::io::{self, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -14,10 +14,12 @@ use opentelemetry_proto::tonic::collector::logs::v1::{
 use prost::Message;
 use tiny_http::{Method, Response, Server, StatusCode};
 use tonic::{Request, Response as GrpcResponse, Status};
+use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 use crate::config::{Config, IngestProtocol};
 use crate::protocol::{read_record, read_replay_request};
 use crate::spool::Spool;
+use crate::tls::load_server_config;
 use crate::{protocol::WireRecord};
 
 #[derive(Debug, Clone)]
@@ -33,10 +35,11 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
     let replay_spool = Arc::clone(&spool);
     let replay_addr = config.config.replay_addr.clone();
     let poll_interval_ms = config.config.poll_interval_ms;
+    let tls = config.config.tls.clone();
 
     let replay_thread = thread::Builder::new()
         .name("logjetd-replay".to_string())
-        .spawn(move || replay_loop(replay_addr, replay_spool, poll_interval_ms))?;
+        .spawn(move || replay_loop(replay_addr, replay_spool, poll_interval_ms, tls))?;
 
     eprintln!("logjetd using config {}", config.config_path.display());
     ingest_loop(
@@ -144,17 +147,29 @@ fn ingest_loop(
     Ok(())
 }
 
-fn replay_loop(bind_addr: String, spool: Arc<Mutex<Spool>>, poll_interval_ms: u64) -> io::Result<()> {
+fn replay_loop(
+    bind_addr: String,
+    spool: Arc<Mutex<Spool>>,
+    poll_interval_ms: u64,
+    tls: crate::config::TlsConfig,
+) -> io::Result<()> {
     let listener = TcpListener::bind(&bind_addr)?;
+    let tls_server = if tls.enable {
+        eprintln!("logjetd replay TLS enabled on {bind_addr}");
+        Some(load_server_config(&tls)?)
+    } else {
+        None
+    };
     eprintln!("logjetd replay listening on {bind_addr}");
 
     for stream in listener.incoming() {
         let stream = stream?;
         let spool = Arc::clone(&spool);
+        let tls_server = tls_server.clone();
         thread::Builder::new()
             .name("logjetd-replay-client".to_string())
             .spawn(move || {
-                if let Err(err) = handle_replay_client(stream, spool, poll_interval_ms) {
+                if let Err(err) = handle_replay_client(stream, spool, poll_interval_ms, tls_server) {
                     eprintln!("logjetd replay client error: {err}");
                 }
             })?;
@@ -184,10 +199,25 @@ fn handle_replay_client(
     stream: TcpStream,
     spool: Arc<Mutex<Spool>>,
     poll_interval_ms: u64,
+    tls_server: Option<Arc<ServerConfig>>,
 ) -> io::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let request = read_replay_request(&mut reader)?;
-    let mut writer = BufWriter::new(stream);
+    if let Some(server_config) = tls_server {
+        let conn = ServerConnection::new(server_config)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+        let mut transport = StreamOwned::new(conn, stream);
+        return handle_replay_transport(&mut transport, spool, poll_interval_ms);
+    }
+
+    let mut transport = stream;
+    handle_replay_transport(&mut transport, spool, poll_interval_ms)
+}
+
+fn handle_replay_transport<T: io::Read + io::Write>(
+    transport: &mut T,
+    spool: Arc<Mutex<Spool>>,
+    poll_interval_ms: u64,
+) -> io::Result<()> {
+    let request = read_replay_request(transport)?;
     let mut last_seq = request.from_seq;
     let sleep = Duration::from_millis(poll_interval_ms);
 
@@ -201,13 +231,11 @@ fn handle_replay_client(
             let spool = spool
                 .lock()
                 .map_err(|_| io::Error::other("spool mutex poisoned"))?;
-            spool.replay_since(&mut writer, &mut last_seq)?
+            spool.replay_since(transport, &mut last_seq)?
         };
 
-        if sent_any {
-            writer.flush()?;
-        } else {
-            writer.flush()?;
+        transport.flush()?;
+        if !sent_any {
             thread::sleep(sleep);
         }
     }
