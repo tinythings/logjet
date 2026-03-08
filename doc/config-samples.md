@@ -10,7 +10,6 @@ buffer.size: 100
 buffer.keep: 1000
 ingest.listen: 127.0.0.1:7001
 replay.listen: 0.0.0.0:7002
-replay.poll_ms: 250
 ```
 
 Behaviour:
@@ -27,7 +26,6 @@ buffer.messages: 5000
 buffer.keep: 1500
 ingest.listen: 127.0.0.1:7001
 replay.listen: 0.0.0.0:7002
-replay.poll_ms: 250
 ```
 
 Behaviour:
@@ -47,7 +45,6 @@ file.size: 10240
 file.name: vehicle.logjet
 ingest.listen: 127.0.0.1:7001
 replay.listen: 0.0.0.0:7002
-replay.poll_ms: 250
 ```
 
 Behaviour:
@@ -67,7 +64,6 @@ buffer.size: 32
 buffer.keep: 10
 ingest.listen: 127.0.0.1:9001
 replay.listen: 127.0.0.1:9002
-replay.poll_ms: 100
 ```
 
 ## 4. File-Based Capture on Device
@@ -81,5 +77,4 @@ file.size: 2048
 file.name: ts.logjet
 ingest.listen: 127.0.0.1:7001
 replay.listen: 127.0.0.1:7002
-replay.poll_ms: 250
 ```
