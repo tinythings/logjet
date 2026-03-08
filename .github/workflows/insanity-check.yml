@@ -1,0 +1,23 @@
+name: Insanity Check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build state
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run clippy through Makefile
+        run: make check
