@@ -252,6 +252,97 @@ fn file_spool_preserves_stream_id_and_advances_sequence_seed_after_reopen() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn summarise_named_segments_reports_sequence_ranges() {
+    let dir = unique_temp_dir("segment-summary");
+    let mut spool = Spool::open(StorageConfig::File(FileConfig {
+        dir: dir.clone(),
+        name: "bofh.logjet".to_string(),
+        segment_size_bytes: 1,
+    }))
+    .unwrap();
+
+    for seq in 1..=3 {
+        spool.append(WireRecord {
+            record_type: RecordType::Logs,
+            seq,
+            ts_unix_ns: seq,
+            payload: vec![seq as u8; 8],
+        })
+        .unwrap();
+    }
+
+    let summaries = super::summarise_named_segments(&dir, "bofh.logjet").unwrap();
+    assert!(summaries.len() >= 2);
+    assert_eq!(summaries[0].first_seq, Some(1));
+    assert_eq!(summaries[0].last_seq, Some(1));
+    assert!(summaries.iter().any(|summary| summary.record_count == 0));
+    assert!(summaries.iter().any(|summary| summary.last_seq == Some(3)));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn prune_named_segments_by_file_count_keeps_newest_segment() {
+    let dir = unique_temp_dir("segment-prune-count");
+    let mut spool = Spool::open(StorageConfig::File(FileConfig {
+        dir: dir.clone(),
+        name: "bofh.logjet".to_string(),
+        segment_size_bytes: 1,
+    }))
+    .unwrap();
+
+    for seq in 1..=4 {
+        spool.append(WireRecord {
+            record_type: RecordType::Logs,
+            seq,
+            ts_unix_ns: seq,
+            payload: vec![seq as u8; 8],
+        })
+        .unwrap();
+    }
+
+    let removed = super::prune_named_segments(&dir, "bofh.logjet", Some(2), None, false).unwrap();
+    assert_eq!(removed.len(), 3);
+
+    let names: Vec<String> = super::list_named_segments(&dir, "bofh.logjet")
+        .unwrap()
+        .into_iter()
+        .map(|segment| segment.path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 2);
+    assert_eq!(names, vec!["bofh-3.logjet", "bofh-4.logjet"]);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn prune_named_segments_dry_run_does_not_remove_files() {
+    let dir = unique_temp_dir("segment-prune-dry-run");
+    let mut spool = Spool::open(StorageConfig::File(FileConfig {
+        dir: dir.clone(),
+        name: "bofh.logjet".to_string(),
+        segment_size_bytes: 1,
+    }))
+    .unwrap();
+
+    for seq in 1..=3 {
+        spool.append(WireRecord {
+            record_type: RecordType::Logs,
+            seq,
+            ts_unix_ns: seq,
+            payload: vec![seq as u8; 8],
+        })
+        .unwrap();
+    }
+
+    let removed = super::prune_named_segments(&dir, "bofh.logjet", Some(1), None, true).unwrap();
+    assert_eq!(removed.len(), 3);
+    assert_eq!(super::list_named_segments(&dir, "bofh.logjet").unwrap().len(), 4);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn unique_temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
