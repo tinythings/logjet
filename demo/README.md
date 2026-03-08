@@ -23,6 +23,10 @@ It also contains scenario demos under subdirectories:
   - OTLP/gRPC emitter into file-backed `logjetd`
 - [`memory-buffer`](./memory-buffer)
   - kept-front-jar plus rotating-tail memory retention
+- [`multi-emitter`](./multi-emitter)
+  - five emitters into one `logjetd`, then late replay into one collector
+- [`multi-emitter-continuous`](./multi-emitter-continuous)
+  - five emitters running continuously into one `logjetd` and one live collector
 - [`file-replay`](./file-replay)
   - replay stored `.logjet` files into a collector
 - [`remote-drain`](./remote-drain)
