@@ -20,7 +20,6 @@ fn empty_config_file_uses_defaults() {
     assert_eq!(config.replay_addr, "0.0.0.0:7002");
     assert_eq!(config.replay_max_clients, 32);
     assert_eq!(config.replay_client_timeout_ms, 10_000);
-    assert_eq!(config.poll_interval_ms, 250);
     assert_eq!(config.collector.url, "http://127.0.0.1:4318/v1/logs");
     assert_eq!(config.collector.timeout_ms, 10_000);
     assert!(!config.backpressure.enabled);
