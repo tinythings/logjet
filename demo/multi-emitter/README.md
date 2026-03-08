@@ -7,7 +7,7 @@ The demo uses:
 
 - five separate OTLP/HTTP emitters
 - one `logjetd` in memory-buffer mode
-- one colourful OTLP collector mockup
+- one OTLP collector mockup
 - one wire forwarder from the `logjetd` replay listener into the collector
 
 Each emitter sends one identifying message:
@@ -48,7 +48,7 @@ The script:
 
 1. starts `logjetd`
 2. sends five one-shot OTLP messages from five separate emitters
-3. starts the colourful collector
+3. starts the collector
 4. connects the wire forwarder to the replay listener
 5. forwards the retained records into the collector
 

@@ -44,7 +44,7 @@ From this directory:
 
 This starts:
 
-1. the colourful collector
+1. the collector
 2. a first bridge pass with `upstream.mode: drain`
 3. a second bridge pass, while the appliance keeps running
 

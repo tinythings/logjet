@@ -44,6 +44,7 @@ ingest.require-client-cert: false
 ingest.max-batch-bytes: 1048576
 ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
+replay.max-clients: 32
 replay.poll_ms: 250
 ```
 
@@ -209,6 +210,20 @@ Important:
 - must be greater than zero
 - applies directly to thread-per-client ingest paths and current gRPC concurrency handling
 - plain non-TLS `otlp-http` ingest is already serial in the current implementation
+
+### `replay.max-clients`
+
+Maximum number of replay clients handled at the same time.
+
+Use this to stop too many downstream replay or bridge connections from
+consuming threads and file-polling work.
+
+Important:
+
+- default is `32`
+- must be greater than zero
+- applies to the replay listener used by downstream `keep` and `drain` clients
+- extra clients are closed when the limit is already reached
 
 ### `backpressure.mode`
 
@@ -473,6 +488,7 @@ If omitted:
 - `ingest.max-batch-bytes: 1048576`
 - `ingest.max-clients: 32`
 - `replay.listen: 0.0.0.0:7002`
+- `replay.max-clients: 32`
 - `replay.poll_ms: 250`
 
 ## Notes
@@ -496,6 +512,7 @@ If omitted:
 - `ingest.tls-*` controls TLS on OTLP/HTTP and OTLP/gRPC ingest
 - `ingest.max-batch-bytes` rejects oversized ingest payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling
+- `replay.max-clients` caps concurrent replay clients
 - `tls.*` controls optional TLS on the replay listener and bridge source connection
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `file.*` settings are ignored unless `output: file`

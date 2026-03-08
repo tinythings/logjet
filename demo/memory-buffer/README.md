@@ -41,7 +41,7 @@ The script:
    - ...
    - `this message #10 must be kept`
 3. emits 100 BOFH flood messages with no delay
-4. starts the colourful OTLP collector mockup
+4. starts the OTLP collector mockup
 5. connects a wire forwarder to `logjetd` replay
 6. forwards exactly 13 messages to the collector
 

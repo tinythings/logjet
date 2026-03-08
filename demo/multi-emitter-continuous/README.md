@@ -7,7 +7,7 @@ It uses:
 
 - five OTLP/HTTP emitters running continuously
 - one `logjetd`
-- one colourful OTLP collector mockup
+- one OTLP collector mockup
 - one wire forwarder from the `logjetd` replay listener into the collector
 
 Each emitter identifies itself through `service.name`:
@@ -49,7 +49,7 @@ Terminal 2, from this directory:
 
 This starts:
 
-1. the colourful OTLP collector
+1. the OTLP collector
 2. the wire forwarder to the collector
 
 There is also a single-terminal convenience script:
