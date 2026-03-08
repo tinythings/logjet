@@ -25,6 +25,7 @@ fn empty_config_file_uses_defaults() {
     assert_eq!(config.collector.timeout_ms, 10_000);
     assert!(!config.backpressure.enabled);
     assert_eq!(config.backpressure.mode, BackpressureMode::Disconnect);
+    assert_eq!(config.backpressure.max_buffered_records, 16);
     assert!(config.collector.ca_file.is_none());
     assert!(config.collector.cert_file.is_none());
     assert!(config.collector.key_file.is_none());
@@ -64,7 +65,7 @@ fn buffer_size_and_messages_conflict() {
 fn file_mode_and_collector_settings_parse() {
     let path = write_temp_config(
         "file-mode",
-        "output: file\nfile.path: ./logs\nfile.size: 16\nfile.name: bofh.logjet\ningest.protocol: otlp-grpc\ningest.tls-enable: true\ningest.ca-file: ./ingest-ca.pem\ningest.cert-file: ./ingest.pem\ningest.key-file: ./ingest.key\ningest.require-client-cert: true\ningest.max-batch-bytes: 262144\ningest.max-clients: 7\ncollector.url: https://127.0.0.1:4320/custom\ncollector.timeout-ms: 3210\ncollector.ca-file: ./collector-ca.pem\ncollector.cert-file: ./collector.pem\ncollector.key-file: ./collector.key\ncollector.server-name: collector.internal\nbackpressure.enabled: true\nbackpressure.mode: block\nupstream.replay: 10.0.0.15:7002\nupstream.retry-ms: 222\nupstream.connect-timeout-ms: 333\ntls.enable: true\ntls.ca-file: ./ca.pem\ntls.cert-file: ./node.pem\ntls.key-file: ./node.key\ntls.require-client-cert: true\ntls.server-name: appliance.internal\nreplay.max-clients: 9\nreplay.client-timeout-ms: 444\n",
+        "output: file\nfile.path: ./logs\nfile.size: 16\nfile.name: bofh.logjet\ningest.protocol: otlp-grpc\ningest.tls-enable: true\ningest.ca-file: ./ingest-ca.pem\ningest.cert-file: ./ingest.pem\ningest.key-file: ./ingest.key\ningest.require-client-cert: true\ningest.max-batch-bytes: 262144\ningest.max-clients: 7\ncollector.url: https://127.0.0.1:4320/custom\ncollector.timeout-ms: 3210\ncollector.ca-file: ./collector-ca.pem\ncollector.cert-file: ./collector.pem\ncollector.key-file: ./collector.key\ncollector.server-name: collector.internal\nbackpressure.enabled: true\nbackpressure.mode: block\nbackpressure.max-buffered-records: 23\nupstream.replay: 10.0.0.15:7002\nupstream.retry-ms: 222\nupstream.connect-timeout-ms: 333\ntls.enable: true\ntls.ca-file: ./ca.pem\ntls.cert-file: ./node.pem\ntls.key-file: ./node.key\ntls.require-client-cert: true\ntls.server-name: appliance.internal\nreplay.max-clients: 9\nreplay.client-timeout-ms: 444\n",
     );
     let config = Config::load(&path).unwrap();
 
@@ -93,6 +94,7 @@ fn file_mode_and_collector_settings_parse() {
     assert_eq!(config.collector.url, "https://127.0.0.1:4320/custom");
     assert!(config.backpressure.enabled);
     assert_eq!(config.backpressure.mode, BackpressureMode::Block);
+    assert_eq!(config.backpressure.max_buffered_records, 23);
     assert_eq!(config.collector.ca_file.as_deref(), Some(Path::new("./collector-ca.pem")));
     assert_eq!(config.collector.cert_file.as_deref(), Some(Path::new("./collector.pem")));
     assert_eq!(config.collector.key_file.as_deref(), Some(Path::new("./collector.key")));
@@ -169,6 +171,19 @@ fn backpressure_mode_block_parses() {
 }
 
 #[test]
+fn backpressure_mode_drop_newest_parses() {
+    let path = write_temp_config(
+        "backpressure-drop-newest",
+        "backpressure.enabled: true\nbackpressure.mode: drop-newest\nbackpressure.max-buffered-records: 3\n",
+    );
+    let config = Config::load(&path).unwrap();
+    assert!(config.backpressure.enabled);
+    assert_eq!(config.backpressure.mode, BackpressureMode::DropNewest);
+    assert_eq!(config.backpressure.max_buffered_records, 3);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn invalid_ingest_limit_values_are_rejected() {
     let batch_path = write_temp_config("bad-ingest-batch", "ingest.max-batch-bytes: 0\n");
     let batch_err = Config::load(&batch_path).unwrap_err().to_string();
@@ -189,6 +204,14 @@ fn invalid_ingest_limit_values_are_rejected() {
     let replay_timeout_err = Config::load(&replay_timeout_path).unwrap_err().to_string();
     assert!(replay_timeout_err.contains("replay.client-timeout-ms"));
     fs::remove_file(replay_timeout_path).unwrap();
+
+    let backpressure_buffer_path = write_temp_config(
+        "bad-backpressure-buffer",
+        "backpressure.max-buffered-records: 0\n",
+    );
+    let backpressure_buffer_err = Config::load(&backpressure_buffer_path).unwrap_err().to_string();
+    assert!(backpressure_buffer_err.contains("backpressure.max-buffered-records"));
+    fs::remove_file(backpressure_buffer_path).unwrap();
 }
 
 fn write_temp_config(label: &str, body: &str) -> PathBuf {
