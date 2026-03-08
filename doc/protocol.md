@@ -20,12 +20,29 @@ Each record on the wire is:
 
 Payload bytes are raw OTLP protobuf bytes.
 
+## Replay Request Frame
+
+Replay clients send a request first before the server starts streaming records.
+
+Replay request layout:
+
+1. magic: 8 bytes
+2. version: `u8`
+3. reserved: 7 bytes
+4. from sequence: `u64`, little-endian
+
+Meaning:
+
+- the client already has everything up to `from_seq`
+- the server should send only records with sequence greater than `from_seq`
+
 ## Semantics
 
 - ingest clients send framed records to `logjetd`
-- replay clients receive the same framed records from `logjetd`
+- replay clients first send `from_seq`, then receive framed records from `logjetd`
 - `logjetd` does not decode the OTLP payload
 - sequence ordering is preserved if producers send ordered sequence numbers
+- reconnecting bridge clients can resume from the last forwarded sequence without restarting from zero
 
 ## Why It Exists
 
