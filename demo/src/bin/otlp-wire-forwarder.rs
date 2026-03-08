@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(record) = read_wire_record(&mut stream)? {
         if record.record_type == RecordType::Logs {
-            post_raw_otlp_http(&dest, &record.payload)?;
+            post_raw_otlp_http(&dest, &record.payload, None, None)?;
             forwarded += 1;
             eprintln!("forwarded record seq={} to http://{dest}/v1/logs", record.seq);
         }
