@@ -130,6 +130,9 @@ Important:
 
 - applies only when `output: file`
 - old rotated files are kept
+- use `logjetd segments --path ... --name ...` to inspect one rotated spool
+- use `logjetd prune --path ... --name ... --keep-files <n>` to trim oldest archived segments by file count
+- use `logjetd prune --path ... --name ... --keep-bytes <bytes> --dry-run` to preview byte-budget pruning without deleting files
 
 ### `file.name`
 
