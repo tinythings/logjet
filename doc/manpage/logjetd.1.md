@@ -12,7 +12,11 @@ logjetd - OTLP ingest, `.logjet` storage, replay, and file blasting daemon
 
 `logjetd` `inspect` *path*
 
+`logjetd` `segments` `--path` *dir* `--name` *base.logjet*
+
 `logjetd` `replay` [`-c`|`--config` *path*] `--path` *dir* `--name` *base.logjet* [`--dest` *url-or-host:port*]
+
+`logjetd` `prune` `--path` *dir* `--name` *base.logjet* [`--keep-files` *n* | `--keep-bytes` *bytes*] [`--dry-run`]
 
 `logjetd` `bridge` [`-c`|`--config` *path*] [`--source` *host:port*]
 
@@ -31,7 +35,9 @@ It can:
 - optionally protect replay and bridge transport with TLS
 - optionally export to an HTTPS OTLP collector
 - inspect `.logjet` files and directories
+- list file-segment metadata for one rotated spool
 - replay stored `.logjet` files into an OTLP/HTTP collector as a one-shot operation
+- prune oldest rotated file segments by file count or byte budget
 
 The daemon is designed for cheap hardware, limited RAM, unreliable storage, and
 intermittent downstream connectivity.
@@ -76,6 +82,16 @@ Example:
 logjetd inspect /var/lib/logjet
 ```
 
+## segments
+
+List ordered rotated segments for one spool.
+
+Example:
+
+```text
+logjetd segments --path /var/lib/logjet --name bofh.logjet
+```
+
 ## replay
 
 Read ordered `.logjet` files from a directory and blast the stored OTLP log
@@ -97,6 +113,17 @@ Replay order is:
 Replay is immediate and does not preserve original timing.
 If `--dest` is omitted, replay uses `collector.url` from configuration.
 
+## prune
+
+Remove oldest rotated file segments deliberately.
+
+Examples:
+
+```text
+logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-files 2
+logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-bytes 1048576 --dry-run
+```
+
 # OPTIONS
 
 ## `-c`, `--config` *path*
@@ -111,7 +138,7 @@ Print usage information.
 
 Directory containing `.logjet` files for replay.
 
-Used only with the `replay` command.
+Used with the `segments`, `replay`, and `prune` commands.
 
 ## `--name` *base.logjet*
 
@@ -124,6 +151,18 @@ Example:
 - `bofh-2.logjet`
 
 Used only with the `replay` command.
+
+## `--keep-files` *n*
+
+Keep only the newest *n* segment files during `prune`.
+
+## `--keep-bytes` *bytes*
+
+Keep only the newest segment set that fits within *bytes* during `prune`.
+
+## `--dry-run`
+
+Show which files `prune` would remove without deleting them.
 
 ## `--dest` *url-or-host:port*
 
@@ -202,6 +241,7 @@ Rules:
 - set either `buffer.size` or `buffer.messages`, never both
 - `buffer.keep` applies only to memory mode
 - file mode always keeps all rotated files
+- `segments` and `prune` provide explicit operator tooling for file-mode archive housekeeping
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `ingest.max-batch-bytes` rejects oversized OTLP or wire payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling

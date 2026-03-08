@@ -13,9 +13,17 @@ blasting daemon
 .PP
 \f[C]logjetd\f[R] \f[C]inspect\f[R] \f[I]path\f[R]
 .PP
+\f[C]logjetd\f[R] \f[C]segments\f[R] \f[C]--path\f[R] \f[I]dir\f[R]
+\f[C]--name\f[R] \f[I]base.logjet\f[R]
+.PP
 \f[C]logjetd\f[R] \f[C]replay\f[R] [\f[C]-c\f[R]|\f[C]--config\f[R]
 \f[I]path\f[R]] \f[C]--path\f[R] \f[I]dir\f[R] \f[C]--name\f[R]
 \f[I]base.logjet\f[R] \f[C]--dest\f[R] \f[I]url-or-host:port\f[R]
+.PP
+\f[C]logjetd\f[R] \f[C]prune\f[R] \f[C]--path\f[R] \f[I]dir\f[R]
+\f[C]--name\f[R] \f[I]base.logjet\f[R] [\f[C]--keep-files\f[R]
+\f[I]n\f[R] | \f[C]--keep-bytes\f[R] \f[I]bytes\f[R]]
+\f[C]--dry-run\f[R]
 .PP
 \f[C]logjetd\f[R] \f[C]bridge\f[R] [\f[C]-c\f[R]|\f[C]--config\f[R]
 \f[I]path\f[R]] \f[C]--source\f[R] \f[I]host:port\f[R]
@@ -47,8 +55,12 @@ optionally export to an HTTPS OTLP collector
 .IP \[bu] 2
 inspect \f[C].logjet\f[R] files and directories
 .IP \[bu] 2
+list file-segment metadata for one rotated spool
+.IP \[bu] 2
 replay stored \f[C].logjet\f[R] files into an OTLP/HTTP collector as a
 one-shot operation
+.IP \[bu] 2
+prune oldest rotated file segments by file count or byte budget
 .PP
 The daemon is designed for cheap hardware, limited RAM, unreliable
 storage, and intermittent downstream connectivity.
@@ -99,6 +111,17 @@ Example:
 logjetd inspect /var/lib/logjet
 \f[R]
 .fi
+.SS segments
+.PP
+List ordered rotated segments for one spool.
+.PP
+Example:
+.IP
+.nf
+\f[C]
+logjetd segments --path /var/lib/logjet --name bofh.logjet
+\f[R]
+.fi
 .SS replay
 .PP
 Read ordered \f[C].logjet\f[R] files from a directory and blast the
@@ -125,6 +148,18 @@ and so on
 Replay is immediate and does not preserve original timing.
 If \f[C]--dest\f[R] is omitted, replay uses \f[C]collector.url\f[R] from
 configuration.
+.SS prune
+.PP
+Remove oldest rotated file segments deliberately.
+.PP
+Examples:
+.IP
+.nf
+\f[C]
+logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-files 2
+logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-bytes 1048576 --dry-run
+\f[R]
+.fi
 .SH OPTIONS
 .SS \f[C]-c\f[R], \f[C]--config\f[R] \f[I]path\f[R]
 .PP
@@ -137,7 +172,8 @@ Print usage information.
 .PP
 Directory containing \f[C].logjet\f[R] files for replay.
 .PP
-Used only with the \f[C]replay\f[R] command.
+Used with the \f[C]segments\f[R], \f[C]replay\f[R], and \f[C]prune\f[R]
+commands.
 .SS \f[C]--name\f[R] \f[I]base.logjet\f[R]
 .PP
 Base file name used to locate replay segments.
@@ -151,6 +187,16 @@ Example:
 \f[C]bofh-2.logjet\f[R]
 .PP
 Used only with the \f[C]replay\f[R] command.
+.SS \f[C]--keep-files\f[R] \f[I]n\f[R]
+.PP
+Keep only the newest \f[I]n\f[R] segment files during \f[C]prune\f[R].
+.SS \f[C]--keep-bytes\f[R] \f[I]bytes\f[R]
+.PP
+Keep only the newest segment set that fits within \f[I]bytes\f[R] during
+\f[C]prune\f[R].
+.SS \f[C]--dry-run\f[R]
+.PP
+Show which files \f[C]prune\f[R] would remove without deleting them.
 .SS \f[C]--dest\f[R] \f[I]url-or-host:port\f[R]
 .PP
 Destination OTLP/HTTP collector for replay.
@@ -239,6 +285,9 @@ both
 \f[C]buffer.keep\f[R] applies only to memory mode
 .IP \[bu] 2
 file mode always keeps all rotated files
+.IP \[bu] 2
+\f[C]segments\f[R] and \f[C]prune\f[R] provide explicit operator tooling
+for file-mode archive housekeeping
 .IP \[bu] 2
 \f[C]ingest.protocol\f[R] supports \f[C]wire\f[R], \f[C]otlp-http\f[R],
 and \f[C]otlp-grpc\f[R]
