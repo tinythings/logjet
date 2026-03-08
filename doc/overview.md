@@ -28,6 +28,8 @@ The daemon provides:
 - continuous bridge mode to another collector through a remote replay listener
 - configurable keep-or-drain bridge semantics
 - optional persisted bridge resume state
+- basic backpressure policy on bridge export
+- basic ingest guardrails for payload size and concurrent clients
 - optional TLS on the replay/bridge transport
 - HTTPS collector export
 - one-shot file replay to OTLP/HTTP collectors
