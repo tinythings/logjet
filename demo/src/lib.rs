@@ -223,7 +223,7 @@ impl DemoEndpoint {
             let (authority, path) = split_authority_and_path(rest);
             return Self {
                 authority: authority.to_string(),
-                path: normalize_path(path),
+                path: normalise_path(path),
                 tls: true,
             };
         }
@@ -232,7 +232,7 @@ impl DemoEndpoint {
             let (authority, path) = split_authority_and_path(rest);
             return Self {
                 authority: authority.to_string(),
-                path: normalize_path(path),
+                path: normalise_path(path),
                 tls: false,
             };
         }
@@ -256,7 +256,7 @@ fn split_authority_and_path(input: &str) -> (&str, &str) {
     }
 }
 
-fn normalize_path(path: &str) -> String {
+fn normalise_path(path: &str) -> String {
     if path.is_empty() {
         "/v1/logs".to_string()
     } else if path.starts_with('/') {
@@ -270,11 +270,11 @@ pub fn format_batch_plain(batch: &ExportLogsServiceRequest) -> String {
     format_batch(batch, false)
 }
 
-pub fn format_batch_colored(batch: &ExportLogsServiceRequest) -> String {
+pub fn format_batch_coloured(batch: &ExportLogsServiceRequest) -> String {
     format_batch(batch, true)
 }
 
-fn format_batch(batch: &ExportLogsServiceRequest, colored: bool) -> String {
+fn format_batch(batch: &ExportLogsServiceRequest, coloured: bool) -> String {
     let mut out = String::new();
 
     for resource_logs in &batch.resource_logs {
@@ -299,8 +299,8 @@ fn format_batch(batch: &ExportLogsServiceRequest, colored: bool) -> String {
                 .unwrap_or("unknown-scope");
 
             for log in &scope_logs.log_records {
-                if colored {
-                    write_colored_record(&mut out, service_name, scope_name, log);
+                if coloured {
+                    write_coloured_record(&mut out, service_name, scope_name, log);
                 } else {
                     write_plain_record(&mut out, service_name, scope_name, log);
                 }
@@ -323,7 +323,7 @@ fn write_plain_record(out: &mut String, service_name: &str, scope_name: &str, lo
     let _ = writeln!(out);
 }
 
-fn write_colored_record(out: &mut String, service_name: &str, scope_name: &str, log: &LogRecord) {
+fn write_coloured_record(out: &mut String, service_name: &str, scope_name: &str, log: &LogRecord) {
     let sev = severity_text(log);
     let body = log_body(log);
     let _ = writeln!(

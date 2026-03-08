@@ -14,7 +14,7 @@ Files
 - recover_file.rs
   Opens `telemetry.logjet`, replays whatever valid blocks remain, and prints
   recovery statistics. This is useful after manually corrupting bytes in the
-  file to observe forward resynchronization.
+  file to observe forward resynchronisation.
 
 How to run
 
@@ -24,7 +24,7 @@ How to run
 2. Read it back:
    cargo run --example read_file
 
-3. Test recovery behavior:
+3. Test recovery behaviour:
    First corrupt some bytes in `telemetry.logjet`, then run:
    cargo run --example recover_file
 

@@ -57,7 +57,7 @@ Typical flow:
 `logjetd` can also replay stored `.logjet` files later into an OTLP/HTTP
 collector without preserving original timing.
 
-This is optimized for:
+This is optimised for:
 
 - weak CPUs
 - limited RAM

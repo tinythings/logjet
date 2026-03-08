@@ -277,7 +277,7 @@ use either `otlp-http` or `otlp-grpc`.
 
 Enable TLS for OTLP ingest listeners.
 
-Behavior:
+Behaviour:
 
 - with `ingest.protocol: otlp-http`, `logjetd` accepts HTTPS on `/v1/logs`
 - with `ingest.protocol: otlp-grpc`, `logjetd` accepts gRPC over TLS
