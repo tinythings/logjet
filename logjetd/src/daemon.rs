@@ -19,7 +19,7 @@ use tonic::{Request, Response as GrpcResponse, Status};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 use crate::config::{Config, IngestProtocol, IngestTlsConfig};
-use crate::protocol::{read_record, read_replay_request};
+use crate::protocol::{read_record, read_replay_ack, read_replay_request, write_record};
 use crate::spool::Spool;
 use crate::tls::{load_ingest_server_config, load_server_config};
 use crate::{protocol::WireRecord};
@@ -432,9 +432,14 @@ fn handle_replay_transport<T: io::Read + io::Write>(
     let sleep = Duration::from_millis(poll_interval_ms);
 
     eprintln!(
-        "logjetd replay client requested records after seq={}",
-        request.from_seq
+        "logjetd replay client requested records after seq={} mode={}",
+        request.from_seq,
+        if request.consume { "drain" } else { "keep" }
     );
+
+    if request.consume {
+        return handle_replay_transport_drain(transport, spool, &mut last_seq, sleep);
+    }
 
     loop {
         let sent_any = {
@@ -448,6 +453,46 @@ fn handle_replay_transport<T: io::Read + io::Write>(
         if !sent_any {
             thread::sleep(sleep);
         }
+    }
+}
+
+fn handle_replay_transport_drain<T: io::Read + io::Write>(
+    transport: &mut T,
+    spool: Arc<Mutex<Spool>>,
+    last_seq: &mut u64,
+    sleep: Duration,
+) -> io::Result<()> {
+    loop {
+        let next_record = {
+            let spool = spool
+                .lock()
+                .map_err(|_| io::Error::other("spool mutex poisoned"))?;
+            spool.next_after(*last_seq)?
+        };
+
+        let Some(record) = next_record else {
+            thread::sleep(sleep);
+            continue;
+        };
+
+        write_record(transport, &record)?;
+        transport.flush()?;
+
+        let ack = read_replay_ack(transport)?;
+        if ack.ack_seq != record.seq {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("replay ack out of order: expected {} got {}", record.seq, ack.ack_seq),
+            ));
+        }
+
+        {
+            let mut spool = spool
+                .lock()
+                .map_err(|_| io::Error::other("spool mutex poisoned"))?;
+            spool.consume_through(ack.ack_seq)?;
+        }
+        *last_seq = ack.ack_seq;
     }
 }
 
