@@ -9,6 +9,7 @@ pub struct Config {
     pub ingest_protocol: IngestProtocol,
     pub replay_addr: String,
     pub poll_interval_ms: u64,
+    pub collector: CollectorConfig,
     pub storage: StorageConfig,
 }
 
@@ -43,6 +44,12 @@ pub struct FileConfig {
     pub segment_size_bytes: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct CollectorConfig {
+    pub url: String,
+    pub timeout_ms: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     output: Option<String>,
@@ -66,6 +73,10 @@ struct RawConfig {
     replay_addr: Option<String>,
     #[serde(rename = "replay.poll_ms")]
     poll_interval_ms: Option<u64>,
+    #[serde(rename = "collector.url")]
+    collector_url: Option<String>,
+    #[serde(rename = "collector.timeout-ms")]
+    collector_timeout_ms: Option<u64>,
 }
 
 impl Config {
@@ -85,6 +96,8 @@ impl Config {
                 ingest_protocol: None,
                 replay_addr: None,
                 poll_interval_ms: None,
+                collector_url: None,
+                collector_timeout_ms: None,
             }
         } else {
             return Err(format!("config file not found: {}", path.display()).into());
@@ -103,6 +116,12 @@ impl Config {
             .replay_addr
             .unwrap_or_else(|| "0.0.0.0:7002".to_string());
         let poll_interval_ms = raw.poll_interval_ms.unwrap_or(250);
+        let collector = CollectorConfig {
+            url: raw
+                .collector_url
+                .unwrap_or_else(|| "http://127.0.0.1:4318/v1/logs".to_string()),
+            timeout_ms: raw.collector_timeout_ms.unwrap_or(10_000),
+        };
         let keep_messages = raw.buffer_keep.unwrap_or(0);
 
         let storage = match output.as_str() {
@@ -128,6 +147,7 @@ impl Config {
             ingest_protocol,
             replay_addr,
             poll_interval_ms,
+            collector,
             storage,
         })
     }
