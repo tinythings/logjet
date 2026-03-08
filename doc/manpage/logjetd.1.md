@@ -27,6 +27,7 @@ It can:
 - store raw OTLP protobuf payloads either in memory or in append-only `.logjet` files
 - expose a replay listener for downstream consumers over the current internal wire protocol
 - connect to another `logjetd` replay listener and forward backlog plus live records into an OTLP/HTTP collector
+- optionally protect replay and bridge transport with TLS
 - inspect `.logjet` files and directories
 - replay stored `.logjet` files into an OTLP/HTTP collector as a one-shot operation
 
@@ -160,6 +161,12 @@ collector.timeout-ms: 10000
 upstream.replay: 10.0.0.15:7002
 upstream.retry-ms: 1000
 upstream.connect-timeout-ms: 5000
+tls.enable: false
+tls.ca-file: /etc/logjet/ca.pem
+tls.cert-file: /etc/logjet/node.pem
+tls.key-file: /etc/logjet/node.key
+tls.require-client-cert: false
+tls.server-name: appliance.internal
 ingest.protocol: otlp-http
 ingest.listen: 127.0.0.1:4318
 replay.listen: 0.0.0.0:7002
@@ -179,6 +186,7 @@ Rules:
 - `upstream.replay` configures the default bridge source
 - `upstream.retry-ms` configures bridge reconnect delay
 - `upstream.connect-timeout-ms` configures bridge source connect timeout
+- `tls.*` configures optional TLS for replay listener and bridge transport
 
 # STORAGE MODES
 
@@ -211,6 +219,7 @@ Append-only file behavior:
 - in-memory ring buffering with `buffer.keep`
 - replay listener for downstream consumers using the internal framed protocol
 - continuous bridge mode from replay listener to OTLP/HTTP collectors
+- optional TLS on replay/bridge transport
 - one-shot file replay to OTLP/HTTP collectors with `logjetd replay`
 - configurable replay destination via `collector.url`
 - inspection of `.logjet` files and directories
@@ -221,6 +230,7 @@ Append-only file behavior:
 - persisted resume checkpoints and acknowledgements are not implemented
 - slow-consumer handling is basic
 - file mode does not delete old rotated files
+- OTLP ingest and collector export are not TLS-enabled yet
 
 # EXAMPLES
 
