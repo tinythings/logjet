@@ -16,7 +16,7 @@ done
 
 cd "$SCRIPT_DIR"
 
-echo "starting colourful collector on 127.0.0.1:4320"
+echo "starting collector on 127.0.0.1:4320"
 "$COLLECTOR" 127.0.0.1:4320 &
 COLLECTOR_PID=$!
 

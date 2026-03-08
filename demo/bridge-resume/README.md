@@ -71,7 +71,7 @@ From this directory:
 
 This starts:
 
-1. the colourful collector
+1. the collector
 2. consumer-side `logjetd bridge`
 
 The consumer config contains:

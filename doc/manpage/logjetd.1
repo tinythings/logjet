@@ -218,6 +218,7 @@ ingest.require-client-cert: false
 ingest.max-batch-bytes: 1048576
 ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
+replay.max-clients: 32
 replay.poll_ms: 250
 \f[R]
 .fi
@@ -242,6 +243,8 @@ and \f[C]otlp-grpc\f[R]
 before they are stored
 .IP \[bu] 2
 \f[C]ingest.max-clients\f[R] caps concurrent ingest handling
+.IP \[bu] 2
+\f[C]replay.max-clients\f[R] caps concurrent replay clients
 .IP \[bu] 2
 \f[C]collector.url\f[R] configures replay destination URL
 .IP \[bu] 2
@@ -320,6 +323,10 @@ in-memory ring buffering with \f[C]buffer.keep\f[R]
 replay listener for downstream consumers using the internal framed
 protocol
 .IP \[bu] 2
+independent replay cursor per connected client
+.IP \[bu] 2
+basic replay-client caps through \f[C]replay.max-clients\f[R]
+.IP \[bu] 2
 continuous bridge mode from replay listener to OTLP/HTTP collectors
 .IP \[bu] 2
 acknowledged drain mode through \f[C]upstream.mode: drain\f[R]
@@ -349,6 +356,9 @@ slow-consumer handling is limited to \f[C]block\f[R] and
 .IP \[bu] 2
 ingest overload handling is limited to payload-size caps and
 concurrent-client caps
+.IP \[bu] 2
+multi-client replay isolation is still basic beyond per-client cursors
+and replay-client caps
 .IP \[bu] 2
 file mode does not delete old rotated files
 .IP \[bu] 2

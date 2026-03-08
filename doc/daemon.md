@@ -59,6 +59,7 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 ### Replay
 
 - binds to `replay.listen`
+- caps concurrent replay clients through `replay.max-clients`
 - accepts TCP clients
 - expects a small replay request carrying `from_seq`
 - replay requests can ask to `keep` or `drain`
@@ -134,6 +135,8 @@ What exists now:
 - OTLP/HTTP ingest
 - OTLP/gRPC ingest
 - TCP replay
+- per-client replay cursors
+- basic replay-client caps
 - continuous daemon-to-daemon bridge to OTLP/HTTP collectors
 - configurable keep-or-drain bridge mode
 - basic bridge backpressure policy

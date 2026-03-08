@@ -68,9 +68,11 @@ Current behaviour:
 
 - clients send a small replay request with `from_seq`
 - clients can request `keep` or `drain`
+- each client keeps its own replay cursor
 - replays retained data in sequence order
 - continues polling for new records
 - supports multiple clients in a basic way
+- can cap concurrent replay clients through `replay.max-clients`
 
 Current limitation:
 
@@ -153,6 +155,7 @@ Current config areas:
 - ingest protocol
 - ingest and replay bind addresses
 - replay polling interval
+- replay client cap
 - collector URL and timeout
 - collector TLS trust/client-cert settings
 - bridge backpressure enable switch

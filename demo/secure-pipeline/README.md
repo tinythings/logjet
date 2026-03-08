@@ -46,7 +46,7 @@ Expected result:
 
 - the emitter prints plain BOFH log batches it sends over HTTPS
 - `logjetd` stores them in `./logs`
-- the collector prints the same 5 records in colour after replay
+- the collector prints the same 5 records after replay
 
 ## Certificates
 

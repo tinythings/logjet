@@ -36,12 +36,13 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
 
     let replay_spool = Arc::clone(&spool);
     let replay_addr = config.config.replay_addr.clone();
+    let replay_max_clients = config.config.replay_max_clients;
     let poll_interval_ms = config.config.poll_interval_ms;
     let tls = config.config.tls.clone();
 
     let replay_thread = thread::Builder::new()
         .name("logjetd-replay".to_string())
-        .spawn(move || replay_loop(replay_addr, replay_spool, poll_interval_ms, tls))?;
+        .spawn(move || replay_loop(replay_addr, replay_spool, replay_max_clients, poll_interval_ms, tls))?;
 
     eprintln!("logjetd using config {}", config.config_path.display());
     ingest_loop(
@@ -65,7 +66,7 @@ fn ingest_loop(
     spool: Arc<Mutex<Spool>>,
     next_seq: Arc<AtomicU64>,
 ) -> io::Result<()> {
-    let limiter = Arc::new(IngestLimiter::new(ingest_limits.max_clients));
+    let limiter = Arc::new(ConnectionLimiter::new(ingest_limits.max_clients));
     match protocol {
         IngestProtocol::Wire => {
             let listener = TcpListener::bind(&bind_addr)?;
@@ -201,7 +202,7 @@ fn otlp_http_tls_loop(
     ingest_limits: IngestLimits,
     spool: Arc<Mutex<Spool>>,
     next_seq: Arc<AtomicU64>,
-    limiter: Arc<IngestLimiter>,
+    limiter: Arc<ConnectionLimiter>,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(&bind_addr)?;
     let tls_server = load_ingest_server_config(&ingest_tls)?;
@@ -242,7 +243,7 @@ fn handle_otlp_http_tls_client(
     tls_server: Arc<ServerConfig>,
     spool: Arc<Mutex<Spool>>,
     next_seq: Arc<AtomicU64>,
-    limiter: Arc<IngestLimiter>,
+    limiter: Arc<ConnectionLimiter>,
     max_batch_bytes: usize,
 ) -> io::Result<()> {
     let Some(_permit) = limiter.try_acquire() else {
@@ -424,26 +425,29 @@ mod daemon_utst;
 fn replay_loop(
     bind_addr: String,
     spool: Arc<Mutex<Spool>>,
+    max_clients: usize,
     poll_interval_ms: u64,
     tls: crate::config::TlsConfig,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(&bind_addr)?;
+    let limiter = Arc::new(ConnectionLimiter::new(max_clients));
     let tls_server = if tls.enable {
         eprintln!("logjetd replay TLS enabled on {bind_addr}");
         Some(load_server_config(&tls)?)
     } else {
         None
     };
-    eprintln!("logjetd replay listening on {bind_addr}");
+    eprintln!("logjetd replay listening on {bind_addr} max-clients={max_clients}");
 
     for stream in listener.incoming() {
         let stream = stream?;
         let spool = Arc::clone(&spool);
         let tls_server = tls_server.clone();
+        let limiter = Arc::clone(&limiter);
         thread::Builder::new()
             .name("logjetd-replay-client".to_string())
             .spawn(move || {
-                if let Err(err) = handle_replay_client(stream, spool, poll_interval_ms, tls_server) {
+                if let Err(err) = handle_replay_client(stream, spool, poll_interval_ms, tls_server, limiter) {
                     eprintln!("logjetd replay client error: {err}");
                 }
             })?;
@@ -455,7 +459,7 @@ fn replay_loop(
 fn handle_ingest_client(
     stream: TcpStream,
     spool: Arc<Mutex<Spool>>,
-    limiter: Arc<IngestLimiter>,
+    limiter: Arc<ConnectionLimiter>,
     max_batch_bytes: usize,
 ) -> io::Result<()> {
     let Some(_permit) = limiter.try_acquire() else {
@@ -478,12 +482,12 @@ fn handle_ingest_client(
     Ok(())
 }
 
-struct IngestLimiter {
+struct ConnectionLimiter {
     max_clients: usize,
     active_clients: std::sync::atomic::AtomicUsize,
 }
 
-impl IngestLimiter {
+impl ConnectionLimiter {
     fn new(max_clients: usize) -> Self {
         Self {
             max_clients,
@@ -491,7 +495,7 @@ impl IngestLimiter {
         }
     }
 
-    fn try_acquire(self: &Arc<Self>) -> Option<IngestPermit> {
+    fn try_acquire(self: &Arc<Self>) -> Option<ConnectionPermit> {
         loop {
             let current = self.active_clients.load(Ordering::Relaxed);
             if current >= self.max_clients {
@@ -502,7 +506,7 @@ impl IngestLimiter {
                 .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
-                return Some(IngestPermit {
+                return Some(ConnectionPermit {
                     limiter: Arc::clone(self),
                 });
             }
@@ -510,11 +514,11 @@ impl IngestLimiter {
     }
 }
 
-struct IngestPermit {
-    limiter: Arc<IngestLimiter>,
+struct ConnectionPermit {
+    limiter: Arc<ConnectionLimiter>,
 }
 
-impl Drop for IngestPermit {
+impl Drop for ConnectionPermit {
     fn drop(&mut self) {
         self.limiter.active_clients.fetch_sub(1, Ordering::AcqRel);
     }
@@ -525,7 +529,12 @@ fn handle_replay_client(
     spool: Arc<Mutex<Spool>>,
     poll_interval_ms: u64,
     tls_server: Option<Arc<ServerConfig>>,
+    limiter: Arc<ConnectionLimiter>,
 ) -> io::Result<()> {
+    let Some(_permit) = limiter.try_acquire() else {
+        eprintln!("logjetd replay refused client: replay.max-clients reached");
+        return Ok(());
+    };
     if let Some(server_config) = tls_server {
         let conn = ServerConnection::new(server_config)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;

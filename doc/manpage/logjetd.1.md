@@ -187,6 +187,7 @@ ingest.require-client-cert: false
 ingest.max-batch-bytes: 1048576
 ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
+replay.max-clients: 32
 replay.poll_ms: 250
 ```
 
@@ -200,6 +201,7 @@ Rules:
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `ingest.max-batch-bytes` rejects oversized OTLP or wire payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling
+- `replay.max-clients` caps concurrent replay clients
 - `collector.url` configures replay destination URL
 - `collector.timeout-ms` configures replay and bridge socket timeout in milliseconds
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure HTTPS collector export
@@ -245,6 +247,8 @@ Append-only file behaviour:
 - append-only `.logjet` file output with size-based rotation
 - in-memory ring buffering with `buffer.keep`
 - replay listener for downstream consumers using the internal framed protocol
+- independent replay cursor per connected client
+- basic replay-client caps through `replay.max-clients`
 - continuous bridge mode from replay listener to OTLP/HTTP collectors
 - acknowledged drain mode through `upstream.mode: drain`
 - persisted bridge resume through `upstream.state-file`
@@ -261,6 +265,7 @@ Append-only file behaviour:
 - upstream storage reset and rollover handling is still basic
 - slow-consumer handling is limited to `block` and `disconnect`
 - ingest overload handling is limited to payload-size caps and concurrent-client caps
+- multi-client replay isolation is still basic beyond per-client cursors and replay-client caps
 - file mode does not delete old rotated files
 - certificate management and deployment policy are still operator-managed
 
