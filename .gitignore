@@ -2,3 +2,4 @@
 *.logjet
 logs/
 **/logs/
+TODO.txt
