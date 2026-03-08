@@ -61,6 +61,7 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - binds to `replay.listen`
 - caps concurrent replay clients through `replay.max-clients`
 - accepts TCP clients
+- sends a replay hello carrying upstream stream identity before the replay request
 - expects a small replay request carrying `from_seq`
 - replay requests can ask to `keep` or `drain`
 - replays retained records in sequence order
@@ -70,7 +71,10 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 Replay is strictly sequential today. Resume exists per connection via `from_seq`.
 In `drain` mode, records are consumed only after the downstream side acknowledges
 successful export. Bridge mode can also persist the last forwarded sequence
-through `upstream.state-file`.
+through `upstream.state-file`. If the upstream daemon restarts in buffer mode or
+the upstream storage is replaced, the replay hello stream identity lets bridge
+reset stale saved sequence state instead of getting stuck above the restarted
+upstream.
 
 ### Continuous Bridge
 
@@ -80,6 +84,7 @@ through `upstream.state-file`.
 - forwards OTLP log payloads to `collector.url`
 - reconnects after disconnect using the last in-process forwarded sequence
 - can also load and save the last forwarded sequence through `upstream.state-file`
+- resets saved bridge sequence state automatically when upstream stream identity changes
 - source address comes from `--source` or `upstream.replay`
 - `upstream.mode: drain` removes upstream records after successful collector export and acknowledgement
 - `backpressure.enabled: true` enables explicit bridge backpressure policy handling
@@ -117,6 +122,7 @@ Important:
 ### `output: file`
 
 - records are written to `.logjet` files
+- sequence numbering resumes from the highest stored sequence after restart
 - files rotate when `file.size` is exceeded
 - fully consumed closed files can be deleted when bridge mode uses `upstream.mode: drain`
 - naming scheme is:

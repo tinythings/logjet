@@ -20,7 +20,7 @@ collector.timeout-ms: 10000
 collector.ca-file: /etc/logjet/collector-ca.pem
 collector.cert-file: /etc/logjet/collector.pem
 collector.key-file: /etc/logjet/collector.key
-collector.server-name: vector.internal
+collector.server-name: collector.internal
 backpressure.enabled: false
 backpressure.mode: disconnect
 upstream.replay: 10.0.0.15:7002
@@ -303,6 +303,8 @@ Important:
 - when set, bridge loads the saved sequence at start-up
 - bridge writes the new sequence after each successful collector export
 - this allows restart resume instead of restarting from sequence zero
+- the saved state also carries upstream stream identity
+- that lets bridge detect upstream restart or storage replacement and reset stale saved sequence state
 - the state file lives on the downstream bridge side, not the upstream appliance side
 
 ### `upstream.retry-ms`
@@ -506,7 +508,7 @@ If omitted:
 - `upstream.replay` is used by `logjetd bridge` when `--source` is omitted
 - `upstream.mode: keep` leaves upstream retained records in place after replay
 - `upstream.mode: drain` consumes upstream retained records after successful bridge export
-- `upstream.state-file` stores the last forwarded sequence on the downstream bridge side
+- `upstream.state-file` stores the last forwarded sequence and upstream stream identity on the downstream bridge side
 - `upstream.retry-ms` controls bridge reconnect delay
 - `upstream.connect-timeout-ms` controls bridge source connect timeout
 - `ingest.tls-*` controls TLS on OTLP/HTTP and OTLP/gRPC ingest

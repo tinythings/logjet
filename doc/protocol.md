@@ -22,7 +22,28 @@ Payload bytes are raw OTLP protobuf bytes.
 
 ## Replay Request Frame
 
-Replay clients send a request first before the server starts streaming records.
+Replay clients first receive a replay hello, then send a request before the
+server starts streaming records.
+
+## Replay Hello Frame
+
+The server sends this immediately after a replay client connects.
+
+Replay hello layout:
+
+1. magic: 8 bytes
+2. version: `u8`
+3. reserved: 7 bytes
+4. stream identity: `u64`, little-endian
+5. first retained sequence: `u64`, little-endian
+6. last retained sequence: `u64`, little-endian
+
+Meaning:
+
+- `stream_id` identifies the current upstream retained stream
+- `first_seq` is the first retained sequence currently available
+- `last_seq` is the last retained sequence currently available
+- bridge clients use this to detect upstream restart or storage replacement
 
 Replay request layout:
 
@@ -39,10 +60,11 @@ Meaning:
 ## Semantics
 
 - ingest clients send framed records to `logjetd`
-- replay clients first send `from_seq`, then receive framed records from `logjetd`
+- replay clients first receive replay hello, then send `from_seq`, then receive framed records from `logjetd`
 - `logjetd` does not decode the OTLP payload
 - sequence ordering is preserved if producers send ordered sequence numbers
 - reconnecting bridge clients can resume from the last forwarded sequence without restarting from zero
+- if the upstream stream identity changes, bridge resets stale saved sequence state automatically
 
 ## Why It Exists
 
@@ -59,7 +81,7 @@ The replay transport can optionally be wrapped in TLS.
 When TLS is enabled:
 
 - the framing described above is unchanged
-- replay clients still send the same replay request
+- replay clients still receive the same replay hello and send the same replay request
 - records are still streamed in the same wire format
 
 TLS protects the transport, not the framing itself.
