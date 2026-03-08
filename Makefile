@@ -1,4 +1,4 @@
-.PHONY: build dev devel check fix test test-all test-integration setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo man
+.PHONY: build dev devel check fix test test-unit test-all test-integration setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo man
 
 DEFAULT_TARGET := build
 ARM_TARGET ?= aarch64-unknown-linux-musl
@@ -25,6 +25,15 @@ test: setup
 	else \
 		echo "cargo-nextest not available, falling back to cargo test $(CORE_WORKSPACE)"; \
 		cargo test $(CORE_WORKSPACE); \
+	fi
+
+test-unit: setup
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p logjet --lib -p logjetd --bins; \
+	else \
+		echo "cargo-nextest not available, falling back to cargo test unit-only targets"; \
+		cargo test -p logjet --lib; \
+		cargo test -p logjetd --bin logjetd; \
 	fi
 
 test-integration: setup
