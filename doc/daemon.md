@@ -68,7 +68,8 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 
 Replay is strictly sequential today. Resume exists per connection via `from_seq`.
 In `drain` mode, records are consumed only after the downstream side acknowledges
-successful export. There is no persisted checkpoint yet.
+successful export. Bridge mode can also persist the last forwarded sequence
+through `upstream.state-file`.
 
 ### Continuous Bridge
 
@@ -77,6 +78,7 @@ successful export. There is no persisted checkpoint yet.
 - continues forwarding newly replayed records
 - forwards OTLP log payloads to `collector.url`
 - reconnects after disconnect using the last in-process forwarded sequence
+- can also load and save the last forwarded sequence through `upstream.state-file`
 - source address comes from `--source` or `upstream.replay`
 - `upstream.mode: drain` removes upstream records after successful collector export and acknowledgement
 - can optionally use TLS with `tls.*`
@@ -141,4 +143,4 @@ What exists now:
 
 What does not exist yet:
 
-- persisted reconnect resume from saved cursor
+- advanced restart handling when upstream storage is reset or replaced
