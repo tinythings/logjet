@@ -38,6 +38,24 @@ Inspect a file or directory:
 logjetd inspect /var/lib/logjet
 ```
 
+List rotated file segments for one spool:
+
+```bash
+logjetd segments --path /var/lib/logjet --name bofh.logjet
+```
+
+Prune oldest rotated file segments and keep only the newest two files:
+
+```bash
+logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-files 2
+```
+
+Preview byte-budget pruning without deleting anything:
+
+```bash
+logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-bytes 1048576 --dry-run
+```
+
 Continuously bridge from another `logjetd` replay listener into an OTLP
 collector:
 
@@ -108,6 +126,22 @@ upstream.
 - `--dest` can override the collector destination
 - sends as fast as possible, with no original timing preservation
 
+### File Operational Tooling
+
+- `logjetd segments --path ... --name ...`
+- prints ordered metadata for one rotated spool:
+  - segment id
+  - file path
+  - file size in bytes
+  - record count
+  - first and last sequence
+- `logjetd prune --path ... --name ... --keep-files <n>`
+- removes oldest rotated segments and keeps the newest `n` segment files
+- `logjetd prune --path ... --name ... --keep-bytes <bytes>`
+- removes oldest rotated segments until the newest retained set fits within the byte budget
+- `--dry-run` prints the paths that would be removed without deleting them
+- the newest active segment is always retained
+
 ## Storage Modes
 
 ### `output: buffer`
@@ -138,6 +172,10 @@ Important:
 
 Current file mode is append-only output with file rotation. In drain mode, closed
 consumed segments can disappear after successful forwarding.
+
+For deployments that keep rotated files, `segments` and `prune` provide the
+operator-facing archive management step. This keeps daemon behaviour explicit:
+file output stays append-only, and archive cleanup is a deliberate command.
 
 ## Current Limits
 
