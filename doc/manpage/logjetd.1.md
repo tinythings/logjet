@@ -164,6 +164,8 @@ collector.ca-file: /etc/logjet/collector-ca.pem
 collector.cert-file: /etc/logjet/collector.pem
 collector.key-file: /etc/logjet/collector.key
 collector.server-name: vector.internal
+backpressure.enabled: false
+backpressure.mode: disconnect
 upstream.replay: 10.0.0.15:7002
 upstream.mode: keep
 upstream.state-file: /var/lib/logjet/bridge.state
@@ -182,6 +184,8 @@ ingest.ca-file: /etc/logjet/ingest-ca.pem
 ingest.cert-file: /etc/logjet/ingest.pem
 ingest.key-file: /etc/logjet/ingest.key
 ingest.require-client-cert: false
+ingest.max-batch-bytes: 1048576
+ingest.max-clients: 32
 replay.listen: 0.0.0.0:7002
 replay.poll_ms: 250
 ```
@@ -194,9 +198,13 @@ Rules:
 - `buffer.keep` applies only to memory mode
 - file mode always keeps all rotated files
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
+- `ingest.max-batch-bytes` rejects oversized OTLP or wire payloads before they are stored
+- `ingest.max-clients` caps concurrent ingest handling
 - `collector.url` configures replay destination URL
 - `collector.timeout-ms` configures replay and bridge socket timeout in milliseconds
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure HTTPS collector export
+- `backpressure.enabled` enables bridge backpressure policy handling
+- `backpressure.mode` configures whether bridge export blocks or disconnects when the collector is too slow
 - `upstream.replay` configures the default bridge source
 - `upstream.mode` configures whether bridge keeps or drains upstream retained records
 - `upstream.state-file` stores persisted bridge resume state
@@ -233,12 +241,14 @@ Append-only file behaviour:
 - OTLP/HTTP log ingest on `POST /v1/logs`
 - OTLP/gRPC log ingest on the standard logs export service
 - optional TLS on OTLP/HTTP and OTLP/gRPC ingest
+- basic ingest guardrails through `ingest.max-batch-bytes` and `ingest.max-clients`
 - append-only `.logjet` file output with size-based rotation
 - in-memory ring buffering with `buffer.keep`
 - replay listener for downstream consumers using the internal framed protocol
 - continuous bridge mode from replay listener to OTLP/HTTP collectors
 - acknowledged drain mode through `upstream.mode: drain`
 - persisted bridge resume through `upstream.state-file`
+- basic backpressure policy through `backpressure.mode`
 - optional TLS on replay/bridge transport
 - HTTPS OTLP collector export
 - one-shot file replay to OTLP/HTTP collectors with `logjetd replay`
@@ -249,7 +259,8 @@ Append-only file behaviour:
 
 - replay listener traffic is not OTLP
 - upstream storage reset and rollover handling is still basic
-- slow-consumer handling is basic
+- slow-consumer handling is limited to `block` and `disconnect`
+- ingest overload handling is limited to payload-size caps and concurrent-client caps
 - file mode does not delete old rotated files
 - certificate management and deployment policy are still operator-managed
 
