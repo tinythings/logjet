@@ -19,6 +19,8 @@ It can also accept OTLP/gRPC log export requests on the standard
 Current behavior:
 
 - accepts OTLP log batches over HTTP and gRPC
+- OTLP/HTTP ingest can also run over HTTPS
+- OTLP/gRPC ingest can also run over TLS
 - validates that the request decodes as `ExportLogsServiceRequest`
 - stores the raw OTLP protobuf bytes
 - assigns a local sequence number for internal replay ordering
@@ -108,9 +110,8 @@ Current behavior:
 
 Current limitation:
 
-- OTLP/HTTP ingest is still plain HTTP
-- OTLP/gRPC ingest is unchanged
-- collector export from `replay` and `bridge` is still plain HTTP
+- TLS config is currently split between replay/bridge (`tls.*`) and OTLP ingest (`ingest.*`)
+- collector export uses HTTPS only when `collector.url` starts with `https://`
 
 ### 7. One-shot file replay to OTLP/HTTP
 
@@ -127,6 +128,7 @@ Current behavior:
 - replays them in that order
 - reads stored `logs` records
 - posts the raw OTLP protobuf payloads to `collector.url`
+- supports both `http://` and `https://` collector URLs
 - sends as fast as the destination socket allows, with no artificial delay
 - if `--dest` is omitted, replay uses `collector.url` from config
 
@@ -146,7 +148,10 @@ Current config areas:
 - ingest and replay bind addresses
 - replay polling interval
 - collector URL and timeout
+- collector TLS trust/client-cert settings
 - upstream replay source and retry behavior
+- replay/bridge TLS settings
+- OTLP ingest TLS settings
 
 ### 9. Inspection tooling
 
@@ -242,5 +247,4 @@ These are not implemented yet:
 - persisted resume checkpoints or acknowledgements across bridge restarts
 - advanced slow-consumer handling
 - disk-budget retention management for rotated files
-- transport security for OTLP ingest and collector export
 - production-grade service lifecycle handling
