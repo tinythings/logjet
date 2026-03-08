@@ -31,6 +31,8 @@ It also contains scenario demos under subdirectories:
   - five emitters running continuously into one `logjetd` and one live collector
 - [`file-replay`](./file-replay)
   - replay stored `.logjet` files into a collector
+- [`bridge-resume`](./bridge-resume)
+  - consumer restart resumes from persisted sequence state without replaying from zero
 - [`remote-drain`](./remote-drain)
   - appliance-side `logjetd` drained by a remote-side `logjetd bridge`
 - [`remote-drain-tls`](./remote-drain-tls)
