@@ -31,8 +31,16 @@ const BOFH_EXCUSES: &[&str] = &[
 ];
 
 pub fn build_excuse_request(sequence: u64) -> ExportLogsServiceRequest {
-    build_message_request(
+    build_excuse_request_for_service(sequence, "bofh-emitter")
+}
+
+pub fn build_excuse_request_for_service(
+    sequence: u64,
+    service_name: &str,
+) -> ExportLogsServiceRequest {
+    build_message_request_for_service(
         sequence,
+        service_name,
         format!(
             "BOFH excuse #{sequence}: {}",
             BOFH_EXCUSES[(sequence as usize) % BOFH_EXCUSES.len()]
@@ -41,13 +49,21 @@ pub fn build_excuse_request(sequence: u64) -> ExportLogsServiceRequest {
 }
 
 pub fn build_message_request(sequence: u64, body: String) -> ExportLogsServiceRequest {
+    build_message_request_for_service(sequence, "bofh-emitter", body)
+}
+
+pub fn build_message_request_for_service(
+    sequence: u64,
+    service_name: &str,
+    body: String,
+) -> ExportLogsServiceRequest {
     let nanos = unix_time_nanos();
 
     ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource {
                 attributes: vec![
-                    string_attr("service.name", "bofh-emitter"),
+                    string_attr("service.name", service_name),
                     string_attr("service.namespace", "logjet-demo"),
                     string_attr("host.name", "garage-rig"),
                 ],
