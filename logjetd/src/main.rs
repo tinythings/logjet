@@ -130,7 +130,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 source,
                 config.collector.url
             );
-            bridge_wire_to_otlp_http(&source, &config.collector, &config.upstream, &config.tls)?;
+            bridge_wire_to_otlp_http(&source, &config.collector, &config.backpressure, &config.upstream, &config.tls)?;
         }
         Some(other) => return Err(format!("unknown command: {other}").into()),
     }

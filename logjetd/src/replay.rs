@@ -9,7 +9,7 @@ use std::time::Duration;
 use logjet::{LogjetReader, ReaderConfig, RecordType};
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
-use crate::config::{CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode};
+use crate::config::{BackpressureConfig, BackpressureMode, CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode};
 use crate::protocol::{ReplayAck, ReplayRequest, read_record, write_replay_ack, write_replay_request};
 use crate::spool::list_named_segments;
 use crate::tls::{load_client_config, load_collector_client_config, parse_collector_server_name, parse_server_name};
@@ -19,6 +19,8 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
     let endpoint = CollectorEndpoint::parse(&collector.url)?;
     let transport = CollectorTransport {
         timeout: Duration::from_millis(collector.timeout_ms),
+        backpressure_enabled: false,
+        backpressure_mode: BackpressureMode::Disconnect,
         tls_client: if endpoint.tls {
             Some(load_collector_client_config(collector)?)
         } else {
@@ -54,6 +56,7 @@ pub fn validate_replay_path(path: &Path, name: &str) -> io::Result<Vec<PathBuf>>
 pub fn bridge_wire_to_otlp_http(
     source: &str,
     collector: &CollectorConfig,
+    backpressure: &BackpressureConfig,
     upstream: &UpstreamConfig,
     tls: &TlsConfig,
 ) -> io::Result<()> {
@@ -67,6 +70,8 @@ pub fn bridge_wire_to_otlp_http(
     };
     let collector_transport = CollectorTransport {
         timeout: Duration::from_millis(collector.timeout_ms),
+        backpressure_enabled: backpressure.enabled,
+        backpressure_mode: backpressure.mode,
         tls_client: if endpoint.tls {
             Some(load_collector_client_config(collector)?)
         } else {
@@ -167,8 +172,21 @@ fn bridge_transport<T: io::Read + io::Write>(
 
 fn post_raw_otlp_http(collector_transport: &CollectorTransport, payload: &[u8]) -> io::Result<()> {
     let stream = connect_with_timeout(&collector_transport.endpoint.authority, collector_transport.timeout)?;
-    stream.set_write_timeout(Some(collector_transport.timeout))?;
-    stream.set_read_timeout(Some(collector_transport.timeout))?;
+    if !collector_transport.backpressure_enabled {
+        stream.set_write_timeout(Some(collector_transport.timeout))?;
+        stream.set_read_timeout(Some(collector_transport.timeout))?;
+    } else {
+        match collector_transport.backpressure_mode {
+            BackpressureMode::Block => {
+                stream.set_write_timeout(None)?;
+                stream.set_read_timeout(None)?;
+            }
+            BackpressureMode::Disconnect => {
+                stream.set_write_timeout(Some(collector_transport.timeout))?;
+                stream.set_read_timeout(Some(collector_transport.timeout))?;
+            }
+        }
+    }
 
     if let Some(client_config) = &collector_transport.tls_client {
         let server_name = parse_collector_server_name(
@@ -243,6 +261,8 @@ struct CollectorEndpoint {
 struct CollectorTransport {
     endpoint: CollectorEndpoint,
     timeout: Duration,
+    backpressure_enabled: bool,
+    backpressure_mode: BackpressureMode,
     tls_client: Option<Arc<ClientConfig>>,
     collector: CollectorConfig,
     upstream_mode: UpstreamMode,

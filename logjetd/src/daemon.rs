@@ -18,8 +18,8 @@ use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response as GrpcResponse, Status};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
-use crate::config::{Config, IngestProtocol, IngestTlsConfig};
-use crate::protocol::{read_record, read_replay_ack, read_replay_request, write_record};
+use crate::config::{Config, IngestLimits, IngestProtocol, IngestTlsConfig};
+use crate::protocol::{read_record_with_limit, read_replay_ack, read_replay_request, write_record};
 use crate::spool::Spool;
 use crate::tls::{load_ingest_server_config, load_server_config};
 use crate::{protocol::WireRecord};
@@ -48,6 +48,7 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
         config.config.ingest_addr,
         config.config.ingest_protocol,
         config.config.ingest_tls,
+        config.config.ingest_limits,
         spool,
         next_seq,
     )?;
@@ -60,21 +61,29 @@ fn ingest_loop(
     bind_addr: String,
     protocol: IngestProtocol,
     ingest_tls: IngestTlsConfig,
+    ingest_limits: IngestLimits,
     spool: Arc<Mutex<Spool>>,
     next_seq: Arc<AtomicU64>,
 ) -> io::Result<()> {
+    let limiter = Arc::new(IngestLimiter::new(ingest_limits.max_clients));
     match protocol {
         IngestProtocol::Wire => {
             let listener = TcpListener::bind(&bind_addr)?;
-            eprintln!("logjetd ingest listening on {bind_addr} using wire protocol");
+            eprintln!(
+                "logjetd ingest listening on {bind_addr} using wire protocol max-batch-bytes={} max-clients={}",
+                ingest_limits.max_batch_bytes,
+                ingest_limits.max_clients
+            );
 
             for stream in listener.incoming() {
                 let stream = stream?;
                 let spool = Arc::clone(&spool);
+                let limiter = Arc::clone(&limiter);
+                let max_batch_bytes = ingest_limits.max_batch_bytes;
                 thread::Builder::new()
                     .name("logjetd-ingest-client".to_string())
                     .spawn(move || {
-                        if let Err(err) = handle_ingest_client(stream, spool) {
+                        if let Err(err) = handle_ingest_client(stream, spool, limiter, max_batch_bytes) {
                             eprintln!("logjetd ingest client error: {err}");
                         }
                     })?;
@@ -82,11 +91,14 @@ fn ingest_loop(
         }
         IngestProtocol::OtlpHttp => {
             if ingest_tls.enable {
-                return otlp_http_tls_loop(bind_addr, ingest_tls, spool, next_seq);
+                return otlp_http_tls_loop(bind_addr, ingest_tls, ingest_limits, spool, next_seq, limiter);
             }
             let server = Server::http(&bind_addr)
                 .map_err(|err| io::Error::other(err.to_string()))?;
-            eprintln!("logjetd ingest listening on http://{bind_addr}/v1/logs using otlp-http");
+            eprintln!(
+                "logjetd ingest listening on http://{bind_addr}/v1/logs using otlp-http max-batch-bytes={}",
+                ingest_limits.max_batch_bytes
+            );
 
             for mut request in server.incoming_requests() {
                 if request.method() != &Method::Post || request.url() != "/v1/logs" {
@@ -96,8 +108,19 @@ fn ingest_loop(
                     continue;
                 }
 
-                let mut body = Vec::new();
-                request.as_reader().read_to_end(&mut body)?;
+                let mut body = Vec::with_capacity(ingest_limits.max_batch_bytes.min(8192));
+                request
+                    .as_reader()
+                    .take((ingest_limits.max_batch_bytes + 1) as u64)
+                    .read_to_end(&mut body)?;
+                if body.len() > ingest_limits.max_batch_bytes {
+                    let response = Response::from_string("payload too large")
+                        .with_status_code(StatusCode(413));
+                    request
+                        .respond(response)
+                        .map_err(|err| io::Error::other(err.to_string()))?;
+                    continue;
+                }
                 match ExportLogsServiceRequest::decode(body.as_slice()) {
                     Ok(batch) => {
                         let record = WireRecord {
@@ -128,8 +151,11 @@ fn ingest_loop(
                 io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC bind addr: {err}"))
             })?;
             eprintln!(
-                "logjetd ingest listening on {}://{bind_addr} using otlp-grpc",
+                "logjetd ingest listening on {}://{bind_addr} using otlp-grpc max-batch-bytes={} max-clients={}",
                 if ingest_tls.enable { "grpcs" } else { "grpc" }
+                ,
+                ingest_limits.max_batch_bytes,
+                ingest_limits.max_clients
             );
 
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -145,7 +171,7 @@ fn ingest_loop(
 
             runtime.block_on(async move {
                 let builder = tonic::transport::Server::builder();
-                let mut builder = if let Some(tls) = grpc_tls {
+                let builder = if let Some(tls) = grpc_tls {
                     builder
                         .tls_config(tls)
                         .map_err(|err| io::Error::other(err.to_string()))?
@@ -154,10 +180,14 @@ fn ingest_loop(
                 };
 
                 builder
-                .add_service(LogsServiceServer::new(service))
-                .serve(addr)
-                .await
-                .map_err(|err| io::Error::other(err.to_string()))
+                    .concurrency_limit_per_connection(ingest_limits.max_clients)
+                    .add_service(
+                        LogsServiceServer::new(service)
+                            .max_decoding_message_size(ingest_limits.max_batch_bytes),
+                    )
+                    .serve(addr)
+                    .await
+                    .map_err(|err| io::Error::other(err.to_string()))
             })?;
         }
     }
@@ -168,22 +198,37 @@ fn ingest_loop(
 fn otlp_http_tls_loop(
     bind_addr: String,
     ingest_tls: IngestTlsConfig,
+    ingest_limits: IngestLimits,
     spool: Arc<Mutex<Spool>>,
     next_seq: Arc<AtomicU64>,
+    limiter: Arc<IngestLimiter>,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(&bind_addr)?;
     let tls_server = load_ingest_server_config(&ingest_tls)?;
-    eprintln!("logjetd ingest listening on https://{bind_addr}/v1/logs using otlp-http");
+    eprintln!(
+        "logjetd ingest listening on https://{bind_addr}/v1/logs using otlp-http max-batch-bytes={} max-clients={}",
+        ingest_limits.max_batch_bytes,
+        ingest_limits.max_clients
+    );
 
     for stream in listener.incoming() {
         let stream = stream?;
         let spool = Arc::clone(&spool);
         let next_seq = Arc::clone(&next_seq);
         let tls_server = tls_server.clone();
+        let limiter = Arc::clone(&limiter);
+        let max_batch_bytes = ingest_limits.max_batch_bytes;
         thread::Builder::new()
             .name("logjetd-otlp-http-tls-client".to_string())
             .spawn(move || {
-                if let Err(err) = handle_otlp_http_tls_client(stream, tls_server, spool, next_seq) {
+                if let Err(err) = handle_otlp_http_tls_client(
+                    stream,
+                    tls_server,
+                    spool,
+                    next_seq,
+                    limiter,
+                    max_batch_bytes,
+                ) {
                     eprintln!("logjetd otlp-http tls client error: {err}");
                 }
             })?;
@@ -197,11 +242,17 @@ fn handle_otlp_http_tls_client(
     tls_server: Arc<ServerConfig>,
     spool: Arc<Mutex<Spool>>,
     next_seq: Arc<AtomicU64>,
+    limiter: Arc<IngestLimiter>,
+    max_batch_bytes: usize,
 ) -> io::Result<()> {
+    let Some(_permit) = limiter.try_acquire() else {
+        eprintln!("logjetd ingest refused TLS client: ingest.max-clients reached");
+        return Ok(());
+    };
     let conn = ServerConnection::new(tls_server)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     let mut transport = StreamOwned::new(conn, stream);
-    let result = handle_otlp_http_transport(&mut transport, spool, next_seq);
+    let result = handle_otlp_http_transport(&mut transport, spool, next_seq, max_batch_bytes);
     transport.conn.send_close_notify();
     let _ = transport.flush();
     result
@@ -211,8 +262,16 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
     transport: &mut T,
     spool: Arc<Mutex<Spool>>,
     next_seq: Arc<AtomicU64>,
+    max_batch_bytes: usize,
 ) -> io::Result<()> {
-    let request = read_http_request(transport)?;
+    let request = match read_http_request(transport, max_batch_bytes) {
+        Ok(request) => request,
+        Err(err) if err.kind() == io::ErrorKind::InvalidData && err.to_string() == "payload too large" => {
+            write_http_response(transport, 413, "payload too large")?;
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
     if request.method != "POST" || request.path != "/v1/logs" {
         write_http_response(transport, 404, "not found")?;
         return Ok(());
@@ -250,7 +309,7 @@ struct ParsedHttpRequest {
     body: Vec<u8>,
 }
 
-fn read_http_request<T: Read>(transport: &mut T) -> io::Result<ParsedHttpRequest> {
+fn read_http_request<T: Read>(transport: &mut T, max_batch_bytes: usize) -> io::Result<ParsedHttpRequest> {
     const MAX_HEADER_BYTES: usize = 16 * 1024;
     let mut buffer = Vec::new();
     let mut byte = [0u8; 1];
@@ -296,6 +355,9 @@ fn read_http_request<T: Read>(transport: &mut T) -> io::Result<ParsedHttpRequest
 
     let content_length = content_length
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content-length"))?;
+    if content_length > max_batch_bytes {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "payload too large"));
+    }
     let mut body = Vec::with_capacity(content_length);
     transport
         .take(content_length as u64)
@@ -311,7 +373,9 @@ fn write_http_response<T: io::Write>(transport: &mut T, status: u16, body: &str)
     let status_text = match status {
         200 => "OK",
         400 => "Bad Request",
+        413 => "Payload Too Large",
         404 => "Not Found",
+        503 => "Service Unavailable",
         _ => "Error",
     };
     write!(
@@ -388,11 +452,20 @@ fn replay_loop(
     Ok(())
 }
 
-fn handle_ingest_client(stream: TcpStream, spool: Arc<Mutex<Spool>>) -> io::Result<()> {
+fn handle_ingest_client(
+    stream: TcpStream,
+    spool: Arc<Mutex<Spool>>,
+    limiter: Arc<IngestLimiter>,
+    max_batch_bytes: usize,
+) -> io::Result<()> {
+    let Some(_permit) = limiter.try_acquire() else {
+        eprintln!("logjetd ingest refused wire client: ingest.max-clients reached");
+        return Ok(());
+    };
     let peer = stream.peer_addr().ok();
     let mut reader = BufReader::new(stream);
 
-    while let Some(record) = read_record(&mut reader)? {
+    while let Some(record) = read_record_with_limit(&mut reader, max_batch_bytes)? {
         let mut spool = spool
             .lock()
             .map_err(|_| io::Error::other("spool mutex poisoned"))?;
@@ -403,6 +476,48 @@ fn handle_ingest_client(stream: TcpStream, spool: Arc<Mutex<Spool>>) -> io::Resu
         eprintln!("logjetd ingest disconnected: {peer}");
     }
     Ok(())
+}
+
+struct IngestLimiter {
+    max_clients: usize,
+    active_clients: std::sync::atomic::AtomicUsize,
+}
+
+impl IngestLimiter {
+    fn new(max_clients: usize) -> Self {
+        Self {
+            max_clients,
+            active_clients: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<IngestPermit> {
+        loop {
+            let current = self.active_clients.load(Ordering::Relaxed);
+            if current >= self.max_clients {
+                return None;
+            }
+            if self
+                .active_clients
+                .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                return Some(IngestPermit {
+                    limiter: Arc::clone(self),
+                });
+            }
+        }
+    }
+}
+
+struct IngestPermit {
+    limiter: Arc<IngestLimiter>,
+}
+
+impl Drop for IngestPermit {
+    fn drop(&mut self) {
+        self.limiter.active_clients.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 fn handle_replay_client(

@@ -29,6 +29,10 @@ pub struct ReplayAck {
 }
 
 pub fn read_record<R: Read>(reader: &mut R) -> io::Result<Option<WireRecord>> {
+    read_record_with_limit(reader, usize::MAX)
+}
+
+pub fn read_record_with_limit<R: Read>(reader: &mut R, max_payload_len: usize) -> io::Result<Option<WireRecord>> {
     let mut magic = [0u8; 8];
     match reader.read_exact(&mut magic) {
         Ok(()) => {}
@@ -61,6 +65,12 @@ pub fn read_record<R: Read>(reader: &mut R) -> io::Result<Option<WireRecord>> {
         )
     })?;
     let payload_len = u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
+    if payload_len > max_payload_len {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!("wire payload too large: {payload_len} > {max_payload_len}"),
+        ));
+    }
 
     let mut payload = vec![0u8; payload_len];
     reader.read_exact(&mut payload)?;
