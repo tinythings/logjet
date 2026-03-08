@@ -1,4 +1,4 @@
-use super::{BufferLimit, Config, IngestProtocol, StorageConfig};
+use super::{BufferLimit, Config, IngestProtocol, StorageConfig, UpstreamMode};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,6 +24,7 @@ fn empty_config_file_uses_defaults() {
     assert!(config.collector.key_file.is_none());
     assert!(config.collector.server_name.is_none());
     assert!(config.upstream.replay_addr.is_none());
+    assert_eq!(config.upstream.mode, UpstreamMode::Keep);
     assert_eq!(config.upstream.retry_ms, 1_000);
     assert_eq!(config.upstream.connect_timeout_ms, 5_000);
     assert!(!config.tls.enable);
@@ -63,6 +64,7 @@ fn file_mode_and_collector_settings_parse() {
     assert_eq!(config.ingest_protocol, IngestProtocol::OtlpGrpc);
     assert_eq!(config.collector.timeout_ms, 3210);
     assert_eq!(config.upstream.replay_addr.as_deref(), Some("10.0.0.15:7002"));
+    assert_eq!(config.upstream.mode, UpstreamMode::Keep);
     assert_eq!(config.upstream.retry_ms, 222);
     assert_eq!(config.upstream.connect_timeout_ms, 333);
     assert!(config.ingest_tls.enable);
@@ -112,6 +114,25 @@ fn https_collector_fields_parse_without_file_mode() {
     assert_eq!(config.collector.url, "https://collector.example:443/v1/logs");
     assert_eq!(config.collector.ca_file.as_deref(), Some(Path::new("./ca.pem")));
     assert_eq!(config.collector.server_name.as_deref(), Some("collector.example"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn upstream_mode_drain_parses() {
+    let path = write_temp_config(
+        "upstream-drain",
+        "upstream.mode: drain\nupstream.replay: 127.0.0.1:7002\n",
+    );
+    let config = Config::load(&path).unwrap();
+    assert_eq!(config.upstream.mode, UpstreamMode::Drain);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn invalid_upstream_mode_is_rejected() {
+    let path = write_temp_config("bad-upstream-mode", "upstream.mode: nope\n");
+    let err = Config::load(&path).unwrap_err().to_string();
+    assert!(err.contains("invalid upstream mode"));
     fs::remove_file(path).unwrap();
 }
 
