@@ -21,12 +21,11 @@ fn http_url_without_leading_slash_is_normalized() {
 }
 
 #[test]
-fn https_is_rejected() {
-    let err = CollectorEndpoint::parse("https://127.0.0.1:4318/v1/logs")
-        .err()
-        .unwrap()
-        .to_string();
-    assert!(err.contains("https"));
+fn https_url_is_supported() {
+    let endpoint = CollectorEndpoint::parse("https://127.0.0.1:4318/v1/logs").unwrap();
+    assert_eq!(endpoint.authority, "127.0.0.1:4318");
+    assert_eq!(endpoint.path, "/v1/logs");
+    assert!(endpoint.tls);
 }
 
 #[test]
