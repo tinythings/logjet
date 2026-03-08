@@ -3,6 +3,7 @@ mod daemon;
 mod protocol;
 mod replay;
 mod spool;
+mod tls;
 
 use std::env;
 use std::path::PathBuf;
@@ -129,7 +130,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 source,
                 config.collector.url
             );
-            bridge_wire_to_otlp_http(&source, &config.collector, &config.upstream)?;
+            bridge_wire_to_otlp_http(&source, &config.collector, &config.upstream, &config.tls)?;
         }
         Some(other) => return Err(format!("unknown command: {other}").into()),
     }
