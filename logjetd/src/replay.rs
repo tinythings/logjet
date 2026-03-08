@@ -215,7 +215,7 @@ impl CollectorEndpoint {
             }
             return Ok(Self {
                 authority: authority.to_string(),
-                path: normalize_path(path),
+                path: normalise_path(path),
                 tls: false,
             });
         }
@@ -230,7 +230,7 @@ impl CollectorEndpoint {
             }
             return Ok(Self {
                 authority: authority.to_string(),
-                path: normalize_path(path),
+                path: normalise_path(path),
                 tls: true,
             });
         }
@@ -277,7 +277,7 @@ fn split_authority_and_path(input: &str) -> (&str, &str) {
     }
 }
 
-fn normalize_path(path: &str) -> String {
+fn normalise_path(path: &str) -> String {
     if path.is_empty() {
         "/v1/logs".to_string()
     } else if path.starts_with('/') {

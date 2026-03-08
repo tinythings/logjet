@@ -13,7 +13,7 @@ replay.listen: 0.0.0.0:7002
 replay.poll_ms: 250
 ```
 
-Behavior:
+Behaviour:
 
 - keeps roughly 100 KiB of retained records in memory
 - keeps the first 1000 retained messages forever
@@ -30,7 +30,7 @@ replay.listen: 0.0.0.0:7002
 replay.poll_ms: 250
 ```
 
-Behavior:
+Behaviour:
 
 - keeps the first 1500 messages forever
 - rotates only the tail after that
@@ -50,7 +50,7 @@ replay.listen: 0.0.0.0:7002
 replay.poll_ms: 250
 ```
 
-Behavior:
+Behaviour:
 
 - writes to `/var/lib/logjet/vehicle.logjet`
 - rotates to `/var/lib/logjet/vehicle-1.logjet`, then `vehicle-2.logjet`, and so on

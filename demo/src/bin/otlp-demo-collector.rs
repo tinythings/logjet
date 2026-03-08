@@ -9,7 +9,7 @@ use prost::Message;
 use rustls::{ServerConnection, StreamOwned};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
-use otlp_demo::{format_batch_colored, load_demo_server_config};
+use otlp_demo::{format_batch_coloured, load_demo_server_config};
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut bind_addr = "0.0.0.0:4318".to_string();
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         match ExportLogsServiceRequest::decode(body.as_slice()) {
             Ok(batch) => {
-                print!("{}", format_batch_colored(&batch));
+                print!("{}", format_batch_coloured(&batch));
                 let response = Response::empty(200).with_header(content_type_header());
                 request.respond(response)?;
             }
@@ -111,7 +111,7 @@ fn handle_tls_http_request(
 
     match ExportLogsServiceRequest::decode(request.body.as_slice()) {
         Ok(batch) => {
-            print!("{}", format_batch_colored(&batch));
+            print!("{}", format_batch_coloured(&batch));
             write_http_response(transport, 200, "")?;
         }
         Err(err) => {

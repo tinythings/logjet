@@ -45,7 +45,7 @@ collector:
 logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 ```
 
-## Runtime Behavior
+## Runtime Behaviour
 
 ### Ingest
 

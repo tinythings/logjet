@@ -1,7 +1,7 @@
 //! Append-only log container for OTLP protobuf batches.
 //!
 //! Blocks are independently checksummed and optionally compressed so readers can
-//! resynchronize after corruption and continue replaying later valid data.
+//! resynchronise after corruption and continue replaying later valid data.
 
 pub mod codec;
 pub mod crc;

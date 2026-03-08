@@ -30,7 +30,7 @@ if [ ! -d "$SCRIPT_DIR/logs" ]; then
     exit 1
 fi
 
-echo "starting colorful OTLP collector on 127.0.0.1:4318"
+echo "starting colourful OTLP collector on 127.0.0.1:4318"
 "$COLLECTOR" 127.0.0.1:4318 &
 COLLECTOR_PID=$!
 

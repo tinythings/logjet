@@ -41,7 +41,7 @@ done
 echo "sending 100 BOFH flood messages"
 "$EMITTER" 127.0.0.1:4318 --count 100 --interval-ms 0
 
-echo "starting colorful collector on 127.0.0.1:4320"
+echo "starting colourful collector on 127.0.0.1:4320"
 "$COLLECTOR" 127.0.0.1:4320 &
 COLLECTOR_PID=$!
 
