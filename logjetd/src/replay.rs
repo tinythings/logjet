@@ -10,7 +10,10 @@ use logjet::{LogjetReader, ReaderConfig, RecordType};
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
 use crate::config::{BackpressureConfig, BackpressureMode, CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode};
-use crate::protocol::{ReplayAck, ReplayRequest, read_record, write_replay_ack, write_replay_request};
+use crate::protocol::{
+    ReplayAck, ReplayHello, ReplayRequest, read_record, read_replay_hello, write_replay_ack,
+    write_replay_request,
+};
 use crate::spool::list_named_segments;
 use crate::tls::{load_client_config, load_collector_client_config, parse_collector_server_name, parse_server_name};
 
@@ -81,16 +84,23 @@ pub fn bridge_wire_to_otlp_http(
         collector: collector.clone(),
         upstream_mode: upstream.mode,
     };
-    let mut last_seq = read_bridge_state(upstream.state_file.as_deref())?;
+    let mut state = read_bridge_state(upstream.state_file.as_deref())?;
     if let Some(path) = upstream.state_file.as_deref() {
-        eprintln!("bridge resume state file {} loaded seq={last_seq}", path.display());
+        eprintln!(
+            "bridge resume state file {} loaded seq={} stream-id={}",
+            path.display(),
+            state.last_seq,
+            state.stream_id
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unset".to_string())
+        );
     }
 
     loop {
         match bridge_once(
             source,
             connect_timeout,
-            &mut last_seq,
+            &mut state,
             upstream.state_file.as_deref(),
             tls,
             tls_client.clone(),
@@ -98,13 +108,15 @@ pub fn bridge_wire_to_otlp_http(
         ) {
             Ok(()) => {
                 eprintln!(
-                    "bridge source {source} closed after seq={last_seq}; reconnecting in {} ms",
+                    "bridge source {source} closed after seq={}; reconnecting in {} ms",
+                    state.last_seq,
                     upstream.retry_ms
                 );
             }
             Err(err) => {
                 eprintln!(
-                    "bridge source {source} error after seq={last_seq}: {err}; reconnecting in {} ms",
+                    "bridge source {source} error after seq={}: {err}; reconnecting in {} ms",
+                    state.last_seq,
                     upstream.retry_ms
                 );
             }
@@ -116,7 +128,7 @@ pub fn bridge_wire_to_otlp_http(
 fn bridge_once(
     source: &str,
     connect_timeout: Duration,
-    last_seq: &mut u64,
+    state: &mut BridgeState,
     state_file: Option<&Path>,
     tls: &TlsConfig,
     tls_client: Option<Arc<ClientConfig>>,
@@ -131,27 +143,31 @@ fn bridge_once(
         let conn = ClientConnection::new(client_config, server_name)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         let mut transport = StreamOwned::new(conn, stream);
-        return bridge_transport(source, last_seq, state_file, &mut transport, collector_transport);
+        return bridge_transport(source, state, state_file, &mut transport, collector_transport);
     }
 
     let mut transport = stream;
-    bridge_transport(source, last_seq, state_file, &mut transport, collector_transport)
+    bridge_transport(source, state, state_file, &mut transport, collector_transport)
 }
 
 fn bridge_transport<T: io::Read + io::Write>(
     source: &str,
-    last_seq: &mut u64,
+    state: &mut BridgeState,
     state_file: Option<&Path>,
     transport: &mut T,
     collector_transport: &CollectorTransport,
 ) -> io::Result<()> {
+    let hello = read_replay_hello(transport)?;
+    reconcile_bridge_state(source, state, &hello)?;
+    write_bridge_state(state_file, state)?;
+
     let consume = collector_transport.upstream_mode == UpstreamMode::Drain;
-    write_replay_request(transport, &ReplayRequest { from_seq: *last_seq, consume })?;
+    write_replay_request(transport, &ReplayRequest { from_seq: state.last_seq, consume })?;
     transport.flush()?;
     eprintln!(
         "bridge connected to {} and requested records after seq={} mode={}",
         source,
-        *last_seq,
+        state.last_seq,
         if consume { "drain" } else { "keep" }
     );
 
@@ -159,8 +175,8 @@ fn bridge_transport<T: io::Read + io::Write>(
         if record.record_type == RecordType::Logs {
             post_raw_otlp_http(collector_transport, &record.payload)?;
         }
-        *last_seq = record.seq;
-        write_bridge_state(state_file, *last_seq)?;
+        state.last_seq = record.seq;
+        write_bridge_state(state_file, state)?;
         if consume {
             write_replay_ack(transport, &ReplayAck { ack_seq: record.seq })?;
             transport.flush()?;
@@ -224,23 +240,31 @@ fn to_io_error(err: logjet::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, err.to_string())
 }
 
-fn read_bridge_state(path: Option<&Path>) -> io::Result<u64> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BridgeState {
+    stream_id: Option<u64>,
+    last_seq: u64,
+}
+
+fn read_bridge_state(path: Option<&Path>) -> io::Result<BridgeState> {
     let Some(path) = path else {
-        return Ok(0);
+        return Ok(BridgeState {
+            stream_id: None,
+            last_seq: 0,
+        });
     };
     if !path.exists() {
-        return Ok(0);
+        return Ok(BridgeState {
+            stream_id: None,
+            last_seq: 0,
+        });
     }
 
     let text = fs::read_to_string(path)?;
-    let seq = text
-        .trim()
-        .parse::<u64>()
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("invalid bridge state: {err}")))?;
-    Ok(seq)
+    parse_bridge_state(&text)
 }
 
-fn write_bridge_state(path: Option<&Path>, seq: u64) -> io::Result<()> {
+fn write_bridge_state(path: Option<&Path>, state: &BridgeState) -> io::Result<()> {
     let Some(path) = path else {
         return Ok(());
     };
@@ -249,7 +273,82 @@ fn write_bridge_state(path: Option<&Path>, seq: u64) -> io::Result<()> {
     {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, seq.to_string())
+    fs::write(
+        path,
+        format!(
+            "stream_id={}\nlast_seq={}\n",
+            state
+                .stream_id
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unset".to_string()),
+            state.last_seq
+        ),
+    )
+}
+
+fn parse_bridge_state(text: &str) -> io::Result<BridgeState> {
+    if let Ok(last_seq) = text.trim().parse::<u64>() {
+        return Ok(BridgeState {
+            stream_id: None,
+            last_seq,
+        });
+    }
+
+    let mut stream_id = None;
+    let mut last_seq = None;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "stream_id" => {
+                let value = value.trim();
+                stream_id = if value == "unset" {
+                    Some(None)
+                } else {
+                    Some(Some(value.parse::<u64>().map_err(|err| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("invalid bridge state stream_id: {err}"))
+                    })?))
+                };
+            }
+            "last_seq" => {
+                last_seq = Some(value.trim().parse::<u64>().map_err(|err| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("invalid bridge state last_seq: {err}"))
+                })?);
+            }
+            _ => {}
+        }
+    }
+
+    let last_seq = last_seq
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid bridge state: missing last_seq"))?;
+    Ok(BridgeState {
+        stream_id: stream_id.unwrap_or(None),
+        last_seq,
+    })
+}
+
+fn reconcile_bridge_state(source: &str, state: &mut BridgeState, hello: &ReplayHello) -> io::Result<()> {
+    if let Some(saved_stream_id) = state.stream_id {
+        if saved_stream_id != hello.stream_id {
+            eprintln!(
+                "bridge source {source} changed stream identity {} -> {}; resetting saved seq from {} to 0",
+                saved_stream_id,
+                hello.stream_id,
+                state.last_seq
+            );
+            state.last_seq = 0;
+        }
+    } else if state.last_seq > 0 && hello.last_seq > 0 && hello.last_seq < state.last_seq {
+        eprintln!(
+            "bridge source {source} appears to have reset or been replaced; upstream last_seq={} is below saved seq={}; resetting to 0",
+            hello.last_seq,
+            state.last_seq
+        );
+        state.last_seq = 0;
+    }
+    state.stream_id = Some(hello.stream_id);
+    Ok(())
 }
 
 struct CollectorEndpoint {

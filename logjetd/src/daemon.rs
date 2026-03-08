@@ -19,7 +19,10 @@ use tonic::{Request, Response as GrpcResponse, Status};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 use crate::config::{Config, IngestLimits, IngestProtocol, IngestTlsConfig};
-use crate::protocol::{read_record_with_limit, read_replay_ack, read_replay_request, write_record};
+use crate::protocol::{
+    ReplayHello, read_record_with_limit, read_replay_ack, read_replay_request, write_record,
+    write_replay_hello,
+};
 use crate::spool::Spool;
 use crate::tls::{load_ingest_server_config, load_server_config};
 use crate::{protocol::WireRecord};
@@ -31,8 +34,10 @@ pub struct DaemonConfig {
 }
 
 pub fn serve(config: DaemonConfig) -> io::Result<()> {
-    let spool = Arc::new(Mutex::new(Spool::open(config.config.storage.clone())?));
-    let next_seq = Arc::new(AtomicU64::new(1));
+    let spool_inner = Spool::open(config.config.storage.clone())?;
+    let next_seq_seed = spool_inner.next_sequence_seed()?;
+    let spool = Arc::new(Mutex::new(spool_inner));
+    let next_seq = Arc::new(AtomicU64::new(next_seq_seed));
 
     let replay_spool = Arc::clone(&spool);
     let replay_addr = config.config.replay_addr.clone();
@@ -551,6 +556,20 @@ fn handle_replay_transport<T: io::Read + io::Write>(
     spool: Arc<Mutex<Spool>>,
     poll_interval_ms: u64,
 ) -> io::Result<()> {
+    let hello = {
+        let spool = spool
+            .lock()
+            .map_err(|_| io::Error::other("spool mutex poisoned"))?;
+        let (first_seq, last_seq) = spool.sequence_bounds()?.unwrap_or((0, 0));
+        ReplayHello {
+            stream_id: spool.stream_id(),
+            first_seq,
+            last_seq,
+        }
+    };
+    write_replay_hello(transport, &hello)?;
+    transport.flush()?;
+
     let request = read_replay_request(transport)?;
     let mut last_seq = request.from_seq;
     let sleep = Duration::from_millis(poll_interval_ms);
