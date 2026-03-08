@@ -63,7 +63,11 @@ START_OFFSET=$((FILE_SIZE / 3))
 echo
 echo "original file size: $FILE_SIZE bytes"
 echo "cutting out the middle third: offset=$START_OFFSET size=$CHUNK_SIZE"
-dd if="$ORIGINAL_FILE" of="$DAMAGED_FILE" bs=1 skip="$START_OFFSET" count="$CHUNK_SIZE" status=none
+if dd --version >/dev/null 2>&1; then
+    dd if="$ORIGINAL_FILE" of="$DAMAGED_FILE" bs=1 skip="$START_OFFSET" count="$CHUNK_SIZE" status=none
+else
+    dd if="$ORIGINAL_FILE" of="$DAMAGED_FILE" bs=1 skip="$START_OFFSET" count="$CHUNK_SIZE" 2>/dev/null
+fi
 
 echo
 echo "inspecting original file"
