@@ -10,6 +10,7 @@ pub struct Config {
     pub replay_addr: String,
     pub poll_interval_ms: u64,
     pub collector: CollectorConfig,
+    pub upstream: UpstreamConfig,
     pub storage: StorageConfig,
 }
 
@@ -51,6 +52,13 @@ pub struct CollectorConfig {
     pub timeout_ms: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct UpstreamConfig {
+    pub replay_addr: Option<String>,
+    pub retry_ms: u64,
+    pub connect_timeout_ms: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     output: Option<String>,
@@ -78,6 +86,12 @@ struct RawConfig {
     collector_url: Option<String>,
     #[serde(rename = "collector.timeout-ms")]
     collector_timeout_ms: Option<u64>,
+    #[serde(rename = "upstream.replay")]
+    upstream_replay_addr: Option<String>,
+    #[serde(rename = "upstream.retry-ms")]
+    upstream_retry_ms: Option<u64>,
+    #[serde(rename = "upstream.connect-timeout-ms")]
+    upstream_connect_timeout_ms: Option<u64>,
 }
 
 impl Config {
@@ -99,6 +113,9 @@ impl Config {
                 poll_interval_ms: None,
                 collector_url: None,
                 collector_timeout_ms: None,
+                upstream_replay_addr: None,
+                upstream_retry_ms: None,
+                upstream_connect_timeout_ms: None,
             }
         } else {
             return Err(format!("config file not found: {}", path.display()).into());
@@ -123,6 +140,11 @@ impl Config {
                 .collector_url
                 .unwrap_or_else(|| "http://127.0.0.1:4318/v1/logs".to_string()),
             timeout_ms: raw.collector_timeout_ms.unwrap_or(10_000),
+        };
+        let upstream = UpstreamConfig {
+            replay_addr: raw.upstream_replay_addr,
+            retry_ms: raw.upstream_retry_ms.unwrap_or(1_000),
+            connect_timeout_ms: raw.upstream_connect_timeout_ms.unwrap_or(5_000),
         };
         let keep_messages = raw.buffer_keep.unwrap_or(0);
 
@@ -150,6 +172,7 @@ impl Config {
             replay_addr,
             poll_interval_ms,
             collector,
+            upstream,
             storage,
         })
     }

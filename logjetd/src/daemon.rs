@@ -16,7 +16,7 @@ use tiny_http::{Method, Response, Server, StatusCode};
 use tonic::{Request, Response as GrpcResponse, Status};
 
 use crate::config::{Config, IngestProtocol};
-use crate::protocol::read_record;
+use crate::protocol::{read_record, read_replay_request};
 use crate::spool::Spool;
 use crate::{protocol::WireRecord};
 
@@ -185,9 +185,16 @@ fn handle_replay_client(
     spool: Arc<Mutex<Spool>>,
     poll_interval_ms: u64,
 ) -> io::Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let request = read_replay_request(&mut reader)?;
     let mut writer = BufWriter::new(stream);
-    let mut last_seq = 0u64;
+    let mut last_seq = request.from_seq;
     let sleep = Duration::from_millis(poll_interval_ms);
+
+    eprintln!(
+        "logjetd replay client requested records after seq={}",
+        request.from_seq
+    );
 
     loop {
         let sent_any = {

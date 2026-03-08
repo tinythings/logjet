@@ -1,12 +1,14 @@
 use std::fs::File;
 use std::io::{self, BufReader, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::Duration;
 
 use logjet::{LogjetReader, ReaderConfig, RecordType};
 
-use crate::config::CollectorConfig;
+use crate::config::{CollectorConfig, UpstreamConfig};
+use crate::protocol::{ReplayRequest, read_record, write_replay_request};
 use crate::spool::list_named_segments;
 
 pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorConfig) -> io::Result<u64> {
@@ -36,8 +38,65 @@ pub fn validate_replay_path(path: &Path, name: &str) -> io::Result<Vec<PathBuf>>
     Ok(segments.into_iter().map(|segment| segment.path).collect())
 }
 
+pub fn bridge_wire_to_otlp_http(
+    source: &str,
+    collector: &CollectorConfig,
+    upstream: &UpstreamConfig,
+) -> io::Result<()> {
+    let endpoint = CollectorEndpoint::parse(&collector.url)?;
+    let collector_timeout = Duration::from_millis(collector.timeout_ms);
+    let connect_timeout = Duration::from_millis(upstream.connect_timeout_ms);
+    let retry_delay = Duration::from_millis(upstream.retry_ms);
+    let mut last_seq = 0u64;
+
+    loop {
+        match bridge_once(source, &endpoint, collector_timeout, connect_timeout, &mut last_seq) {
+            Ok(()) => {
+                eprintln!(
+                    "bridge source {source} closed after seq={last_seq}; reconnecting in {} ms",
+                    upstream.retry_ms
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "bridge source {source} error after seq={last_seq}: {err}; reconnecting in {} ms",
+                    upstream.retry_ms
+                );
+            }
+        }
+        thread::sleep(retry_delay);
+    }
+}
+
+fn bridge_once(
+    source: &str,
+    endpoint: &CollectorEndpoint,
+    collector_timeout: Duration,
+    connect_timeout: Duration,
+    last_seq: &mut u64,
+) -> io::Result<()> {
+    let mut stream = connect_with_timeout(source, connect_timeout)?;
+    stream.set_read_timeout(None)?;
+    stream.set_write_timeout(Some(connect_timeout))?;
+    write_replay_request(&mut stream, &ReplayRequest { from_seq: *last_seq })?;
+    stream.flush()?;
+    eprintln!(
+        "bridge connected to {} and requested records after seq={}",
+        source, *last_seq
+    );
+
+    while let Some(record) = read_record(&mut stream)? {
+        if record.record_type == RecordType::Logs {
+            post_raw_otlp_http(endpoint, collector_timeout, &record.payload)?;
+        }
+        *last_seq = record.seq;
+    }
+
+    Ok(())
+}
+
 fn post_raw_otlp_http(endpoint: &CollectorEndpoint, timeout: Duration, payload: &[u8]) -> io::Result<()> {
-    let mut stream = TcpStream::connect(&endpoint.authority)?;
+    let mut stream = connect_with_timeout(&endpoint.authority, timeout)?;
     stream.set_write_timeout(Some(timeout))?;
     stream.set_read_timeout(Some(timeout))?;
 
@@ -61,6 +120,23 @@ fn post_raw_otlp_http(endpoint: &CollectorEndpoint, timeout: Duration, payload: 
     }
 
     Ok(())
+}
+
+fn connect_with_timeout(authority: &str, timeout: Duration) -> io::Result<TcpStream> {
+    let mut last_err = None;
+    for addr in authority.to_socket_addrs()? {
+        match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(err) => last_err = Some(err),
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("collector or upstream address could not be resolved: {authority}"),
+        )
+    }))
 }
 
 fn to_io_error(err: logjet::Error) -> io::Error {
