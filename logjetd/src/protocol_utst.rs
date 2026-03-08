@@ -1,5 +1,5 @@
 use super::{
-    ReplayAck, ReplayRequest, WireRecord, read_record, read_replay_ack, read_replay_request,
+    ReplayAck, ReplayRequest, WireRecord, read_record, read_record_with_limit, read_replay_ack, read_replay_request,
     write_record, write_replay_ack, write_replay_request,
 };
 use logjet::RecordType;
@@ -60,6 +60,20 @@ fn unsupported_record_version_is_rejected() {
     bytes.extend_from_slice(&0u32.to_le_bytes());
 
     let err = read_record(&mut bytes.as_slice()).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn record_payload_over_limit_is_rejected() {
+    let record = WireRecord {
+        record_type: RecordType::Logs,
+        seq: 42,
+        ts_unix_ns: 77,
+        payload: b"abcdef".to_vec(),
+    };
+    let mut bytes = Vec::new();
+    write_record(&mut bytes, &record).unwrap();
+    let err = read_record_with_limit(&mut bytes.as_slice(), 5).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
