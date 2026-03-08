@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut stream = TcpStream::connect(&source)?;
+    read_replay_hello(&mut stream)?;
     write_replay_request(&mut stream, 0)?;
     let mut forwarded = 0u64;
 
@@ -45,6 +46,25 @@ fn write_replay_request(stream: &mut TcpStream, from_seq: u64) -> io::Result<()>
     stream.write_all(&[1])?;
     stream.write_all(&[0u8; 7])?;
     stream.write_all(&from_seq.to_le_bytes())?;
+    Ok(())
+}
+
+fn read_replay_hello(stream: &mut TcpStream) -> io::Result<()> {
+    let mut magic = [0u8; 8];
+    stream.read_exact(&mut magic)?;
+    if magic != *b"LJRPH001" {
+        return Err(io::Error::new(ErrorKind::InvalidData, "invalid replay hello magic"));
+    }
+
+    let mut header = [0u8; 32];
+    stream.read_exact(&mut header)?;
+    if header[0] != 1 {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!("unsupported replay hello version: {}", header[0]),
+        ));
+    }
+
     Ok(())
 }
 
