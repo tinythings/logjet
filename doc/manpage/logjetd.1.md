@@ -166,6 +166,7 @@ collector.key-file: /etc/logjet/collector.key
 collector.server-name: collector.internal
 backpressure.enabled: false
 backpressure.mode: disconnect
+backpressure.max-buffered-records: 16
 upstream.replay: 10.0.0.15:7002
 upstream.mode: keep
 upstream.state-file: /var/lib/logjet/bridge.state
@@ -208,7 +209,8 @@ Rules:
 - `collector.timeout-ms` configures replay and bridge socket timeout in milliseconds
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure HTTPS collector export
 - `backpressure.enabled` enables bridge backpressure policy handling
-- `backpressure.mode` configures whether bridge export blocks or disconnects when the collector is too slow
+- `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
+- `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection
 - `upstream.replay` configures the default bridge source
 - `upstream.mode` configures whether bridge keeps or drains upstream retained records
 - `upstream.state-file` stores persisted bridge resume state
@@ -257,6 +259,7 @@ Append-only file behaviour:
 - persisted bridge resume through `upstream.state-file`
 - upstream restart and storage-replacement detection through replay stream identity
 - basic backpressure policy through `backpressure.mode`
+- bounded bridge-side exporter queue through `backpressure.max-buffered-records`
 - optional TLS on replay/bridge transport
 - HTTPS OTLP collector export
 - one-shot file replay to OTLP/HTTP collectors with `logjetd replay`
@@ -267,7 +270,6 @@ Append-only file behaviour:
 
 - replay listener traffic is not OTLP
 - upstream storage reset and rollover handling is still basic
-- slow-consumer handling is limited to `block` and `disconnect`
 - ingest overload handling is limited to payload-size caps and concurrent-client caps
 - multi-client replay isolation is still basic beyond per-client cursors and replay-client caps
 - file mode does not delete old rotated files
