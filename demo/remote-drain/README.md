@@ -78,7 +78,7 @@ Expected result:
 - `BOOT MESSAGE #1`, `BOOT MESSAGE #2`, and `BOOT MESSAGE #3` always appear
 - the other boot messages may or may not appear, depending on when the remote side starts
 - backlog already retained on the appliance side is drained first
-- then new BOFH messages continue to appear live in the collector
+- then new BOFH messages continue to appear live in the collector without a polling delay
 
 Why this is timing-dependent:
 
