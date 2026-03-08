@@ -213,6 +213,45 @@ fn file_spool_reuses_existing_non_full_segment() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn file_spool_preserves_stream_id_and_advances_sequence_seed_after_reopen() {
+    let dir = unique_temp_dir("file-stream-id");
+    let config = FileConfig {
+        dir: dir.clone(),
+        name: "bofh.logjet".to_string(),
+        segment_size_bytes: 1024 * 1024,
+    };
+
+    let first_stream_id;
+    {
+        let mut spool = Spool::open(StorageConfig::File(config.clone())).unwrap();
+        first_stream_id = spool.stream_id();
+        assert_eq!(spool.next_sequence_seed().unwrap(), 1);
+        spool.append(WireRecord {
+            record_type: RecordType::Logs,
+            seq: 1,
+            ts_unix_ns: 1,
+            payload: vec![1u8; 8],
+        })
+        .unwrap();
+        spool.append(WireRecord {
+            record_type: RecordType::Logs,
+            seq: 2,
+            ts_unix_ns: 2,
+            payload: vec![2u8; 8],
+        })
+        .unwrap();
+    }
+
+    {
+        let spool = Spool::open(StorageConfig::File(config)).unwrap();
+        assert_eq!(spool.stream_id(), first_stream_id);
+        assert_eq!(spool.next_sequence_seed().unwrap(), 3);
+    }
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn unique_temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
