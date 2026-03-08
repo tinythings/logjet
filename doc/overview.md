@@ -24,6 +24,7 @@ The daemon provides:
 - OTLP/gRPC ingest listener
 - internal wire-protocol ingest listener
 - replay listener
+- continuous bridge mode to another collector through a remote replay listener
 - one-shot file replay to OTLP/HTTP collectors
 - configurable backlog storage
 - in-memory ring buffer mode
@@ -31,7 +32,8 @@ The daemon provides:
 
 ## Intended Use
 
-`logjetd` is meant to sit next to a local telemetry source such as `traceserver`.
+`logjetd` is meant to sit next to a local telemetry source such as an OTel
+Appliance (`OA`).
 
 Typical flow:
 
@@ -40,6 +42,14 @@ Typical flow:
 3. a downstream consumer connects to the replay listener
 4. `logjetd` sends retained backlog first
 5. `logjetd` continues sending newly ingested records
+
+`logjetd` can also run remotely in bridge mode:
+
+1. connect to another `logjetd` replay listener
+2. request records after a known sequence
+3. receive retained backlog
+4. stay attached for live records
+5. forward raw OTLP protobuf payloads into an OTLP/HTTP collector
 
 `logjetd` can also replay stored `.logjet` files later into an OTLP/HTTP
 collector without preserving original timing.
