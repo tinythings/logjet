@@ -11,6 +11,7 @@ pub struct Config {
     pub poll_interval_ms: u64,
     pub collector: CollectorConfig,
     pub upstream: UpstreamConfig,
+    pub tls: TlsConfig,
     pub storage: StorageConfig,
 }
 
@@ -59,6 +60,16 @@ pub struct UpstreamConfig {
     pub connect_timeout_ms: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    pub enable: bool,
+    pub ca_file: Option<PathBuf>,
+    pub cert_file: Option<PathBuf>,
+    pub key_file: Option<PathBuf>,
+    pub require_client_cert: bool,
+    pub server_name: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     output: Option<String>,
@@ -92,6 +103,18 @@ struct RawConfig {
     upstream_retry_ms: Option<u64>,
     #[serde(rename = "upstream.connect-timeout-ms")]
     upstream_connect_timeout_ms: Option<u64>,
+    #[serde(rename = "tls.enable")]
+    tls_enable: Option<bool>,
+    #[serde(rename = "tls.ca-file")]
+    tls_ca_file: Option<PathBuf>,
+    #[serde(rename = "tls.cert-file")]
+    tls_cert_file: Option<PathBuf>,
+    #[serde(rename = "tls.key-file")]
+    tls_key_file: Option<PathBuf>,
+    #[serde(rename = "tls.require-client-cert")]
+    tls_require_client_cert: Option<bool>,
+    #[serde(rename = "tls.server-name")]
+    tls_server_name: Option<String>,
 }
 
 impl Config {
@@ -116,6 +139,12 @@ impl Config {
                 upstream_replay_addr: None,
                 upstream_retry_ms: None,
                 upstream_connect_timeout_ms: None,
+                tls_enable: None,
+                tls_ca_file: None,
+                tls_cert_file: None,
+                tls_key_file: None,
+                tls_require_client_cert: None,
+                tls_server_name: None,
             }
         } else {
             return Err(format!("config file not found: {}", path.display()).into());
@@ -146,6 +175,14 @@ impl Config {
             retry_ms: raw.upstream_retry_ms.unwrap_or(1_000),
             connect_timeout_ms: raw.upstream_connect_timeout_ms.unwrap_or(5_000),
         };
+        let tls = TlsConfig {
+            enable: raw.tls_enable.unwrap_or(false),
+            ca_file: raw.tls_ca_file,
+            cert_file: raw.tls_cert_file,
+            key_file: raw.tls_key_file,
+            require_client_cert: raw.tls_require_client_cert.unwrap_or(false),
+            server_name: raw.tls_server_name,
+        };
         let keep_messages = raw.buffer_keep.unwrap_or(0);
 
         let storage = match output.as_str() {
@@ -173,6 +210,7 @@ impl Config {
             poll_interval_ms,
             collector,
             upstream,
+            tls,
             storage,
         })
     }
