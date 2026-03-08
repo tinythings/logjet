@@ -9,7 +9,7 @@ CONFIG="$SCRIPT_DIR/logjetd.conf"
 
 if [ ! -x "$LOGJETD" ]; then
     echo "missing $LOGJETD"
-    echo "build it first with: make devel"
+    echo "build it first with: make demo"
     exit 1
 fi
 
