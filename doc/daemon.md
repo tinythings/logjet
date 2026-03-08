@@ -54,6 +54,9 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - supports `ingest.protocol: otlp-http`
 - supports `ingest.protocol: otlp-grpc`
 - supports TLS on OTLP/HTTP and OTLP/gRPC ingest with `ingest.*`
+- can rate-limit accepted ingest batches through `ingest.max-batches-per-second`
+- can keep higher-severity OTLP log batches during overload through `ingest.priority-severity-at-least`
+- can emit overload counters on stderr through `ingest.overload-report-ms`
 - stores raw OTLP protobuf bytes in configured storage
 
 ### Replay
@@ -143,6 +146,7 @@ What exists now:
 - wire-protocol ingest
 - OTLP/HTTP ingest
 - OTLP/gRPC ingest
+- ingest overload policy with rate limiting and severity-aware shedding
 - TCP replay
 - per-client replay cursors
 - basic replay-client caps

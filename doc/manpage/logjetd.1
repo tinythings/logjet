@@ -218,6 +218,9 @@ ingest.key-file: /etc/logjet/ingest.key
 ingest.require-client-cert: false
 ingest.max-batch-bytes: 1048576
 ingest.max-clients: 32
+ingest.max-batches-per-second: 0
+ingest.priority-severity-at-least: error
+ingest.overload-report-ms: 5000
 replay.listen: 0.0.0.0:7002
 replay.max-clients: 32
 replay.client-timeout-ms: 10000
@@ -244,6 +247,15 @@ and \f[C]otlp-grpc\f[R]
 before they are stored
 .IP \[bu] 2
 \f[C]ingest.max-clients\f[R] caps concurrent ingest handling
+.IP \[bu] 2
+\f[C]ingest.max-batches-per-second\f[R] caps accepted ingest batches per
+second
+.IP \[bu] 2
+\f[C]ingest.priority-severity-at-least\f[R] lets higher-severity OTLP
+log batches bypass overload shedding
+.IP \[bu] 2
+\f[C]ingest.overload-report-ms\f[R] controls operator-visible overload
+summaries on stderr
 .IP \[bu] 2
 \f[C]replay.max-clients\f[R] caps concurrent replay clients
 .IP \[bu] 2
@@ -322,6 +334,8 @@ optional TLS on OTLP/HTTP and OTLP/gRPC ingest
 .IP \[bu] 2
 basic ingest guardrails through \f[C]ingest.max-batch-bytes\f[R] and
 \f[C]ingest.max-clients\f[R]
+.IP \[bu] 2
+ingest rate limiting with severity-aware overload shedding
 .IP \[bu] 2
 append-only \f[C].logjet\f[R] file output with size-based rotation
 .IP \[bu] 2

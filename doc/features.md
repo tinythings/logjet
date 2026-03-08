@@ -23,6 +23,9 @@ Current behaviour:
 - OTLP/gRPC ingest can also run over TLS
 - rejects oversized batches through `ingest.max-batch-bytes`
 - can cap concurrent ingest handling through `ingest.max-clients`
+- can rate-limit accepted ingest batches through `ingest.max-batches-per-second`
+- can keep higher-severity OTLP log batches during overload through `ingest.priority-severity-at-least`
+- emits overload counters on stderr through `ingest.overload-report-ms`
 - validates that the request decodes as `ExportLogsServiceRequest`
 - stores the raw OTLP protobuf bytes
 - assigns a local sequence number for internal replay ordering

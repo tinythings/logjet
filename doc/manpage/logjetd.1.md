@@ -187,6 +187,9 @@ ingest.key-file: /etc/logjet/ingest.key
 ingest.require-client-cert: false
 ingest.max-batch-bytes: 1048576
 ingest.max-clients: 32
+ingest.max-batches-per-second: 0
+ingest.priority-severity-at-least: error
+ingest.overload-report-ms: 5000
 replay.listen: 0.0.0.0:7002
 replay.max-clients: 32
 replay.client-timeout-ms: 10000
@@ -202,6 +205,9 @@ Rules:
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `ingest.max-batch-bytes` rejects oversized OTLP or wire payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling
+- `ingest.max-batches-per-second` caps accepted ingest batches per second
+- `ingest.priority-severity-at-least` lets higher-severity OTLP log batches bypass overload shedding
+- `ingest.overload-report-ms` controls operator-visible overload summaries on stderr
 - `replay.max-clients` caps concurrent replay clients
 - `replay.client-timeout-ms` caps how long one replay client can block on socket I/O
 - `collector.url` configures replay destination URL
@@ -247,6 +253,7 @@ Append-only file behaviour:
 - OTLP/gRPC log ingest on the standard logs export service
 - optional TLS on OTLP/HTTP and OTLP/gRPC ingest
 - basic ingest guardrails through `ingest.max-batch-bytes` and `ingest.max-clients`
+- ingest rate limiting with severity-aware overload shedding
 - append-only `.logjet` file output with size-based rotation
 - in-memory ring buffering with `buffer.keep`
 - replay listener for downstream consumers using the internal framed protocol

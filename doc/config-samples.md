@@ -74,7 +74,30 @@ Useful when you want local persistence and later manual extraction.
 output: file
 file.path: /data/logjet
 file.size: 2048
-file.name: ts.logjet
+file.name: oa.logjet
 ingest.listen: 127.0.0.1:7001
 replay.listen: 127.0.0.1:7002
 ```
+
+## 5. Ingest Overload Shedding
+
+Use this when the source can burst far beyond what the appliance should accept.
+
+```yaml
+output: buffer
+buffer.messages: 64
+buffer.keep: 0
+ingest.listen: 127.0.0.1:4318
+ingest.protocol: otlp-http
+ingest.max-batches-per-second: 20
+ingest.priority-severity-at-least: error
+ingest.overload-report-ms: 1000
+replay.listen: 127.0.0.1:7002
+```
+
+Behaviour:
+
+- accepts up to 20 ingest batches per second
+- sheds lower-severity OTLP log batches once the rate limit is full
+- still keeps `error` and `fatal` OTLP log batches during overload
+- prints overload counters to stderr roughly once per second while overload persists
