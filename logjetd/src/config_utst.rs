@@ -1,6 +1,6 @@
 use super::{BufferLimit, Config, IngestProtocol, StorageConfig};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -17,6 +17,12 @@ fn empty_config_file_uses_defaults() {
     assert!(config.upstream.replay_addr.is_none());
     assert_eq!(config.upstream.retry_ms, 1_000);
     assert_eq!(config.upstream.connect_timeout_ms, 5_000);
+    assert!(!config.tls.enable);
+    assert!(config.tls.ca_file.is_none());
+    assert!(config.tls.cert_file.is_none());
+    assert!(config.tls.key_file.is_none());
+    assert!(!config.tls.require_client_cert);
+    assert!(config.tls.server_name.is_none());
 
     match config.storage {
         StorageConfig::Buffer(buffer) => assert_eq!(buffer.limit, BufferLimit::Bytes(100 * 1024)),
@@ -41,7 +47,7 @@ fn buffer_size_and_messages_conflict() {
 fn file_mode_and_collector_settings_parse() {
     let path = write_temp_config(
         "file-mode",
-        "output: file\nfile.path: ./logs\nfile.size: 16\nfile.name: bofh.logjet\ningest.protocol: otlp-grpc\ncollector.url: http://127.0.0.1:4320/custom\ncollector.timeout-ms: 3210\nupstream.replay: 10.0.0.15:7002\nupstream.retry-ms: 222\nupstream.connect-timeout-ms: 333\n",
+        "output: file\nfile.path: ./logs\nfile.size: 16\nfile.name: bofh.logjet\ningest.protocol: otlp-grpc\ncollector.url: http://127.0.0.1:4320/custom\ncollector.timeout-ms: 3210\nupstream.replay: 10.0.0.15:7002\nupstream.retry-ms: 222\nupstream.connect-timeout-ms: 333\ntls.enable: true\ntls.ca-file: ./ca.pem\ntls.cert-file: ./node.pem\ntls.key-file: ./node.key\ntls.require-client-cert: true\ntls.server-name: appliance.internal\n",
     );
     let config = Config::load(&path).unwrap();
 
@@ -51,6 +57,12 @@ fn file_mode_and_collector_settings_parse() {
     assert_eq!(config.upstream.replay_addr.as_deref(), Some("10.0.0.15:7002"));
     assert_eq!(config.upstream.retry_ms, 222);
     assert_eq!(config.upstream.connect_timeout_ms, 333);
+    assert!(config.tls.enable);
+    assert_eq!(config.tls.ca_file.as_deref(), Some(Path::new("./ca.pem")));
+    assert_eq!(config.tls.cert_file.as_deref(), Some(Path::new("./node.pem")));
+    assert_eq!(config.tls.key_file.as_deref(), Some(Path::new("./node.key")));
+    assert!(config.tls.require_client_cert);
+    assert_eq!(config.tls.server_name.as_deref(), Some("appliance.internal"));
 
     match config.storage {
         StorageConfig::File(file) => {
