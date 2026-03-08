@@ -34,9 +34,9 @@ pub struct FileSpool {
 }
 
 #[derive(Debug, Clone)]
-struct SegmentInfo {
-    id: u64,
-    path: PathBuf,
+pub struct SegmentInfo {
+    pub id: u64,
+    pub path: PathBuf,
 }
 
 impl Spool {
@@ -285,6 +285,10 @@ fn list_segments(dir: &Path, base_stem: &str) -> io::Result<Vec<SegmentInfo>> {
 
     segments.sort_by_key(|segment| segment.id);
     Ok(segments)
+}
+
+pub fn list_named_segments(dir: &Path, file_name: &str) -> io::Result<Vec<SegmentInfo>> {
+    list_segments(dir, &derive_base_stem(file_name))
 }
 
 fn derive_base_stem(file_name: &str) -> String {
