@@ -41,6 +41,7 @@ The daemon provides:
 - configurable backlog storage
 - in-memory ring buffer mode
 - file output mode with `.logjet` segment rotation
+- file segment inspection and pruning commands for explicit archive housekeeping
 
 ## Intended Use
 
