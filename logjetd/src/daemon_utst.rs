@@ -1,4 +1,12 @@
-use super::{ConnectionLimiter, read_http_request, write_http_response};
+use super::{
+    BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy, classify_otlp_batch_priority,
+    read_http_request, write_http_response,
+};
+use crate::config::{IngestOverloadConfig, SeverityFloor};
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope};
+use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
+use opentelemetry_proto::tonic::resource::v1::Resource;
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -73,6 +81,15 @@ fn write_http_response_supports_service_unavailable_status() {
 }
 
 #[test]
+fn write_http_response_supports_too_many_requests_status() {
+    let mut bytes = Vec::new();
+    write_http_response(&mut bytes, 429, "rate limit exceeded").unwrap();
+    let response = String::from_utf8(bytes).unwrap();
+    assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
+    assert!(response.ends_with("rate limit exceeded"));
+}
+
+#[test]
 fn connection_limiter_rejects_when_max_clients_is_reached() {
     let limiter = Arc::new(ConnectionLimiter::new(1));
     let first = limiter.try_acquire();
@@ -91,4 +108,78 @@ fn connection_limiter_accepts_again_after_permit_is_dropped() {
 
     let second = limiter.try_acquire();
     assert!(second.is_some());
+}
+
+#[test]
+fn ingest_policy_rate_limits_low_priority_batches() {
+    let policy = SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 1,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    });
+    assert_eq!(policy.decide(BatchPriority::Warn).unwrap(), IngestDecision::Accept);
+    assert_eq!(
+        policy.decide(BatchPriority::Warn).unwrap(),
+        IngestDecision::RejectRateLimited
+    );
+}
+
+#[test]
+fn ingest_policy_allows_priority_bypass_above_threshold() {
+    let policy = SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 1,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    });
+    assert_eq!(policy.decide(BatchPriority::Warn).unwrap(), IngestDecision::Accept);
+    assert_eq!(
+        policy.decide(BatchPriority::Error).unwrap(),
+        IngestDecision::AcceptPriorityBypass
+    );
+}
+
+#[test]
+fn classify_otlp_batch_priority_uses_highest_log_severity() {
+    let batch = ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            resource: Some(Resource {
+                attributes: Vec::new(),
+                dropped_attributes_count: 0,
+            }),
+            scope_logs: vec![ScopeLogs {
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: Vec::new(),
+                    dropped_attributes_count: 0,
+                }),
+                log_records: vec![
+                    LogRecord {
+                        severity_number: 13,
+                        severity_text: "WARN".to_string(),
+                        body: Some(AnyValue {
+                            value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                                "warn".to_string(),
+                            )),
+                        }),
+                        ..Default::default()
+                    },
+                    LogRecord {
+                        severity_number: 17,
+                        severity_text: "ERROR".to_string(),
+                        body: Some(AnyValue {
+                            value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                                "error".to_string(),
+                            )),
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+
+    assert_eq!(classify_otlp_batch_priority(&batch), BatchPriority::Error);
 }
