@@ -26,8 +26,17 @@ const BOFH_EXCUSES: &[&str] = &[
 ];
 
 pub fn build_excuse_request(sequence: u64) -> ExportLogsServiceRequest {
+    build_message_request(
+        sequence,
+        format!(
+            "BOFH excuse #{sequence}: {}",
+            BOFH_EXCUSES[(sequence as usize) % BOFH_EXCUSES.len()]
+        ),
+    )
+}
+
+pub fn build_message_request(sequence: u64, body: String) -> ExportLogsServiceRequest {
     let nanos = unix_time_nanos();
-    let body = BOFH_EXCUSES[(sequence as usize) % BOFH_EXCUSES.len()];
 
     ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
@@ -53,7 +62,7 @@ pub fn build_excuse_request(sequence: u64) -> ExportLogsServiceRequest {
                     severity_text: "WARN".to_string(),
                     body: Some(AnyValue {
                         value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                            format!("BOFH excuse #{sequence}: {body}"),
+                            body,
                         )),
                     }),
                     attributes: vec![
@@ -76,11 +85,14 @@ pub fn build_excuse_request(sequence: u64) -> ExportLogsServiceRequest {
 }
 
 pub fn post_otlp_http(addr: &str, request: &ExportLogsServiceRequest) -> io::Result<()> {
+    post_raw_otlp_http(addr, &request.encode_to_vec())
+}
+
+pub fn post_raw_otlp_http(addr: &str, body: &[u8]) -> io::Result<()> {
     let mut stream = TcpStream::connect(addr)?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
 
-    let body = request.encode_to_vec();
     write!(
         stream,
         "POST /v1/logs HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
