@@ -196,6 +196,7 @@ collector.cert-file: /etc/logjet/collector.pem
 collector.key-file: /etc/logjet/collector.key
 collector.server-name: vector.internal
 upstream.replay: 10.0.0.15:7002
+upstream.mode: keep
 upstream.retry-ms: 1000
 upstream.connect-timeout-ms: 5000
 tls.enable: false
@@ -242,6 +243,9 @@ timeout in milliseconds
 configure HTTPS collector export
 .IP \[bu] 2
 \f[C]upstream.replay\f[R] configures the default bridge source
+.IP \[bu] 2
+\f[C]upstream.mode\f[R] configures whether bridge keeps or drains
+upstream retained records
 .IP \[bu] 2
 \f[C]upstream.retry-ms\f[R] configures bridge reconnect delay
 .IP \[bu] 2
@@ -297,6 +301,8 @@ protocol
 .IP \[bu] 2
 continuous bridge mode from replay listener to OTLP/HTTP collectors
 .IP \[bu] 2
+acknowledged drain mode through \f[C]upstream.mode: drain\f[R]
+.IP \[bu] 2
 optional TLS on replay/bridge transport
 .IP \[bu] 2
 HTTPS OTLP collector export
@@ -311,7 +317,7 @@ inspection of \f[C].logjet\f[R] files and directories
 .IP \[bu] 2
 replay listener traffic is not OTLP
 .IP \[bu] 2
-persisted resume checkpoints and acknowledgements are not implemented
+persisted resume checkpoints are not implemented
 .IP \[bu] 2
 slow-consumer handling is basic
 .IP \[bu] 2
