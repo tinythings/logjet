@@ -16,6 +16,9 @@ blasting daemon
 \f[C]logjetd\f[R] \f[C]replay\f[R] [\f[C]-c\f[R]|\f[C]--config\f[R]
 \f[I]path\f[R]] \f[C]--path\f[R] \f[I]dir\f[R] \f[C]--name\f[R]
 \f[I]base.logjet\f[R] \f[C]--dest\f[R] \f[I]url-or-host:port\f[R]
+.PP
+\f[C]logjetd\f[R] \f[C]bridge\f[R] [\f[C]-c\f[R]|\f[C]--config\f[R]
+\f[I]path\f[R]] \f[C]--source\f[R] \f[I]host:port\f[R]
 .SH DESCRIPTION
 .PP
 \f[C]logjetd\f[R] is a small telemetry daemon for constrained systems.
@@ -32,6 +35,9 @@ store raw OTLP protobuf payloads either in memory or in append-only
 .IP \[bu] 2
 expose a replay listener for downstream consumers over the current
 internal wire protocol
+.IP \[bu] 2
+connect to another \f[C]logjetd\f[R] replay listener and forward backlog
+plus live records into an OTLP/HTTP collector
 .IP \[bu] 2
 inspect \f[C].logjet\f[R] files and directories
 .IP \[bu] 2
@@ -59,6 +65,22 @@ a replay listener socket is exposed for downstream clients
 .IP \[bu] 2
 replay listener traffic currently uses the internal framed protocol, not
 OTLP egress
+.SS bridge
+.PP
+Connect to another \f[C]logjetd\f[R] replay listener, drain retained
+backlog, stay attached for live records, and forward OTLP log payloads
+to the configured collector.
+.PP
+Example:
+.IP
+.nf
+\f[C]
+logjetd --config ./logjetd.conf bridge --source 10.0.0.15:7002
+\f[R]
+.fi
+.PP
+If \f[C]--source\f[R] is omitted, bridge uses \f[C]upstream.replay\f[R]
+from configuration.
 .SS inspect
 .PP
 Inspect a \f[C].logjet\f[R] file or a directory containing
@@ -133,6 +155,13 @@ If a full \f[C]http://host:port/path\f[R] URL is given, replay uses that
 exact path.
 If only \f[C]host:port\f[R] is given, replay defaults to
 \f[C]/v1/logs\f[R].
+.SS \f[C]--source\f[R] \f[I]host:port\f[R]
+.PP
+Upstream \f[C]logjetd\f[R] replay listener for the \f[C]bridge\f[R]
+command.
+.PP
+If omitted, \f[C]bridge\f[R] uses \f[C]upstream.replay\f[R] from
+configuration.
 .SH CONFIGURATION
 .PP
 Default configuration path:
@@ -156,6 +185,9 @@ file.size: 10240
 file.name: vehicle.logjet
 collector.url: http://127.0.0.1:4318/v1/logs
 collector.timeout-ms: 10000
+upstream.replay: 10.0.0.15:7002
+upstream.retry-ms: 1000
+upstream.connect-timeout-ms: 5000
 ingest.protocol: otlp-http
 ingest.listen: 127.0.0.1:4318
 replay.listen: 0.0.0.0:7002
@@ -181,8 +213,15 @@ file mode always keeps all rotated files
 .IP \[bu] 2
 \f[C]collector.url\f[R] configures replay destination URL
 .IP \[bu] 2
-\f[C]collector.timeout-ms\f[R] configures replay socket timeout in
-milliseconds
+\f[C]collector.timeout-ms\f[R] configures replay and bridge socket
+timeout in milliseconds
+.IP \[bu] 2
+\f[C]upstream.replay\f[R] configures the default bridge source
+.IP \[bu] 2
+\f[C]upstream.retry-ms\f[R] configures bridge reconnect delay
+.IP \[bu] 2
+\f[C]upstream.connect-timeout-ms\f[R] configures bridge source connect
+timeout
 .SH STORAGE MODES
 .SS Buffer mode
 .PP
@@ -223,6 +262,8 @@ in-memory ring buffering with \f[C]buffer.keep\f[R]
 replay listener for downstream consumers using the internal framed
 protocol
 .IP \[bu] 2
+continuous bridge mode from replay listener to OTLP/HTTP collectors
+.IP \[bu] 2
 one-shot file replay to OTLP/HTTP collectors with
 \f[C]logjetd replay\f[R]
 .IP \[bu] 2
@@ -231,11 +272,9 @@ configurable replay destination via \f[C]collector.url\f[R]
 inspection of \f[C].logjet\f[R] files and directories
 .SH CURRENT LIMITATIONS
 .IP \[bu] 2
-continuous OTLP egress from the daemon is not implemented
-.IP \[bu] 2
 replay listener traffic is not OTLP
 .IP \[bu] 2
-resume checkpoints and acknowledgements are not implemented
+persisted resume checkpoints and acknowledgements are not implemented
 .IP \[bu] 2
 slow-consumer handling is basic
 .IP \[bu] 2
@@ -263,6 +302,14 @@ Replay files to a local collector:
 .nf
 \f[C]
 logjetd --config ./logjetd.conf replay --path ./logs --name bofh.logjet
+\f[R]
+.fi
+.PP
+Bridge from a remote replay listener into a collector:
+.IP
+.nf
+\f[C]
+logjetd --config ./logjetd.conf bridge --source 10.0.0.15:7002
 \f[R]
 .fi
 .SH FILES
