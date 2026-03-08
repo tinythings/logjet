@@ -27,6 +27,7 @@ The daemon provides:
 - replay listener
 - continuous bridge mode to another collector through a remote replay listener
 - configurable keep-or-drain bridge semantics
+- optional persisted bridge resume state
 - optional TLS on the replay/bridge transport
 - HTTPS collector export
 - one-shot file replay to OTLP/HTTP collectors
