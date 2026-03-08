@@ -45,6 +45,10 @@ Current behaviour:
   - `name.logjet`
   - `name-1.logjet`
   - `name-2.logjet`
+- file-mode operational tooling exists through:
+  - `logjetd segments --path ... --name ...`
+  - `logjetd prune --path ... --name ... --keep-files ...`
+  - `logjetd prune --path ... --name ... --keep-bytes ...`
 
 ### 3. In-memory ring buffer mode
 
@@ -182,6 +186,24 @@ Current config areas:
 `logjetd` can inspect stored `.logjet` files or directories and print metadata
 about retained records.
 
+### 10. File-mode operational tooling
+
+`logjetd` can report and prune rotated file segments explicitly.
+
+Current behaviour:
+
+- `logjetd segments --path <dir> --name <base.logjet>` prints ordered segment metadata
+- output includes:
+  - segment id
+  - file path
+  - file size
+  - record count
+  - first and last sequence in that segment
+- `logjetd prune --path <dir> --name <base.logjet> --keep-files <n>` removes oldest rotated segments and keeps the newest `n` segment files
+- `logjetd prune --path <dir> --name <base.logjet> --keep-bytes <bytes>` removes oldest rotated segments until the newest retained set fits within the byte budget
+- `--dry-run` shows what would be removed without deleting anything
+- the newest active segment is always retained
+
 ## Current Use Cases
 
 ### 1. Local OTLP capture to files
@@ -250,7 +272,21 @@ Useful when:
 - you need bulk backfill of recorded OTLP logs
 - you want to validate stored files against a collector pipeline
 
-### 6. Continuous remote drain into a collector
+### 6. File archive housekeeping outside the daemon
+
+Use case:
+
+- file mode keeps rotated segments on disk
+- an operator wants to inspect segment growth and prune old archives deliberately
+- file retention should be managed as an explicit operational step rather than hidden daemon behaviour
+
+Useful when:
+
+- archived files must be trimmed before shipping or collection
+- retention differs between deployments
+- operators need a safe dry-run before removing old segments
+
+### 7. Continuous remote drain into a collector
 
 Use case:
 
