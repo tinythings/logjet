@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, ErrorKind, Read};
+use std::io::{self, ErrorKind, Read, Write};
 use std::net::TcpStream;
 
 use logjet::RecordType;
@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut stream = TcpStream::connect(&source)?;
+    write_replay_request(&mut stream, 0)?;
     let mut forwarded = 0u64;
 
     while let Some(record) = read_wire_record(&mut stream)? {
@@ -36,6 +37,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     eprintln!("forwarded {forwarded} record(s)");
+    Ok(())
+}
+
+fn write_replay_request(stream: &mut TcpStream, from_seq: u64) -> io::Result<()> {
+    stream.write_all(b"LJRPL001")?;
+    stream.write_all(&[1])?;
+    stream.write_all(&[0u8; 7])?;
+    stream.write_all(&from_seq.to_le_bytes())?;
     Ok(())
 }
 
