@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let server = Server::http(&bind_addr)?;
 
-    eprintln!("otlp-rainbow-collector listening on http://{bind_addr}/v1/logs");
+    eprintln!("otlp-demo-collector listening on http://{bind_addr}/v1/logs");
 
     for mut request in server.incoming_requests() {
         if request.method() != &Method::Post || request.url() != "/v1/logs" {
