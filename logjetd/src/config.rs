@@ -196,3 +196,7 @@ fn parse_buffer_limit(
         (None, None) => Ok(BufferLimit::Bytes(kib_to_bytes(100)?)),
     }
 }
+
+#[cfg(test)]
+#[path = "config_utst.rs"]
+mod config_utst;
