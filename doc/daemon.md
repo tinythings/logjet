@@ -38,6 +38,13 @@ Inspect a file or directory:
 logjetd inspect /var/lib/logjet
 ```
 
+Continuously bridge from another `logjetd` replay listener into an OTLP
+collector:
+
+```bash
+logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
+```
+
 ## Runtime Behavior
 
 ### Ingest
@@ -52,10 +59,21 @@ logjetd inspect /var/lib/logjet
 
 - binds to `replay.listen`
 - accepts TCP clients
+- expects a small replay request carrying `from_seq`
 - replays retained records in sequence order
 - continues polling for newly ingested records
 
-Replay is strictly sequential today. There is no checkpoint or resume token yet.
+Replay is strictly sequential today. Resume exists per connection via `from_seq`,
+but there is no persisted checkpoint yet.
+
+### Continuous Bridge
+
+- `logjetd bridge` connects to another `logjetd` replay listener
+- drains retained backlog first
+- continues forwarding newly replayed records
+- forwards OTLP log payloads to `collector.url`
+- reconnects after disconnect using the last in-process forwarded sequence
+- source address comes from `--source` or `upstream.replay`
 
 ### File Blast Replay
 
@@ -104,6 +122,7 @@ What exists now:
 - OTLP/HTTP ingest
 - OTLP/gRPC ingest
 - TCP replay
+- continuous daemon-to-daemon bridge to OTLP/HTTP collectors
 - one-shot file replay to OTLP/HTTP collectors
 - in-memory ring buffering
 - `.logjet` file output with rotation
@@ -111,6 +130,5 @@ What exists now:
 
 What does not exist yet:
 
-- continuous downstream OTLP export from the daemon
+- persisted reconnect resume from saved cursor
 - client acknowledgement protocol
-- reconnect resume from saved cursor

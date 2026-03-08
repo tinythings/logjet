@@ -17,6 +17,9 @@ file.size: 100          # KiB per file segment
 file.name: bar.logjet   # base file name
 collector.url: http://127.0.0.1:4318/v1/logs
 collector.timeout-ms: 10000
+upstream.replay: 10.0.0.15:7002
+upstream.retry-ms: 1000
+upstream.connect-timeout-ms: 5000
 ingest.protocol: otlp-http   # "wire", "otlp-http", or "otlp-grpc"
 ingest.listen: 127.0.0.1:7001
 replay.listen: 0.0.0.0:7002
@@ -142,6 +145,33 @@ Current limitation:
 Socket timeout in milliseconds used by `logjetd replay` when posting stored
 OTLP payloads to `collector.url`.
 
+It is also used by `logjetd bridge` when posting replayed OTLP payloads to the
+collector.
+
+### `upstream.replay`
+
+Source `host:port` for `logjetd bridge`.
+
+This should point at another `logjetd` replay listener, not an OTLP endpoint.
+
+Example:
+
+- `10.0.0.15:7002`
+
+If this key is omitted, `logjetd bridge` requires `--source`.
+
+### `upstream.retry-ms`
+
+Reconnect delay in milliseconds for `logjetd bridge`.
+
+When the upstream replay connection closes or fails, bridge mode waits this
+long before reconnecting.
+
+### `upstream.connect-timeout-ms`
+
+TCP connect timeout in milliseconds for `logjetd bridge` when opening the
+upstream replay connection.
+
 ### `ingest.protocol`
 
 Selects how `logjetd` accepts incoming telemetry.
@@ -177,6 +207,8 @@ The meaning of the listener depends on `ingest.protocol`.
 Address and port where the daemon replay listener binds.
 
 This replay listener is for the current internal `wire` protocol, not OTLP.
+Clients first send a small replay request containing the last sequence they
+already have, then the server streams newer records.
 
 ### `replay.poll_ms`
 
@@ -206,6 +238,9 @@ If omitted:
 - `file.name: bar.logjet`
 - `collector.url: http://127.0.0.1:4318/v1/logs`
 - `collector.timeout-ms: 10000`
+- `upstream.replay: unset`
+- `upstream.retry-ms: 1000`
+- `upstream.connect-timeout-ms: 5000`
 - `ingest.protocol: wire`
 - `ingest.listen: 127.0.0.1:7001`
 - `replay.listen: 0.0.0.0:7002`
@@ -219,7 +254,10 @@ If omitted:
 - `buffer.size` limits the rotating in-memory tail by bytes
 - `buffer.messages` limits the rotating in-memory tail by message count
 - `collector.url` is used by `logjetd replay` when `--dest` is omitted
-- `collector.timeout-ms` controls replay HTTP socket timeout
+- `collector.timeout-ms` controls replay and bridge HTTP socket timeout
+- `upstream.replay` is used by `logjetd bridge` when `--source` is omitted
+- `upstream.retry-ms` controls bridge reconnect delay
+- `upstream.connect-timeout-ms` controls bridge source connect timeout
 - `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
 - `file.*` settings are ignored unless `output: file`
 - `buffer.*` settings are ignored unless `output: buffer`
