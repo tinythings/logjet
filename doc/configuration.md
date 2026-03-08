@@ -23,6 +23,7 @@ collector.key-file: /etc/logjet/collector.key
 collector.server-name: collector.internal
 backpressure.enabled: false
 backpressure.mode: disconnect
+backpressure.max-buffered-records: 16
 upstream.replay: 10.0.0.15:7002
 upstream.mode: keep
 upstream.state-file: /var/lib/logjet/bridge.state
@@ -252,12 +253,29 @@ Values:
 - `block`
   - do not use collector socket timeouts
   - the bridge waits as long as needed for the collector reply
+- `drop-newest`
+  - keep using collector socket timeouts
+  - if the bridge-side export queue is full, the newest record is dropped explicitly
 
 Important:
 
 - default is `disconnect`
 - this setting affects bridge export to the collector
 - `logjetd replay` remains a one-shot bulk operation and does not use this policy
+
+### `backpressure.max-buffered-records`
+
+Maximum number of OTLP log batches the bridge keeps in its local export queue
+per bridge connection when `backpressure.enabled: true`.
+
+Important:
+
+- default is `16`
+- must be greater than zero
+- applies only to `logjetd bridge`
+- `block` waits for queue space
+- `disconnect` fails the bridge connection when the queue is full
+- `drop-newest` drops the newest queued record when the queue is full
 
 ### `backpressure.enabled`
 
@@ -484,6 +502,7 @@ If omitted:
 - `collector.server-name: unset`
 - `backpressure.enabled: false`
 - `backpressure.mode: disconnect`
+- `backpressure.max-buffered-records: 16`
 - `upstream.replay: unset`
 - `upstream.mode: keep`
 - `upstream.state-file: unset`
@@ -520,7 +539,8 @@ If omitted:
 - `collector.timeout-ms` controls replay and bridge HTTP socket timeout
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to HTTPS collector export
 - `backpressure.enabled` enables bridge backpressure policy handling
-- `backpressure.mode` configures whether bridge export blocks or disconnects when the collector is too slow
+- `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
+- `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection
 - `upstream.replay` is used by `logjetd bridge` when `--source` is omitted
 - `upstream.mode: keep` leaves upstream retained records in place after replay
 - `upstream.mode: drain` consumes upstream retained records after successful bridge export

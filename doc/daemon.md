@@ -91,6 +91,8 @@ upstream.
 - `backpressure.enabled: true` enables explicit bridge backpressure policy handling
 - `backpressure.mode: disconnect` uses collector timeouts as a fail-fast policy
 - `backpressure.mode: block` waits for the collector reply instead of timing out
+- `backpressure.mode: drop-newest` keeps the bridge live and drops newest records when the export queue is full
+- `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection
 - can optionally use TLS with `tls.*`
 - collector export can optionally use HTTPS with `collector.*`
 
@@ -147,6 +149,7 @@ What exists now:
 - continuous daemon-to-daemon bridge to OTLP/HTTP collectors
 - configurable keep-or-drain bridge mode
 - basic bridge backpressure policy
+- bounded bridge-side export queue
 - optional TLS on replay/bridge transport
 - TLS-enabled OTLP ingest
 - HTTPS collector export
@@ -157,5 +160,4 @@ What exists now:
 
 What does not exist yet:
 
-- advanced restart handling when upstream storage is reset or replaced
-- richer slow-consumer policy than `block` and `disconnect`
+- self-observability for exporter queue saturation and drop counts
