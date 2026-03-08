@@ -16,6 +16,7 @@ pub enum Spool {
 
 #[derive(Debug)]
 pub struct BufferSpool {
+    stream_id: u64,
     limit: BufferLimit,
     keep_messages: usize,
     records: VecDeque<WireRecord>,
@@ -27,6 +28,7 @@ pub struct FileSpool {
     dir: PathBuf,
     base_stem: String,
     state_path: PathBuf,
+    stream_id: u64,
     active_segment_id: u64,
     active_segment_path: PathBuf,
     active_writer: LogjetWriter<File>,
@@ -82,11 +84,36 @@ impl Spool {
             Self::File(spool) => spool.consume_through(seq),
         }
     }
+
+    pub fn stream_id(&self) -> u64 {
+        match self {
+            Self::Buffer(spool) => spool.stream_id,
+            Self::File(spool) => spool.stream_id,
+        }
+    }
+
+    pub fn sequence_bounds(&self) -> io::Result<Option<(u64, u64)>> {
+        match self {
+            Self::Buffer(spool) => Ok(spool.sequence_bounds()),
+            Self::File(spool) => spool.sequence_bounds(),
+        }
+    }
+
+    pub fn next_sequence_seed(&self) -> io::Result<u64> {
+        let last_seq = match self.sequence_bounds()? {
+            Some((_first_seq, last_seq)) => last_seq,
+            None => 0,
+        };
+        last_seq
+            .checked_add(1)
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "sequence seed overflow"))
+    }
 }
 
 impl BufferSpool {
     fn new(config: BufferConfig) -> Self {
         Self {
+            stream_id: generate_stream_id(),
             limit: config.limit,
             keep_messages: config.keep_messages,
             records: VecDeque::new(),
@@ -163,6 +190,12 @@ impl BufferSpool {
             .map(record_size)
             .sum();
     }
+
+    fn sequence_bounds(&self) -> Option<(u64, u64)> {
+        let first = self.records.front()?.seq;
+        let last = self.records.back()?.seq;
+        Some((first, last))
+    }
 }
 
 impl FileSpool {
@@ -171,8 +204,10 @@ impl FileSpool {
 
         let base_stem = derive_base_stem(&config.name);
         let state_path = config.dir.join(format!("{base_stem}.state"));
+        let stream_id_path = config.dir.join(format!("{base_stem}.stream-id"));
         let segments = list_segments(&config.dir, &base_stem)?;
         let consumed_through_seq = read_consumed_state(&state_path)?;
+        let stream_id = read_or_create_stream_id(&stream_id_path)?;
 
         let (active_segment_id, active_segment_path, active_size_bytes) = match segments.last() {
             Some(segment) => {
@@ -199,6 +234,7 @@ impl FileSpool {
             dir: config.dir,
             base_stem,
             state_path,
+            stream_id,
             active_segment_id,
             active_segment_path,
             active_writer: LogjetWriter::new(file),
@@ -354,6 +390,31 @@ impl FileSpool {
         }
         Ok(())
     }
+
+    fn sequence_bounds(&self) -> io::Result<Option<(u64, u64)>> {
+        let mut first_seq = None;
+        let mut last_seq = None;
+
+        for segment in list_segments(&self.dir, &self.base_stem)? {
+            let file = File::open(&segment.path)?;
+            let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
+
+            while let Some(record) = reader.next_record().map_err(to_io_error)? {
+                if record.seq <= self.consumed_through_seq {
+                    continue;
+                }
+                if first_seq.is_none() {
+                    first_seq = Some(record.seq);
+                }
+                last_seq = Some(record.seq);
+            }
+        }
+
+        Ok(match (first_seq, last_seq) {
+            (Some(first_seq), Some(last_seq)) => Some((first_seq, last_seq)),
+            _ => None,
+        })
+    }
 }
 
 pub fn inspect_path(path: &Path) -> io::Result<()> {
@@ -479,6 +540,29 @@ fn read_consumed_state(path: &Path) -> io::Result<u64> {
 
 fn write_consumed_state(path: &Path, seq: u64) -> io::Result<()> {
     fs::write(path, seq.to_string())
+}
+
+fn read_or_create_stream_id(path: &Path) -> io::Result<u64> {
+    if path.exists() {
+        let text = fs::read_to_string(path)?;
+        let stream_id = text
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("invalid stream id: {err}")))?;
+        return Ok(stream_id);
+    }
+
+    let stream_id = generate_stream_id();
+    fs::write(path, stream_id.to_string())?;
+    Ok(stream_id)
+}
+
+fn generate_stream_id() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    nanos ^ ((std::process::id() as u64) << 32)
 }
 
 fn segment_max_seq(path: &Path) -> io::Result<Option<u64>> {

@@ -6,6 +6,8 @@ pub const WIRE_MAGIC: [u8; 8] = *b"LJNETV01";
 pub const WIRE_VERSION: u8 = 1;
 pub const REPLAY_REQUEST_MAGIC: [u8; 8] = *b"LJRPL001";
 pub const REPLAY_REQUEST_VERSION: u8 = 1;
+pub const REPLAY_HELLO_MAGIC: [u8; 8] = *b"LJRPH001";
+pub const REPLAY_HELLO_VERSION: u8 = 1;
 pub const REPLAY_ACK_MAGIC: [u8; 8] = *b"LJRPA001";
 pub const REPLAY_ACK_VERSION: u8 = 1;
 
@@ -26,6 +28,13 @@ pub struct ReplayRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplayAck {
     pub ack_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayHello {
+    pub stream_id: u64,
+    pub first_seq: u64,
+    pub last_seq: u64,
 }
 
 pub fn read_record<R: Read>(reader: &mut R) -> io::Result<Option<WireRecord>> {
@@ -135,6 +144,49 @@ pub fn write_replay_request<W: Write>(writer: &mut W, request: &ReplayRequest) -
     writer.write_all(&[u8::from(request.consume)])?;
     writer.write_all(&[0u8; 6])?;
     writer.write_all(&request.from_seq.to_le_bytes())?;
+    Ok(())
+}
+
+pub fn read_replay_hello<R: Read>(reader: &mut R) -> io::Result<ReplayHello> {
+    let mut magic = [0u8; 8];
+    reader.read_exact(&mut magic)?;
+    if magic != REPLAY_HELLO_MAGIC {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "invalid replay hello magic",
+        ));
+    }
+
+    let mut header = [0u8; 32];
+    reader.read_exact(&mut header)?;
+    let version = header[0];
+    if version != REPLAY_HELLO_VERSION {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!("unsupported replay hello version: {version}"),
+        ));
+    }
+
+    Ok(ReplayHello {
+        stream_id: u64::from_le_bytes([
+            header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15],
+        ]),
+        first_seq: u64::from_le_bytes([
+            header[16], header[17], header[18], header[19], header[20], header[21], header[22], header[23],
+        ]),
+        last_seq: u64::from_le_bytes([
+            header[24], header[25], header[26], header[27], header[28], header[29], header[30], header[31],
+        ]),
+    })
+}
+
+pub fn write_replay_hello<W: Write>(writer: &mut W, hello: &ReplayHello) -> io::Result<()> {
+    writer.write_all(&REPLAY_HELLO_MAGIC)?;
+    writer.write_all(&[REPLAY_HELLO_VERSION])?;
+    writer.write_all(&[0u8; 7])?;
+    writer.write_all(&hello.stream_id.to_le_bytes())?;
+    writer.write_all(&hello.first_seq.to_le_bytes())?;
+    writer.write_all(&hello.last_seq.to_le_bytes())?;
     Ok(())
 }
 
