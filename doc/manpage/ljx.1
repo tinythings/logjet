@@ -1,0 +1,466 @@
+.\" Manpage source mirrored from doc/manpage/ljx.1.md
+.TH "LJX" "1" "March 2026" "" ""
+.hy
+.SH NAME
+.PP
+ljx - offline toolbox for inspecting and transforming \f[C].logjet\f[R]
+files
+.SH SYNOPSIS
+.PP
+\f[C]ljx\f[R] \f[C]count\f[R] \f[I]input\f[R]
+[\f[I]predicate-options\f[R]]
+.PP
+\f[C]ljx\f[R] \f[C]filter\f[R] \f[I]input\f[R] \f[C]-o\f[R]
+\f[I]output\f[R] [\f[I]predicate-options\f[R]] [\f[C]--codec\f[R]
+\f[I]codec\f[R]] [\f[C]--block-target-size\f[R] \f[I]bytes\f[R]]
+.PP
+\f[C]ljx\f[R] \f[C]stats\f[R] \f[I]input\f[R]
+.PP
+\f[C]ljx\f[R] \f[C]cat\f[R] \f[I]input\f[R]
+.PP
+\f[C]ljx\f[R] \f[C]split\f[R] \f[I]input\f[R] \f[I]output-prefix\f[R]
+.PP
+\f[C]ljx\f[R] \f[C]join\f[R] \f[I]input\f[R]...
+.SH DESCRIPTION
+.PP
+\f[C]ljx\f[R] is the standalone file tool in the \f[C]logjet\f[R]
+ecosystem.
+.PP
+It works directly on \f[C].logjet\f[R] files and is intentionally
+separate from \f[C]logjetd\f[R].
+.PP
+\f[C]ljx\f[R] does:
+.IP \[bu] 2
+inspect \f[C].logjet\f[R] data offline
+.IP \[bu] 2
+stream records sequentially
+.IP \[bu] 2
+preserve record ordering
+.IP \[bu] 2
+transform one \f[C].logjet\f[R] stream into another
+.IP \[bu] 2
+fit into ordinary UNIX pipelines
+.PP
+\f[C]ljx\f[R] does not:
+.IP \[bu] 2
+start or control \f[C]logjetd\f[R]
+.IP \[bu] 2
+depend on daemon runtime state
+.IP \[bu] 2
+grep raw bytes blindly
+.PP
+Operations are record-aware. Matching and transformation are applied to
+decoded records with sequence number, timestamp, record type, and
+payload bytes.
+.SH COMMANDS
+.SS count
+.PP
+Count records in one \f[C].logjet\f[R] file.
+.PP
+Examples:
+.IP
+.nf
+\f[C]
+ljx count telemetry.logjet
+ljx count telemetry.logjet --type logs
+ljx count telemetry.logjet --seq-min 100 --seq-max 1000
+\f[R]
+.fi
+.PP
+\f[C]count\f[R] is part of the initial \f[C]0.1\f[R] release scope.
+.SS filter
+.PP
+Write matching records to another \f[C].logjet\f[R] stream.
+.PP
+Examples:
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o only-logs.logjet --type logs
+ljx filter telemetry.logjet -o - --ts-min 1700000000000000000 > recent.logjet
+\f[R]
+.fi
+.PP
+\f[C]filter\f[R] is part of the initial \f[C]0.1\f[R] release scope.
+.SS stats
+.PP
+Compute summary information for one file.
+.PP
+Planned summaries include:
+.IP \[bu] 2
+record count
+.IP \[bu] 2
+byte size
+.IP \[bu] 2
+timestamp range
+.IP \[bu] 2
+optional per-type or field statistics
+.PP
+\f[C]stats\f[R] is planned but may not be complete in release
+\f[C]0.1\f[R].
+.SS cat
+.PP
+Print records in a human-readable form for inspection.
+.PP
+\f[C]cat\f[R] is planned but may not be complete in release
+\f[C]0.1\f[R].
+.SS split
+.PP
+Split one \f[C].logjet\f[R] file into multiple outputs.
+.PP
+Target split modes include record count, byte budget, and timestamp
+range.
+.PP
+\f[C]split\f[R] is planned but may not be complete in release
+\f[C]0.1\f[R].
+.SS join
+.PP
+Join multiple \f[C].logjet\f[R] segments into one ordered output stream.
+.PP
+Optional validation may include sequence continuity checks.
+.PP
+\f[C]join\f[R] is planned but may not be complete in release
+\f[C]0.1\f[R].
+.SH OPTIONS
+.SS \f[C]-h\f[R], \f[C]--help\f[R]
+.PP
+Print usage information.
+.SS \f[C]-V\f[R], \f[C]--version\f[R]
+.PP
+Print version information.
+.SS Predicate options
+.PP
+The initial predicate model is intentionally small.
+.PP
+Expected options:
+.IP \[bu] 2
+\f[C]--type\f[R] \f[I]logs|metrics|traces\f[R]
+.IP \[bu] 2
+\f[C]--seq-min\f[R] \f[I]n\f[R]
+.IP \[bu] 2
+\f[C]--seq-max\f[R] \f[I]n\f[R]
+.IP \[bu] 2
+\f[C]--ts-min\f[R] \f[I]unix-ns\f[R]
+.IP \[bu] 2
+\f[C]--ts-max\f[R] \f[I]unix-ns\f[R]
+.IP \[bu] 2
+\f[C]-e\f[R], \f[C]--grep\f[R] \f[I]pattern\f[R]
+.IP \[bu] 2
+\f[C]-F\f[R], \f[C]--fixed-string\f[R] \f[I]text\f[R]
+.IP \[bu] 2
+\f[C]-i\f[R], \f[C]--ignore-case\f[R]
+.PP
+\f[C]-e\f[R] and \f[C]-F\f[R] are mutually exclusive.
+.SS Filter output options
+.SS \f[C]-o\f[R], \f[C]--output\f[R] \f[I]path\f[R]
+.PP
+Write filtered output to \f[I]path\f[R].
+.PP
+Use \f[C]-\f[R] to write the resulting \f[C].logjet\f[R] stream to
+stdout.
+.SS \f[C]--codec\f[R] \f[I]none|lz4\f[R]
+.PP
+Select the output block compression codec.
+.SS \f[C]--block-target-size\f[R] \f[I]bytes\f[R]
+.PP
+Target uncompressed payload size per output block.
+.SH USAGE EXAMPLES
+.SS 1. Count all records
+.IP
+.nf
+\f[C]
+ljx count telemetry.logjet
+\f[R]
+.fi
+.PP
+Use this for a quick cardinality check without printing records.
+.SS 2. Count only logs
+.IP
+.nf
+\f[C]
+ljx count telemetry.logjet --type logs
+\f[R]
+.fi
+.PP
+Use this when one file contains mixed logs, metrics, and traces.
+.SS 2a. Count a case-insensitive fixed string
+.IP
+.nf
+\f[C]
+ljx count telemetry.logjet -F error -i
+\f[R]
+.fi
+.PP
+Use this when you just want a plain "contains text" match.
+.SS 3. Count a sequence window
+.IP
+.nf
+\f[C]
+ljx count telemetry.logjet --seq-min 100000 --seq-max 200000
+\f[R]
+.fi
+.PP
+Use this to check whether a specific sequence span exists in one file.
+.SS 4. Count a timestamp window
+.IP
+.nf
+\f[C]
+ljx count telemetry.logjet --ts-min 1700000000000000000 --ts-max 1700003600000000000
+\f[R]
+.fi
+.PP
+Use this to quantify one incident or replay interval.
+.SS 5. Copy all records to a new file
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o copy.logjet
+\f[R]
+.fi
+.PP
+Use this for a straight record-aware rewrite.
+.SS 5a. Keep records containing a literal string
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o errors.logjet -F 'java.crap.failed'
+\f[R]
+.fi
+.PP
+Use this when literal dots should stay literal dots.
+.SS 6. Keep only one record type
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o only-traces.logjet --type traces
+\f[R]
+.fi
+.PP
+Use this to split one mixed file into per-type files.
+.SS 7. Keep only a sequence range
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o seq-slice.logjet --seq-min 5000 --seq-max 8000
+\f[R]
+.fi
+.PP
+Use this to produce a narrow debugging or replay slice.
+.SS 8. Keep only a timestamp range
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o one-hour.logjet --ts-min 1700000000000000000 --ts-max 1700003600000000000
+\f[R]
+.fi
+.PP
+Use this to extract a specific time window into a new
+\f[C].logjet\f[R] file.
+.SS 9. Stream filtered output to stdout
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o - --type logs > only-logs.logjet
+\f[R]
+.fi
+.PP
+Use this when \f[C]ljx\f[R] is one stage in a shell pipeline.
+.SS 10. Rewrite with explicit output block settings
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o compact.logjet --codec lz4 --block-target-size 262144
+\f[R]
+.fi
+.PP
+Use this when you want explicit output compression and block sizing.
+.SS 11. Filtering design
+.PP
+Filtering is the most important part of \f[C]ljx\f[R].
+.PP
+.PP
+Payload matching is applied to each record payload, not to raw
+\f[C].logjet\f[R] container bytes and not to rendered \f[C]cat\f[R]
+output.
+.PP
+There are two user-facing modes:
+.IP \[bu] 2
+\f[C]-F\f[R], \f[C]--fixed-string\f[R] for literal substring search
+.IP \[bu] 2
+\f[C]-e\f[R], \f[C]--grep\f[R] for grep-style regex search
+.PP
+Case-insensitive matching is enabled with
+\f[C]-i\f[R], \f[C]--ignore-case\f[R].
+.SS 12. Regex payload match: wildcard in the middle
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o suspect.logjet -e 'java\..*\.bs'
+\f[R]
+.fi
+.PP
+Use this when the middle of the payload text varies.
+.SS 13. Regex payload match: case-insensitive
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o errors.logjet -e 'error|fatal|panic' -i
+\f[R]
+.fi
+.PP
+Use this when payload text may contain \f[C]ERROR\f[R],
+\f[C]error\f[R], or mixed case variants.
+.SS 14. Count regex matches
+.IP
+.nf
+\f[C]
+ljx count telemetry.logjet -e 'timeout|deadline exceeded' -i
+\f[R]
+.fi
+.PP
+Use this when you need cardinality instead of an output file.
+.SS 15. Print records for terminal inspection
+.IP
+.nf
+\f[C]
+ljx cat telemetry.logjet
+\f[R]
+.fi
+.PP
+Use this when you want a human-readable record listing.
+.SS 16. Print records with hex payload rendering
+.IP
+.nf
+\f[C]
+ljx cat telemetry.logjet --hex-payload
+\f[R]
+.fi
+.PP
+Use this when payload bytes are binary and text rendering is
+misleading.
+.SS 17. Compute file summary statistics
+.IP
+.nf
+\f[C]
+ljx stats telemetry.logjet
+\f[R]
+.fi
+.PP
+Intended output includes record count, byte size, and timestamp range.
+.SS 18. Compute per-type or field statistics
+.IP
+.nf
+\f[C]
+ljx stats telemetry.logjet --field-stats
+\f[R]
+.fi
+.PP
+Use this for a quick operational summary before deeper analysis.
+.SS 19. Split by record count
+.IP
+.nf
+\f[C]
+ljx split telemetry.logjet chunk --max-records 100000
+\f[R]
+.fi
+.PP
+Use this when large files need to be broken into smaller ordered
+chunks.
+.SS 20. Split by byte budget
+.IP
+.nf
+\f[C]
+ljx split telemetry.logjet shard --max-bytes 268435456
+\f[R]
+.fi
+.PP
+Use this when files must fit under a transfer or storage ceiling.
+.SS 21. Split by timestamp range
+.IP
+.nf
+\f[C]
+ljx split telemetry.logjet hour --timestamp-range 1h
+\f[R]
+.fi
+.PP
+This use case needs exact window semantics before it should be treated
+as stable.
+.SS 22. Join ordered segments
+.IP
+.nf
+\f[C]
+ljx join a.logjet b.logjet c.logjet -o merged.logjet
+\f[R]
+.fi
+.PP
+Use this when reconstructing one logical stream from pre-split
+segments.
+.SS 23. Join and validate continuity
+.IP
+.nf
+\f[C]
+ljx join part-1.logjet part-2.logjet -o merged.logjet --validate-sequence-continuity
+\f[R]
+.fi
+.PP
+Use this when gaps or overlaps should be treated as an operator-visible
+problem.
+.SS 24. Count a window, then extract it
+.IP
+.nf
+\f[C]
+ljx count telemetry.logjet --ts-min 1700000000000000000 --ts-max 1700003600000000000
+ljx filter telemetry.logjet -o incident.logjet --ts-min 1700000000000000000 --ts-max 1700003600000000000
+\f[R]
+.fi
+.PP
+Use this to measure an interval first and extract it second.
+.SS 25. Recompress through stdout
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o - --codec lz4 > rewritten.logjet
+\f[R]
+.fi
+.PP
+Use this when the shell should control the final destination.
+.SS 26. Produce a small reproduction file
+.IP
+.nf
+\f[C]
+ljx filter telemetry.logjet -o repro.logjet --type logs --seq-min 120000 --seq-max 121000
+\f[R]
+.fi
+.PP
+Use this to create a minimal bug-report or regression-test input.
+.SH FILES
+.PP
+\f[C]ljx\f[R] reads and writes \f[C].logjet\f[R] files.
+.PP
+Example names:
+.IP \[bu] 2
+\f[C]telemetry.logjet\f[R]
+.IP \[bu] 2
+\f[C]telemetry-1.logjet\f[R]
+.IP \[bu] 2
+\f[C]replay.logjet\f[R]
+.SH EXIT STATUS
+.TP
+\f[C]0\f[R]
+success
+.TP
+non-zero
+invalid arguments, read failure, corrupt input handling failure, or
+write failure
+.SH NOTES
+.PP
+The current \f[C]logjet\f[R] reader API expects a seekable input source.
+.PP
+That means stdin support must either be:
+.IP \[bu] 2
+unsupported with a clear error, or
+.IP \[bu] 2
+implemented by spooling stdin to a temporary file first
+.PP
+The exact \f[C]0.1\f[R] behaviour should be documented in the CLI help
+and release notes.
