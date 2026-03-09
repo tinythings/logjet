@@ -18,10 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--hold-ms" => {
-                hold_ms = args
-                    .next()
-                    .ok_or("missing value for --hold-ms")?
-                    .parse::<u64>()?;
+                hold_ms = args.next().ok_or("missing value for --hold-ms")?.parse::<u64>()?;
             }
             "--service-name" => {
                 service_name = args.next().ok_or("missing value for --service-name")?;
@@ -56,11 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn write_wire_record(
-    writer: &mut TcpStream,
-    seq: u64,
-    payload: &[u8],
-) -> Result<(), Box<dyn std::error::Error>> {
+fn write_wire_record(writer: &mut TcpStream, seq: u64, payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let payload_len = u32::try_from(payload.len())?;
     writer.write_all(&WIRE_MAGIC)?;
     writer.write_all(&[WIRE_VERSION, RecordType::Logs as u8])?;

@@ -1,7 +1,6 @@
 use super::{
-    BridgeState, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask,
-    enqueue_export_task, parse_bridge_state, read_bridge_state, reconcile_bridge_state,
-    write_bridge_state,
+    BridgeState, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask, enqueue_export_task, parse_bridge_state, read_bridge_state,
+    reconcile_bridge_state, write_bridge_state,
 };
 use crate::config::{BackpressureMode, CollectorConfig, UpstreamMode};
 use crate::protocol::ReplayHello;
@@ -40,38 +39,16 @@ fn https_url_is_supported() {
 
 #[test]
 fn missing_authority_is_rejected() {
-    let err = CollectorEndpoint::parse("http:///v1/logs")
-        .err()
-        .unwrap()
-        .to_string();
+    let err = CollectorEndpoint::parse("http:///v1/logs").err().unwrap().to_string();
     assert!(err.contains("missing host:port"));
 }
 
 #[test]
 fn bridge_state_round_trip() {
     let path = unique_temp_path("bridge-state");
-    assert_eq!(
-        read_bridge_state(Some(&path)).unwrap(),
-        BridgeState {
-            stream_id: None,
-            last_seq: 0,
-        }
-    );
-    write_bridge_state(
-        Some(&path),
-        &BridgeState {
-            stream_id: Some(42),
-            last_seq: 77,
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        read_bridge_state(Some(&path)).unwrap(),
-        BridgeState {
-            stream_id: Some(42),
-            last_seq: 77,
-        }
-    );
+    assert_eq!(read_bridge_state(Some(&path)).unwrap(), BridgeState { stream_id: None, last_seq: 0 });
+    write_bridge_state(Some(&path), &BridgeState { stream_id: Some(42), last_seq: 77 }).unwrap();
+    assert_eq!(read_bridge_state(Some(&path)).unwrap(), BridgeState { stream_id: Some(42), last_seq: 77 });
     fs::remove_file(path).unwrap();
 }
 
@@ -87,85 +64,30 @@ fn invalid_bridge_state_is_rejected() {
 #[test]
 fn legacy_numeric_bridge_state_still_parses() {
     let state = parse_bridge_state("123\n").unwrap();
-    assert_eq!(
-        state,
-        BridgeState {
-            stream_id: None,
-            last_seq: 123,
-        }
-    );
+    assert_eq!(state, BridgeState { stream_id: None, last_seq: 123 });
 }
 
 #[test]
 fn bridge_state_resets_on_stream_id_change() {
-    let mut state = BridgeState {
-        stream_id: Some(11),
-        last_seq: 99,
-    };
-    reconcile_bridge_state(
-        "127.0.0.1:7002",
-        &mut state,
-        &ReplayHello {
-            stream_id: 22,
-            first_seq: 1,
-            last_seq: 5,
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        state,
-        BridgeState {
-            stream_id: Some(22),
-            last_seq: 0,
-        }
-    );
+    let mut state = BridgeState { stream_id: Some(11), last_seq: 99 };
+    reconcile_bridge_state("127.0.0.1:7002", &mut state, &ReplayHello { stream_id: 22, first_seq: 1, last_seq: 5 }).unwrap();
+    assert_eq!(state, BridgeState { stream_id: Some(22), last_seq: 0 });
 }
 
 #[test]
 fn bridge_state_resets_when_legacy_saved_seq_is_above_upstream_last_seq() {
-    let mut state = BridgeState {
-        stream_id: None,
-        last_seq: 99,
-    };
-    reconcile_bridge_state(
-        "127.0.0.1:7002",
-        &mut state,
-        &ReplayHello {
-            stream_id: 55,
-            first_seq: 1,
-            last_seq: 5,
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        state,
-        BridgeState {
-            stream_id: Some(55),
-            last_seq: 0,
-        }
-    );
+    let mut state = BridgeState { stream_id: None, last_seq: 99 };
+    reconcile_bridge_state("127.0.0.1:7002", &mut state, &ReplayHello { stream_id: 55, first_seq: 1, last_seq: 5 }).unwrap();
+    assert_eq!(state, BridgeState { stream_id: Some(55), last_seq: 0 });
 }
 
 #[test]
 fn disconnect_mode_errors_when_export_queue_is_full() {
     let transport = test_collector_transport(BackpressureMode::Disconnect, 1);
     let (task_tx, _task_rx) = mpsc::sync_channel(1);
-    task_tx
-        .send(ExportTask {
-            seq: 1,
-            payload: vec![1],
-        })
-        .unwrap();
+    task_tx.send(ExportTask { seq: 1, payload: vec![1] }).unwrap();
 
-    let err = enqueue_export_task(
-        &task_tx,
-        &transport,
-        ExportTask {
-            seq: 2,
-            payload: vec![2],
-        },
-    )
-    .unwrap_err();
+    let err = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, payload: vec![2] }).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
 }
 
@@ -173,35 +95,15 @@ fn disconnect_mode_errors_when_export_queue_is_full() {
 fn drop_newest_mode_reports_drop_when_export_queue_is_full() {
     let transport = test_collector_transport(BackpressureMode::DropNewest, 1);
     let (task_tx, _task_rx) = mpsc::sync_channel(1);
-    task_tx
-        .send(ExportTask {
-            seq: 1,
-            payload: vec![1],
-        })
-        .unwrap();
+    task_tx.send(ExportTask { seq: 1, payload: vec![1] }).unwrap();
 
-    let outcome = enqueue_export_task(
-        &task_tx,
-        &transport,
-        ExportTask {
-            seq: 2,
-            payload: vec![2],
-        },
-    )
-    .unwrap();
+    let outcome = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, payload: vec![2] }).unwrap();
     assert_eq!(outcome, EnqueueOutcome::DroppedNewest);
 }
 
-fn test_collector_transport(
-    mode: BackpressureMode,
-    max_buffered_records: usize,
-) -> CollectorTransport {
+fn test_collector_transport(mode: BackpressureMode, max_buffered_records: usize) -> CollectorTransport {
     CollectorTransport {
-        endpoint: CollectorEndpoint {
-            authority: "127.0.0.1:4318".to_string(),
-            path: "/v1/logs".to_string(),
-            tls: false,
-        },
+        endpoint: CollectorEndpoint { authority: "127.0.0.1:4318".to_string(), path: "/v1/logs".to_string(), tls: false },
         timeout: std::time::Duration::from_millis(1000),
         backpressure_enabled: true,
         backpressure_mode: mode,
@@ -220,12 +122,6 @@ fn test_collector_transport(
 }
 
 fn unique_temp_path(label: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "logjetd-{label}-{nanos}-{}.state",
-        std::process::id()
-    ))
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    std::env::temp_dir().join(format!("logjetd-{label}-{nanos}-{}.state", std::process::id()))
 }

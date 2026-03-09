@@ -7,8 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    ChildGuard, MockCollector, TestDir, connect_replay_client, free_port, logjetd_command,
-    post_otlp_http, read_replay_message, replay_messages, wait_for_tcp, wait_until,
+    ChildGuard, MockCollector, TestDir, connect_replay_client, free_port, logjetd_command, post_otlp_http, read_replay_message, replay_messages,
+    wait_for_tcp, wait_until,
 };
 
 #[test]
@@ -26,9 +26,7 @@ fn bridge_keep_forwards_backlog_in_order() -> io::Result<()> {
     )?;
     let bridge_config = dir.write(
         "bridge.conf",
-        &format!(
-            "collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"
-        ),
+        &format!("collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
     )?;
 
     let _appliance = ChildGuard::spawn({
@@ -50,27 +48,11 @@ fn bridge_keep_forwards_backlog_in_order() -> io::Result<()> {
         cmd
     })?;
 
-    wait_until(Duration::from_secs(5), || {
-        Ok(collector.messages().len() >= 3)
-    })?;
-    assert_eq!(
-        collector.messages(),
-        vec![
-            "KEEP 001".to_string(),
-            "KEEP 002".to_string(),
-            "KEEP 003".to_string()
-        ]
-    );
+    wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 3))?;
+    assert_eq!(collector.messages(), vec!["KEEP 001".to_string(), "KEEP 002".to_string(), "KEEP 003".to_string()]);
 
     let retained = replay_messages(&format!("127.0.0.1:{replay_port}"), 0, 3)?;
-    assert_eq!(
-        retained,
-        vec![
-            "KEEP 001".to_string(),
-            "KEEP 002".to_string(),
-            "KEEP 003".to_string()
-        ]
-    );
+    assert_eq!(retained, vec!["KEEP 001".to_string(), "KEEP 002".to_string(), "KEEP 003".to_string()]);
 
     Ok(())
 }
@@ -90,9 +72,7 @@ fn bridge_drain_consumes_upstream_records() -> io::Result<()> {
     )?;
     let bridge_config = dir.write(
         "bridge.conf",
-        &format!(
-            "collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: drain\n"
-        ),
+        &format!("collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: drain\n"),
     )?;
 
     let _appliance = ChildGuard::spawn({
@@ -114,21 +94,10 @@ fn bridge_drain_consumes_upstream_records() -> io::Result<()> {
         cmd
     })?;
 
-    wait_until(Duration::from_secs(5), || {
-        Ok(collector.messages().len() >= 3)
-    })?;
-    assert_eq!(
-        collector.messages(),
-        vec![
-            "DRAIN 001".to_string(),
-            "DRAIN 002".to_string(),
-            "DRAIN 003".to_string()
-        ]
-    );
+    wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 3))?;
+    assert_eq!(collector.messages(), vec!["DRAIN 001".to_string(), "DRAIN 002".to_string(), "DRAIN 003".to_string()]);
 
-    wait_until(Duration::from_secs(5), || {
-        Ok(replay_messages(&format!("127.0.0.1:{replay_port}"), 0, 1)?.is_empty())
-    })?;
+    wait_until(Duration::from_secs(5), || Ok(replay_messages(&format!("127.0.0.1:{replay_port}"), 0, 1)?.is_empty()))?;
 
     Ok(())
 }
@@ -166,11 +135,7 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
     let collector = MockCollector::start(collector_port)?;
 
     for message in ["RESUME 001", "RESUME 002", "RESUME 003"] {
-        post_otlp_http(
-            &format!("127.0.0.1:{ingest_port}"),
-            "bridge-resume",
-            message,
-        )?;
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-resume", message)?;
     }
 
     {
@@ -179,17 +144,11 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
             cmd.arg("--config").arg(&bridge_config).arg("bridge");
             cmd
         })?;
-        wait_until(Duration::from_secs(5), || {
-            Ok(collector.messages().len() >= 3)
-        })?;
+        wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 3))?;
     }
 
     for message in ["RESUME 004", "RESUME 005", "RESUME 006"] {
-        post_otlp_http(
-            &format!("127.0.0.1:{ingest_port}"),
-            "bridge-resume",
-            message,
-        )?;
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-resume", message)?;
     }
 
     {
@@ -198,9 +157,7 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
             cmd.arg("--config").arg(&bridge_config).arg("bridge");
             cmd
         })?;
-        wait_until(Duration::from_secs(5), || {
-            Ok(collector.messages().len() >= 6)
-        })?;
+        wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 6))?;
     }
 
     assert_eq!(
@@ -236,9 +193,7 @@ fn bridge_keep_works_with_file_rotation() -> io::Result<()> {
     )?;
     let bridge_config = dir.write(
         "bridge-file.conf",
-        &format!(
-            "collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"
-        ),
+        &format!("collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
     )?;
 
     let _appliance = ChildGuard::spawn({
@@ -261,9 +216,7 @@ fn bridge_keep_works_with_file_rotation() -> io::Result<()> {
         cmd
     })?;
 
-    wait_until(Duration::from_secs(5), || {
-        Ok(collector.messages().len() >= 5)
-    })?;
+    wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 5))?;
     assert_eq!(
         collector.messages(),
         vec![
@@ -277,10 +230,7 @@ fn bridge_keep_works_with_file_rotation() -> io::Result<()> {
 
     let rotated_count = fs::read_dir(&spool_dir)?
         .filter_map(Result::ok)
-        .filter(|entry| {
-            entry.file_name().to_string_lossy().starts_with("rotation")
-                && entry.file_name().to_string_lossy().ends_with(".logjet")
-        })
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("rotation") && entry.file_name().to_string_lossy().ends_with(".logjet"))
         .count();
     assert!(rotated_count >= 2);
 
@@ -331,24 +281,12 @@ fn bridge_resets_saved_state_when_upstream_stream_changes() -> io::Result<()> {
         })?;
         wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
         wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
-        post_otlp_http(
-            &format!("127.0.0.1:{ingest_port}"),
-            "bridge-reset",
-            "ALPHA 001",
-        )?;
-        post_otlp_http(
-            &format!("127.0.0.1:{ingest_port}"),
-            "bridge-reset",
-            "ALPHA 002",
-        )?;
-        wait_until(Duration::from_secs(5), || {
-            Ok(collector.messages().len() >= 2)
-        })?;
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-reset", "ALPHA 001")?;
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-reset", "ALPHA 002")?;
+        wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 2))?;
     }
 
-    wait_until(Duration::from_secs(5), || {
-        Ok(TcpStream::connect(format!("127.0.0.1:{replay_port}")).is_err())
-    })?;
+    wait_until(Duration::from_secs(5), || Ok(TcpStream::connect(format!("127.0.0.1:{replay_port}")).is_err()))?;
 
     {
         let _appliance = ChildGuard::spawn({
@@ -358,30 +296,12 @@ fn bridge_resets_saved_state_when_upstream_stream_changes() -> io::Result<()> {
         })?;
         wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
         wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
-        post_otlp_http(
-            &format!("127.0.0.1:{ingest_port}"),
-            "bridge-reset",
-            "BRAVO 001",
-        )?;
-        post_otlp_http(
-            &format!("127.0.0.1:{ingest_port}"),
-            "bridge-reset",
-            "BRAVO 002",
-        )?;
-        wait_until(Duration::from_secs(5), || {
-            Ok(collector.messages().len() >= 4)
-        })?;
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-reset", "BRAVO 001")?;
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-reset", "BRAVO 002")?;
+        wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 4))?;
     }
 
-    assert_eq!(
-        collector.messages(),
-        vec![
-            "ALPHA 001".to_string(),
-            "ALPHA 002".to_string(),
-            "BRAVO 001".to_string(),
-            "BRAVO 002".to_string(),
-        ]
-    );
+    assert_eq!(collector.messages(), vec!["ALPHA 001".to_string(), "ALPHA 002".to_string(), "BRAVO 001".to_string(), "BRAVO 002".to_string(),]);
 
     Ok(())
 }
@@ -422,16 +342,10 @@ fn bridge_block_mode_handles_slow_collector_without_losing_order() -> io::Result
     })?;
 
     for index in 1..=6 {
-        post_otlp_http(
-            &format!("127.0.0.1:{ingest_port}"),
-            "bridge-slow",
-            &format!("SLOW {index:03}"),
-        )?;
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-slow", &format!("SLOW {index:03}"))?;
     }
 
-    wait_until(Duration::from_secs(10), || {
-        Ok(collector.messages().len() >= 6)
-    })?;
+    wait_until(Duration::from_secs(10), || Ok(collector.messages().len() >= 6))?;
     assert_eq!(
         collector.messages(),
         vec![
@@ -473,11 +387,7 @@ fn replay_recovers_after_middle_of_file_is_removed() -> io::Result<()> {
 
         for index in 1..=120 {
             let message = format!("RECOVER {index:03} {}", noisy_message(index));
-            post_otlp_http(
-                &format!("127.0.0.1:{ingest_port}"),
-                "replay-corruption",
-                &message,
-            )?;
+            post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "replay-corruption", &message)?;
         }
     }
 
@@ -493,27 +403,15 @@ fn replay_recovers_after_middle_of_file_is_removed() -> io::Result<()> {
     let collector = MockCollector::start(collector_port)?;
     let status = {
         let mut cmd = logjetd_command();
-        cmd.arg("replay")
-            .arg("--path")
-            .arg(&spool_dir)
-            .arg("--name")
-            .arg("recover.logjet")
-            .arg("--dest")
-            .arg(format!("127.0.0.1:{collector_port}"));
+        cmd.arg("replay").arg("--path").arg(&spool_dir).arg("--name").arg("recover.logjet").arg("--dest").arg(format!("127.0.0.1:{collector_port}"));
         cmd.status()?
     };
     assert!(status.success());
 
-    wait_until(Duration::from_secs(5), || {
-        Ok(!collector.messages().is_empty())
-    })?;
+    wait_until(Duration::from_secs(5), || Ok(!collector.messages().is_empty()))?;
     let messages = collector.messages();
     assert!(messages.len() < 120);
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.starts_with("RECOVER 090 "))
-    );
+    assert!(messages.iter().any(|message| message.starts_with("RECOVER 090 ")));
 
     Ok(())
 }
@@ -533,9 +431,7 @@ fn bridge_forwards_large_payloads_end_to_end() -> io::Result<()> {
     )?;
     let bridge_config = dir.write(
         "bridge.conf",
-        &format!(
-            "collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"
-        ),
+        &format!("collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
     )?;
 
     let _appliance = ChildGuard::spawn({
@@ -554,15 +450,9 @@ fn bridge_forwards_large_payloads_end_to_end() -> io::Result<()> {
     })?;
 
     let large_message = format!("LARGE 001 {}", noisy_message(10_001));
-    post_otlp_http(
-        &format!("127.0.0.1:{ingest_port}"),
-        "bridge-large",
-        &large_message,
-    )?;
+    post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-large", &large_message)?;
 
-    wait_until(Duration::from_secs(5), || {
-        Ok(!collector.messages().is_empty())
-    })?;
+    wait_until(Duration::from_secs(5), || Ok(!collector.messages().is_empty()))?;
     assert_eq!(collector.messages(), vec![large_message]);
 
     Ok(())
@@ -590,11 +480,7 @@ fn multiple_replay_clients_receive_backlog_independently() -> io::Result<()> {
     wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
 
     for index in 1..=20 {
-        post_otlp_http(
-            &format!("127.0.0.1:{ingest_port}"),
-            "bridge-multi",
-            &format!("MULTI {index:03}"),
-        )?;
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-multi", &format!("MULTI {index:03}"))?;
     }
 
     let replay_addr = format!("127.0.0.1:{replay_port}");
@@ -602,16 +488,10 @@ fn multiple_replay_clients_receive_backlog_independently() -> io::Result<()> {
     let first = thread::spawn(move || replay_messages(&replay_addr, 0, 20));
     let second = thread::spawn(move || replay_messages(&replay_addr_clone, 0, 20));
 
-    let first_messages = first
-        .join()
-        .map_err(|_| io::Error::other("first replay thread panicked"))??;
-    let second_messages = second
-        .join()
-        .map_err(|_| io::Error::other("second replay thread panicked"))??;
+    let first_messages = first.join().map_err(|_| io::Error::other("first replay thread panicked"))??;
+    let second_messages = second.join().map_err(|_| io::Error::other("second replay thread panicked"))??;
 
-    let expected = (1..=20)
-        .map(|index| format!("MULTI {index:03}"))
-        .collect::<Vec<_>>();
+    let expected = (1..=20).map(|index| format!("MULTI {index:03}")).collect::<Vec<_>>();
     assert_eq!(first_messages, expected);
     assert_eq!(second_messages, expected);
 
@@ -645,46 +525,26 @@ fn replay_client_receives_backlog_then_live_records_without_reconnect() -> io::R
     }
 
     let mut replay = connect_replay_client(&format!("127.0.0.1:{replay_port}"), 0, false)?;
-    assert_eq!(
-        read_replay_message(&mut replay)?,
-        Some("HANDOFF 001".to_string())
-    );
-    assert_eq!(
-        read_replay_message(&mut replay)?,
-        Some("HANDOFF 002".to_string())
-    );
-    assert_eq!(
-        read_replay_message(&mut replay)?,
-        Some("HANDOFF 003".to_string())
-    );
+    assert_eq!(read_replay_message(&mut replay)?, Some("HANDOFF 001".to_string()));
+    assert_eq!(read_replay_message(&mut replay)?, Some("HANDOFF 002".to_string()));
+    assert_eq!(read_replay_message(&mut replay)?, Some("HANDOFF 003".to_string()));
 
     thread::sleep(Duration::from_millis(200));
     assert_eq!(read_replay_message(&mut replay)?, None);
 
-    post_otlp_http(
-        &format!("127.0.0.1:{ingest_port}"),
-        "bridge-live",
-        "HANDOFF 004",
-    )?;
+    post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-live", "HANDOFF 004")?;
 
     replay.set_read_timeout(Some(Duration::from_secs(5)))?;
-    assert_eq!(
-        read_replay_message(&mut replay)?,
-        Some("HANDOFF 004".to_string())
-    );
+    assert_eq!(read_replay_message(&mut replay)?, Some("HANDOFF 004".to_string()));
 
     Ok(())
 }
 
 fn noisy_message(seed: usize) -> String {
-    let mut value = (seed as u64)
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(0xD1B5_4A32_D192_ED03);
+    let mut value = (seed as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(0xD1B5_4A32_D192_ED03);
     let mut text = String::with_capacity(4096);
     for _ in 0..256 {
-        value = value
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+        value = value.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         text.push_str(&format!("{value:016x}"));
     }
     text

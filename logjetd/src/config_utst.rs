@@ -1,7 +1,4 @@
-use super::{
-    BackpressureMode, BufferLimit, Config, IngestProtocol, SeverityFloor, StorageConfig,
-    UpstreamMode,
-};
+use super::{BackpressureMode, BufferLimit, Config, IngestProtocol, SeverityFloor, StorageConfig, UpstreamMode};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,10 +18,7 @@ fn empty_config_file_uses_defaults() {
     assert_eq!(config.ingest_limits.max_batch_bytes, 1024 * 1024);
     assert_eq!(config.ingest_limits.max_clients, 32);
     assert_eq!(config.ingest_overload.max_batches_per_second, 0);
-    assert_eq!(
-        config.ingest_overload.priority_severity_floor,
-        SeverityFloor::Error
-    );
+    assert_eq!(config.ingest_overload.priority_severity_floor, SeverityFloor::Error);
     assert_eq!(config.ingest_overload.report_every_ms, 5_000);
     assert_eq!(config.replay_addr, "0.0.0.0:7002");
     assert_eq!(config.replay_max_clients, 32);
@@ -60,10 +54,7 @@ fn empty_config_file_uses_defaults() {
 
 #[test]
 fn buffer_size_and_messages_conflict() {
-    let path = write_temp_config(
-        "buffer-conflict",
-        "output: buffer\nbuffer.size: 10\nbuffer.messages: 5\n",
-    );
+    let path = write_temp_config("buffer-conflict", "output: buffer\nbuffer.size: 10\nbuffer.messages: 5\n");
     let err = Config::load(&path).unwrap_err().to_string();
     assert!(err.contains("buffer.size and buffer.messages conflict"));
     fs::remove_file(path).unwrap();
@@ -79,73 +70,37 @@ fn file_mode_and_collector_settings_parse() {
 
     assert_eq!(config.ingest_protocol, IngestProtocol::OtlpGrpc);
     assert_eq!(config.collector.timeout_ms, 3210);
-    assert_eq!(
-        config.upstream.replay_addr.as_deref(),
-        Some("10.0.0.15:7002")
-    );
+    assert_eq!(config.upstream.replay_addr.as_deref(), Some("10.0.0.15:7002"));
     assert_eq!(config.upstream.mode, UpstreamMode::Keep);
     assert!(config.upstream.state_file.is_none());
     assert_eq!(config.upstream.retry_ms, 222);
     assert_eq!(config.upstream.connect_timeout_ms, 333);
     assert!(config.ingest_tls.enable);
-    assert_eq!(
-        config.ingest_tls.ca_file.as_deref(),
-        Some(Path::new("./ingest-ca.pem"))
-    );
-    assert_eq!(
-        config.ingest_tls.cert_file.as_deref(),
-        Some(Path::new("./ingest.pem"))
-    );
-    assert_eq!(
-        config.ingest_tls.key_file.as_deref(),
-        Some(Path::new("./ingest.key"))
-    );
+    assert_eq!(config.ingest_tls.ca_file.as_deref(), Some(Path::new("./ingest-ca.pem")));
+    assert_eq!(config.ingest_tls.cert_file.as_deref(), Some(Path::new("./ingest.pem")));
+    assert_eq!(config.ingest_tls.key_file.as_deref(), Some(Path::new("./ingest.key")));
     assert!(config.ingest_tls.require_client_cert);
     assert_eq!(config.ingest_limits.max_batch_bytes, 262_144);
     assert_eq!(config.ingest_limits.max_clients, 7);
     assert_eq!(config.ingest_overload.max_batches_per_second, 12);
-    assert_eq!(
-        config.ingest_overload.priority_severity_floor,
-        SeverityFloor::Fatal
-    );
+    assert_eq!(config.ingest_overload.priority_severity_floor, SeverityFloor::Fatal);
     assert_eq!(config.ingest_overload.report_every_ms, 900);
     assert_eq!(config.replay_max_clients, 9);
     assert_eq!(config.replay_client_timeout_ms, 444);
     assert!(config.tls.enable);
     assert_eq!(config.tls.ca_file.as_deref(), Some(Path::new("./ca.pem")));
-    assert_eq!(
-        config.tls.cert_file.as_deref(),
-        Some(Path::new("./node.pem"))
-    );
-    assert_eq!(
-        config.tls.key_file.as_deref(),
-        Some(Path::new("./node.key"))
-    );
+    assert_eq!(config.tls.cert_file.as_deref(), Some(Path::new("./node.pem")));
+    assert_eq!(config.tls.key_file.as_deref(), Some(Path::new("./node.key")));
     assert!(config.tls.require_client_cert);
-    assert_eq!(
-        config.tls.server_name.as_deref(),
-        Some("appliance.internal")
-    );
+    assert_eq!(config.tls.server_name.as_deref(), Some("appliance.internal"));
     assert_eq!(config.collector.url, "https://127.0.0.1:4320/custom");
     assert!(config.backpressure.enabled);
     assert_eq!(config.backpressure.mode, BackpressureMode::Block);
     assert_eq!(config.backpressure.max_buffered_records, 23);
-    assert_eq!(
-        config.collector.ca_file.as_deref(),
-        Some(Path::new("./collector-ca.pem"))
-    );
-    assert_eq!(
-        config.collector.cert_file.as_deref(),
-        Some(Path::new("./collector.pem"))
-    );
-    assert_eq!(
-        config.collector.key_file.as_deref(),
-        Some(Path::new("./collector.key"))
-    );
-    assert_eq!(
-        config.collector.server_name.as_deref(),
-        Some("collector.internal")
-    );
+    assert_eq!(config.collector.ca_file.as_deref(), Some(Path::new("./collector-ca.pem")));
+    assert_eq!(config.collector.cert_file.as_deref(), Some(Path::new("./collector.pem")));
+    assert_eq!(config.collector.key_file.as_deref(), Some(Path::new("./collector.key")));
+    assert_eq!(config.collector.server_name.as_deref(), Some("collector.internal"));
 
     match config.storage {
         StorageConfig::File(file) => {
@@ -169,10 +124,7 @@ fn invalid_ingest_protocol_is_rejected() {
 
 #[test]
 fn invalid_ingest_priority_floor_is_rejected() {
-    let path = write_temp_config(
-        "bad-ingest-priority-floor",
-        "ingest.priority-severity-at-least: nope\n",
-    );
+    let path = write_temp_config("bad-ingest-priority-floor", "ingest.priority-severity-at-least: nope\n");
     let err = Config::load(&path).unwrap_err().to_string();
     assert!(err.contains("invalid ingest.priority-severity-at-least"));
     fs::remove_file(path).unwrap();
@@ -185,33 +137,18 @@ fn https_collector_fields_parse_without_file_mode() {
         "collector.url: https://collector.example:443/v1/logs\ncollector.ca-file: ./ca.pem\ncollector.server-name: collector.example\n",
     );
     let config = Config::load(&path).unwrap();
-    assert_eq!(
-        config.collector.url,
-        "https://collector.example:443/v1/logs"
-    );
-    assert_eq!(
-        config.collector.ca_file.as_deref(),
-        Some(Path::new("./ca.pem"))
-    );
-    assert_eq!(
-        config.collector.server_name.as_deref(),
-        Some("collector.example")
-    );
+    assert_eq!(config.collector.url, "https://collector.example:443/v1/logs");
+    assert_eq!(config.collector.ca_file.as_deref(), Some(Path::new("./ca.pem")));
+    assert_eq!(config.collector.server_name.as_deref(), Some("collector.example"));
     fs::remove_file(path).unwrap();
 }
 
 #[test]
 fn upstream_mode_drain_parses() {
-    let path = write_temp_config(
-        "upstream-drain",
-        "upstream.mode: drain\nupstream.replay: 127.0.0.1:7002\nupstream.state-file: ./bridge.state\n",
-    );
+    let path = write_temp_config("upstream-drain", "upstream.mode: drain\nupstream.replay: 127.0.0.1:7002\nupstream.state-file: ./bridge.state\n");
     let config = Config::load(&path).unwrap();
     assert_eq!(config.upstream.mode, UpstreamMode::Drain);
-    assert_eq!(
-        config.upstream.state_file.as_deref(),
-        Some(Path::new("./bridge.state"))
-    );
+    assert_eq!(config.upstream.state_file.as_deref(), Some(Path::new("./bridge.state")));
     fs::remove_file(path).unwrap();
 }
 
@@ -233,10 +170,7 @@ fn invalid_backpressure_mode_is_rejected() {
 
 #[test]
 fn backpressure_mode_block_parses() {
-    let path = write_temp_config(
-        "backpressure-block",
-        "backpressure.enabled: true\nbackpressure.mode: block\n",
-    );
+    let path = write_temp_config("backpressure-block", "backpressure.enabled: true\nbackpressure.mode: block\n");
     let config = Config::load(&path).unwrap();
     assert!(config.backpressure.enabled);
     assert_eq!(config.backpressure.mode, BackpressureMode::Block);
@@ -273,19 +207,13 @@ fn invalid_ingest_limit_values_are_rejected() {
     assert!(replay_err.contains("replay.max-clients"));
     fs::remove_file(replay_path).unwrap();
 
-    let replay_timeout_path =
-        write_temp_config("bad-replay-timeout", "replay.client-timeout-ms: 0\n");
+    let replay_timeout_path = write_temp_config("bad-replay-timeout", "replay.client-timeout-ms: 0\n");
     let replay_timeout_err = Config::load(&replay_timeout_path).unwrap_err().to_string();
     assert!(replay_timeout_err.contains("replay.client-timeout-ms"));
     fs::remove_file(replay_timeout_path).unwrap();
 
-    let backpressure_buffer_path = write_temp_config(
-        "bad-backpressure-buffer",
-        "backpressure.max-buffered-records: 0\n",
-    );
-    let backpressure_buffer_err = Config::load(&backpressure_buffer_path)
-        .unwrap_err()
-        .to_string();
+    let backpressure_buffer_path = write_temp_config("bad-backpressure-buffer", "backpressure.max-buffered-records: 0\n");
+    let backpressure_buffer_err = Config::load(&backpressure_buffer_path).unwrap_err().to_string();
     assert!(backpressure_buffer_err.contains("backpressure.max-buffered-records"));
     fs::remove_file(backpressure_buffer_path).unwrap();
 }
@@ -297,12 +225,6 @@ fn write_temp_config(label: &str, body: &str) -> PathBuf {
 }
 
 fn unique_temp_path(label: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "logjetd-{label}-{nanos}-{}.yaml",
-        std::process::id()
-    ))
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    std::env::temp_dir().join(format!("logjetd-{label}-{nanos}-{}.yaml", std::process::id()))
 }
