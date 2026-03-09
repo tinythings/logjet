@@ -140,9 +140,9 @@ Base file name for file mode.
 
 Example:
 
-- `bofh.logjet`
-- `bofh-1.logjet`
-- `bofh-2.logjet`
+- `app.logjet`
+- `app-1.logjet`
+- `app-2.logjet`
 
 Important:
 
