@@ -23,12 +23,8 @@ pub struct TestDir {
 
 impl TestDir {
     pub fn new(label: &str) -> io::Result<Self> {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("logjetd-it-{label}-{nanos}-{}", std::process::id()));
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("logjetd-it-{label}-{nanos}-{}", std::process::id()));
         fs::create_dir_all(&path)?;
         Ok(Self { path })
     }
@@ -56,10 +52,7 @@ pub struct ChildGuard {
 
 impl ChildGuard {
     pub fn spawn(mut command: Command) -> io::Result<Self> {
-        let child = command
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+        let child = command.stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
         Ok(Self { child })
     }
 }
@@ -114,10 +107,7 @@ where
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "timed out waiting for condition",
-            ));
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "timed out waiting for condition"));
         }
         thread::sleep(Duration::from_millis(25));
     }
@@ -150,34 +140,22 @@ impl MockCollector {
         });
 
         let _ = addr;
-        Ok(Self {
-            received,
-            _thread: thread,
-        })
+        Ok(Self { received, _thread: thread })
     }
 
     pub fn messages(&self) -> Vec<String> {
-        self.received
-            .lock()
-            .unwrap()
-            .iter()
-            .flat_map(extract_messages)
-            .collect()
+        self.received.lock().unwrap().iter().flat_map(extract_messages).collect()
     }
 }
 
-fn handle_http_request(
-    stream: &mut TcpStream,
-    received: &Arc<Mutex<Vec<ExportLogsServiceRequest>>>,
-    delay: Duration,
-) -> io::Result<()> {
+fn handle_http_request(stream: &mut TcpStream, received: &Arc<Mutex<Vec<ExportLogsServiceRequest>>>, delay: Duration) -> io::Result<()> {
     let request = read_http_request(stream)?;
     if request.method != "POST" || request.path != "/v1/logs" {
         write_http_response(stream, 404, "not found")?;
         return Ok(());
     }
-    let batch = ExportLogsServiceRequest::decode(request.body.as_slice())
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    let batch =
+        ExportLogsServiceRequest::decode(request.body.as_slice()).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
     received.lock().unwrap().push(batch);
     if !delay.is_zero() {
         thread::sleep(delay);
@@ -201,40 +179,25 @@ fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
             break;
         }
         if header.len() > 16 * 1024 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "header too large",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "header too large"));
         }
     }
 
-    let header_text = std::str::from_utf8(&header[..header.len() - 4])
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid header"))?;
+    let header_text = std::str::from_utf8(&header[..header.len() - 4]).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid header"))?;
     let mut lines = header_text.lines();
-    let request_line = lines
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing request line"))?;
+    let request_line = lines.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing request line"))?;
     let mut parts = request_line.split_whitespace();
-    let method = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing method"))?
-        .to_string();
-    let path = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing path"))?
-        .to_string();
+    let method = parts.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing method"))?.to_string();
+    let path = parts.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing path"))?.to_string();
     let mut content_length = None;
     for line in lines {
         if let Some((name, value)) = line.split_once(':')
             && name.eq_ignore_ascii_case("content-length")
         {
-            content_length = Some(value.trim().parse::<usize>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid content-length")
-            })?);
+            content_length = Some(value.trim().parse::<usize>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid content-length"))?);
         }
     }
-    let content_length = content_length
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content-length"))?;
+    let content_length = content_length.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content-length"))?;
     let mut body = vec![0u8; content_length];
     stream.read_exact(&mut body)?;
     Ok(HttpRequest { method, path, body })
@@ -246,14 +209,7 @@ fn write_http_response(stream: &mut TcpStream, status: u16, body: &str) -> io::R
         404 => "Not Found",
         _ => "Error",
     };
-    write!(
-        stream,
-        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        status,
-        status_text,
-        body.len(),
-        body
-    )?;
+    write!(stream, "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", status, status_text, body.len(), body)?;
     stream.flush()
 }
 
@@ -272,10 +228,7 @@ pub fn post_otlp_http(addr: &str, service_name: &str, message: &str) -> io::Resu
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
     if !response.starts_with("HTTP/1.1 200") {
-        return Err(io::Error::other(format!(
-            "non-200 response: {}",
-            response.lines().next().unwrap_or("unknown")
-        )));
+        return Err(io::Error::other(format!("non-200 response: {}", response.lines().next().unwrap_or("unknown"))));
     }
     Ok(())
 }
@@ -287,8 +240,8 @@ pub fn replay_messages(addr: &str, from_seq: u64, limit: usize) -> io::Result<Ve
     for _ in 0..limit {
         match read_replay_payload(&mut stream)? {
             Some(record) => {
-                let batch = ExportLogsServiceRequest::decode(record.as_slice())
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+                let batch =
+                    ExportLogsServiceRequest::decode(record.as_slice()).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
                 messages.extend(extract_messages(&batch));
             }
             None => break,
@@ -314,8 +267,7 @@ pub fn read_replay_message(stream: &mut TcpStream) -> io::Result<Option<String>>
     let Some(payload) = read_replay_payload(stream)? else {
         return Ok(None);
     };
-    let batch = ExportLogsServiceRequest::decode(payload.as_slice())
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    let batch = ExportLogsServiceRequest::decode(payload.as_slice()).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
     Ok(extract_messages(&batch).into_iter().next())
 }
 
@@ -323,10 +275,7 @@ fn read_replay_hello(stream: &mut TcpStream) -> io::Result<()> {
     let mut magic = [0u8; 8];
     stream.read_exact(&mut magic)?;
     if magic != REPLAY_HELLO_MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid replay hello magic",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid replay hello magic"));
     }
     let mut header = [0u8; 32];
     stream.read_exact(&mut header)?;
@@ -347,19 +296,14 @@ fn read_wire_record(stream: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
     match stream.read_exact(&mut magic) {
         Ok(()) => {}
         Err(err)
-            if err.kind() == io::ErrorKind::UnexpectedEof
-                || err.kind() == io::ErrorKind::TimedOut
-                || err.kind() == io::ErrorKind::WouldBlock =>
+            if err.kind() == io::ErrorKind::UnexpectedEof || err.kind() == io::ErrorKind::TimedOut || err.kind() == io::ErrorKind::WouldBlock =>
         {
             return Ok(None);
         }
         Err(err) => return Err(err),
     }
     if magic != WIRE_MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid wire magic",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid wire magic"));
     }
     let mut header = [0u8; 24];
     stream.read_exact(&mut header)?;
@@ -370,21 +314,14 @@ fn read_wire_record(stream: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
 }
 
 fn build_logs_request(service_name: &str, message: &str) -> ExportLogsServiceRequest {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
     ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue {
-                        value: Some(
-                            opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                                service_name.to_string(),
-                            ),
-                        ),
+                        value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(service_name.to_string())),
                     }),
                 }],
                 dropped_attributes_count: 0,
@@ -401,13 +338,7 @@ fn build_logs_request(service_name: &str, message: &str) -> ExportLogsServiceReq
                     observed_time_unix_nano: nanos,
                     severity_number: SeverityNumber::Info as i32,
                     severity_text: "INFO".to_string(),
-                    body: Some(AnyValue {
-                        value: Some(
-                            opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                                message.to_string(),
-                            ),
-                        ),
-                    }),
+                    body: Some(AnyValue { value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(message.to_string())) }),
                     ..Default::default()
                 }],
                 schema_url: String::new(),
@@ -423,11 +354,7 @@ fn extract_messages(batch: &ExportLogsServiceRequest) -> Vec<String> {
         for scope_logs in &resource_logs.scope_logs {
             for record in &scope_logs.log_records {
                 if let Some(body) = &record.body
-                    && let Some(
-                        opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                            value,
-                        ),
-                    ) = &body.value
+                    && let Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(value)) = &body.value
                 {
                     messages.push(value.clone());
                 }

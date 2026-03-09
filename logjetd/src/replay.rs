@@ -9,24 +9,12 @@ use std::time::Duration;
 use logjet::{LogjetReader, ReaderConfig, RecordType};
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
-use crate::config::{
-    BackpressureConfig, BackpressureMode, CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode,
-};
-use crate::protocol::{
-    ReplayAck, ReplayHello, ReplayRequest, read_record, read_replay_hello, write_replay_ack,
-    write_replay_request,
-};
+use crate::config::{BackpressureConfig, BackpressureMode, CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode};
+use crate::protocol::{ReplayAck, ReplayHello, ReplayRequest, read_record, read_replay_hello, write_replay_ack, write_replay_request};
 use crate::spool::list_named_segments;
-use crate::tls::{
-    load_client_config, load_collector_client_config, parse_collector_server_name,
-    parse_server_name,
-};
+use crate::tls::{load_client_config, load_collector_client_config, parse_collector_server_name, parse_server_name};
 
-pub fn replay_path_to_otlp_http(
-    path: &Path,
-    name: &str,
-    collector: &CollectorConfig,
-) -> io::Result<u64> {
+pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorConfig) -> io::Result<u64> {
     let mut sent = 0u64;
     let endpoint = CollectorEndpoint::parse(&collector.url)?;
     let transport = CollectorTransport {
@@ -34,11 +22,7 @@ pub fn replay_path_to_otlp_http(
         backpressure_enabled: false,
         backpressure_mode: BackpressureMode::Disconnect,
         max_buffered_records: 1,
-        tls_client: if endpoint.tls {
-            Some(load_collector_client_config(collector)?)
-        } else {
-            None
-        },
+        tls_client: if endpoint.tls { Some(load_collector_client_config(collector)?) } else { None },
         endpoint,
         collector: collector.clone(),
         upstream_mode: UpstreamMode::Keep,
@@ -67,30 +51,18 @@ pub fn validate_replay_path(path: &Path, name: &str) -> io::Result<Vec<PathBuf>>
 }
 
 pub fn bridge_wire_to_otlp_http(
-    source: &str,
-    collector: &CollectorConfig,
-    backpressure: &BackpressureConfig,
-    upstream: &UpstreamConfig,
-    tls: &TlsConfig,
+    source: &str, collector: &CollectorConfig, backpressure: &BackpressureConfig, upstream: &UpstreamConfig, tls: &TlsConfig,
 ) -> io::Result<()> {
     let endpoint = CollectorEndpoint::parse(&collector.url)?;
     let connect_timeout = Duration::from_millis(upstream.connect_timeout_ms);
     let retry_delay = Duration::from_millis(upstream.retry_ms);
-    let tls_client = if tls.enable {
-        Some(load_client_config(tls)?)
-    } else {
-        None
-    };
+    let tls_client = if tls.enable { Some(load_client_config(tls)?) } else { None };
     let collector_transport = CollectorTransport {
         timeout: Duration::from_millis(collector.timeout_ms),
         backpressure_enabled: backpressure.enabled,
         backpressure_mode: backpressure.mode,
         max_buffered_records: backpressure.max_buffered_records,
-        tls_client: if endpoint.tls {
-            Some(load_collector_client_config(collector)?)
-        } else {
-            None
-        },
+        tls_client: if endpoint.tls { Some(load_collector_client_config(collector)?) } else { None },
         endpoint,
         collector: collector.clone(),
         upstream_mode: upstream.mode,
@@ -101,34 +73,17 @@ pub fn bridge_wire_to_otlp_http(
             "bridge resume state file {} loaded seq={} stream-id={}",
             path.display(),
             state.last_seq,
-            state
-                .stream_id
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unset".to_string())
+            state.stream_id.map(|value| value.to_string()).unwrap_or_else(|| "unset".to_string())
         );
     }
 
     loop {
-        match bridge_once(
-            source,
-            connect_timeout,
-            &mut state,
-            upstream.state_file.as_deref(),
-            tls,
-            tls_client.clone(),
-            &collector_transport,
-        ) {
+        match bridge_once(source, connect_timeout, &mut state, upstream.state_file.as_deref(), tls, tls_client.clone(), &collector_transport) {
             Ok(()) => {
-                eprintln!(
-                    "bridge source {source} closed after seq={}; reconnecting in {} ms",
-                    state.last_seq, upstream.retry_ms
-                );
+                eprintln!("bridge source {source} closed after seq={}; reconnecting in {} ms", state.last_seq, upstream.retry_ms);
             }
             Err(err) => {
-                eprintln!(
-                    "bridge source {source} error after seq={}: {err}; reconnecting in {} ms",
-                    state.last_seq, upstream.retry_ms
-                );
+                eprintln!("bridge source {source} error after seq={}: {err}; reconnecting in {} ms", state.last_seq, upstream.retry_ms);
             }
         }
         thread::sleep(retry_delay);
@@ -136,13 +91,8 @@ pub fn bridge_wire_to_otlp_http(
 }
 
 fn bridge_once(
-    source: &str,
-    connect_timeout: Duration,
-    state: &mut BridgeState,
-    state_file: Option<&Path>,
-    tls: &TlsConfig,
-    tls_client: Option<Arc<ClientConfig>>,
-    collector_transport: &CollectorTransport,
+    source: &str, connect_timeout: Duration, state: &mut BridgeState, state_file: Option<&Path>, tls: &TlsConfig,
+    tls_client: Option<Arc<ClientConfig>>, collector_transport: &CollectorTransport,
 ) -> io::Result<()> {
     let stream = connect_with_timeout(source, connect_timeout)?;
     stream.set_read_timeout(None)?;
@@ -150,47 +100,24 @@ fn bridge_once(
 
     if let Some(client_config) = tls_client {
         let server_name = parse_server_name(tls, source)?;
-        let conn = ClientConnection::new(client_config, server_name)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+        let conn = ClientConnection::new(client_config, server_name).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         let mut transport = StreamOwned::new(conn, stream);
-        return bridge_transport(
-            source,
-            state,
-            state_file,
-            &mut transport,
-            collector_transport,
-        );
+        return bridge_transport(source, state, state_file, &mut transport, collector_transport);
     }
 
     let mut transport = stream;
-    bridge_transport(
-        source,
-        state,
-        state_file,
-        &mut transport,
-        collector_transport,
-    )
+    bridge_transport(source, state, state_file, &mut transport, collector_transport)
 }
 
 fn bridge_transport<T: io::Read + io::Write>(
-    source: &str,
-    state: &mut BridgeState,
-    state_file: Option<&Path>,
-    transport: &mut T,
-    collector_transport: &CollectorTransport,
+    source: &str, state: &mut BridgeState, state_file: Option<&Path>, transport: &mut T, collector_transport: &CollectorTransport,
 ) -> io::Result<()> {
     let hello = read_replay_hello(transport)?;
     reconcile_bridge_state(source, state, &hello)?;
     write_bridge_state(state_file, state)?;
 
     let consume = collector_transport.upstream_mode == UpstreamMode::Drain;
-    write_replay_request(
-        transport,
-        &ReplayRequest {
-            from_seq: state.last_seq,
-            consume,
-        },
-    )?;
+    write_replay_request(transport, &ReplayRequest { from_seq: state.last_seq, consume })?;
     transport.flush()?;
     eprintln!(
         "bridge connected to {} and requested records after seq={} mode={} backpressure={}",
@@ -217,15 +144,7 @@ fn bridge_transport<T: io::Read + io::Write>(
     let mut pending = std::collections::VecDeque::new();
 
     while let Some(record) = read_record(transport)? {
-        flush_ready_results(
-            transport,
-            state,
-            state_file,
-            consume,
-            &mut pending,
-            &result_rx,
-            false,
-        )?;
+        flush_ready_results(transport, state, state_file, consume, &mut pending, &result_rx, false)?;
 
         if record.record_type != RecordType::Logs {
             commit_record(transport, state, state_file, consume, record.seq)?;
@@ -233,14 +152,7 @@ fn bridge_transport<T: io::Read + io::Write>(
         }
 
         let seq = record.seq;
-        match enqueue_export_task(
-            &task_tx,
-            collector_transport,
-            ExportTask {
-                seq,
-                payload: record.payload,
-            },
-        ) {
+        match enqueue_export_task(&task_tx, collector_transport, ExportTask { seq, payload: record.payload }) {
             Ok(EnqueueOutcome::Queued) => pending.push_back(PendingExport::Queued(seq)),
             Ok(EnqueueOutcome::DroppedNewest) => pending.push_back(PendingExport::Dropped(seq)),
             Err(err) => {
@@ -252,15 +164,7 @@ fn bridge_transport<T: io::Read + io::Write>(
     }
 
     drop(task_tx);
-    flush_ready_results(
-        transport,
-        state,
-        state_file,
-        consume,
-        &mut pending,
-        &result_rx,
-        true,
-    )?;
+    flush_ready_results(transport, state, state_file, consume, &mut pending, &result_rx, true)?;
     match exporter.join() {
         Ok(Ok(())) => Ok(()),
         Ok(Err(err)) => Err(err),
@@ -269,63 +173,36 @@ fn bridge_transport<T: io::Read + io::Write>(
 }
 
 fn enqueue_export_task(
-    task_tx: &mpsc::SyncSender<ExportTask>,
-    collector_transport: &CollectorTransport,
-    task: ExportTask,
+    task_tx: &mpsc::SyncSender<ExportTask>, collector_transport: &CollectorTransport, task: ExportTask,
 ) -> io::Result<EnqueueOutcome> {
     match collector_transport.backpressure_mode {
-        BackpressureMode::Block => {
-            task_tx
-                .send(task)
-                .map(|()| EnqueueOutcome::Queued)
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped")
-                })
-        }
+        BackpressureMode::Block => task_tx
+            .send(task)
+            .map(|()| EnqueueOutcome::Queued)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped")),
         BackpressureMode::Disconnect => match task_tx.try_send(task) {
             Ok(()) => Ok(EnqueueOutcome::Queued),
-            Err(mpsc::TrySendError::Full(_)) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "collector export buffer is full; disconnecting bridge",
-            )),
-            Err(mpsc::TrySendError::Disconnected(_)) => Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "collector export worker stopped",
-            )),
+            Err(mpsc::TrySendError::Full(_)) => Err(io::Error::new(io::ErrorKind::TimedOut, "collector export buffer is full; disconnecting bridge")),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err(io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped")),
         },
         BackpressureMode::DropNewest => match task_tx.try_send(task) {
             Ok(()) => Ok(EnqueueOutcome::Queued),
             Err(mpsc::TrySendError::Full(task)) => {
-                eprintln!(
-                    "bridge dropping seq={} because collector export buffer is full (mode=drop-newest)",
-                    task.seq
-                );
+                eprintln!("bridge dropping seq={} because collector export buffer is full (mode=drop-newest)", task.seq);
                 Ok(EnqueueOutcome::DroppedNewest)
             }
-            Err(mpsc::TrySendError::Disconnected(_)) => Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "collector export worker stopped",
-            )),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err(io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped")),
         },
     }
 }
 
 fn export_worker(
-    collector_transport: CollectorTransport,
-    task_rx: mpsc::Receiver<ExportTask>,
-    result_tx: mpsc::Sender<ExportResult>,
+    collector_transport: CollectorTransport, task_rx: mpsc::Receiver<ExportTask>, result_tx: mpsc::Sender<ExportResult>,
 ) -> io::Result<()> {
     while let Ok(task) = task_rx.recv() {
-        let outcome = post_raw_otlp_http(&collector_transport, &task.payload)
-            .map(|()| ExportOutcome::Delivered);
+        let outcome = post_raw_otlp_http(&collector_transport, &task.payload).map(|()| ExportOutcome::Delivered);
         let failed = outcome.is_err();
-        if result_tx
-            .send(ExportResult {
-                seq: task.seq,
-                outcome,
-            })
-            .is_err()
-        {
+        if result_tx.send(ExportResult { seq: task.seq, outcome }).is_err() {
             break;
         }
         if failed {
@@ -336,13 +213,8 @@ fn export_worker(
 }
 
 fn flush_ready_results<T: io::Read + io::Write>(
-    transport: &mut T,
-    state: &mut BridgeState,
-    state_file: Option<&Path>,
-    consume: bool,
-    pending: &mut std::collections::VecDeque<PendingExport>,
-    result_rx: &mpsc::Receiver<ExportResult>,
-    block: bool,
+    transport: &mut T, state: &mut BridgeState, state_file: Option<&Path>, consume: bool, pending: &mut std::collections::VecDeque<PendingExport>,
+    result_rx: &mpsc::Receiver<ExportResult>, block: bool,
 ) -> io::Result<()> {
     loop {
         let Some(front) = pending.front() else {
@@ -350,34 +222,23 @@ fn flush_ready_results<T: io::Read + io::Write>(
         };
 
         let result = match front {
-            PendingExport::Dropped(seq) => ExportResult {
-                seq: *seq,
-                outcome: Ok(ExportOutcome::DroppedNewest),
-            },
+            PendingExport::Dropped(seq) => ExportResult { seq: *seq, outcome: Ok(ExportOutcome::DroppedNewest) },
             PendingExport::Queued(expected_seq) => {
                 let result = if block {
-                    result_rx.recv().map_err(|_| {
-                        io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped")
-                    })?
+                    result_rx.recv().map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped"))?
                 } else {
                     match result_rx.try_recv() {
                         Ok(result) => result,
                         Err(mpsc::TryRecvError::Empty) => return Ok(()),
                         Err(mpsc::TryRecvError::Disconnected) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::BrokenPipe,
-                                "collector export worker stopped",
-                            ));
+                            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped"));
                         }
                     }
                 };
                 if result.seq != *expected_seq {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!(
-                            "collector export worker returned seq={} out of order; expected {}",
-                            result.seq, expected_seq
-                        ),
+                        format!("collector export worker returned seq={} out of order; expected {}", result.seq, expected_seq),
                     ));
                 }
                 result
@@ -386,9 +247,7 @@ fn flush_ready_results<T: io::Read + io::Write>(
 
         pending.pop_front();
         match result.outcome {
-            Ok(ExportOutcome::Delivered) => {
-                commit_record(transport, state, state_file, consume, result.seq)?
-            }
+            Ok(ExportOutcome::Delivered) => commit_record(transport, state, state_file, consume, result.seq)?,
             Ok(ExportOutcome::DroppedNewest) => {
                 commit_record(transport, state, state_file, consume, result.seq)?;
             }
@@ -398,11 +257,7 @@ fn flush_ready_results<T: io::Read + io::Write>(
 }
 
 fn commit_record<T: io::Read + io::Write>(
-    transport: &mut T,
-    state: &mut BridgeState,
-    state_file: Option<&Path>,
-    consume: bool,
-    seq: u64,
+    transport: &mut T, state: &mut BridgeState, state_file: Option<&Path>, consume: bool, seq: u64,
 ) -> io::Result<()> {
     state.last_seq = seq;
     write_bridge_state(state_file, state)?;
@@ -414,10 +269,7 @@ fn commit_record<T: io::Read + io::Write>(
 }
 
 fn post_raw_otlp_http(collector_transport: &CollectorTransport, payload: &[u8]) -> io::Result<()> {
-    let stream = connect_with_timeout(
-        &collector_transport.endpoint.authority,
-        collector_transport.timeout,
-    )?;
+    let stream = connect_with_timeout(&collector_transport.endpoint.authority, collector_transport.timeout)?;
     if !collector_transport.backpressure_enabled {
         stream.set_write_timeout(Some(collector_transport.timeout))?;
         stream.set_read_timeout(Some(collector_transport.timeout))?;
@@ -435,18 +287,11 @@ fn post_raw_otlp_http(collector_transport: &CollectorTransport, payload: &[u8]) 
     }
 
     if let Some(client_config) = &collector_transport.tls_client {
-        let server_name = parse_collector_server_name(
-            &collector_transport.collector,
-            &collector_transport.endpoint.authority,
-        )?;
-        let conn = ClientConnection::new(client_config.clone(), server_name)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+        let server_name = parse_collector_server_name(&collector_transport.collector, &collector_transport.endpoint.authority)?;
+        let conn =
+            ClientConnection::new(client_config.clone(), server_name).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         let mut tls_transport = StreamOwned::new(conn, stream);
-        return post_raw_otlp_http_transport(
-            &collector_transport.endpoint,
-            payload,
-            &mut tls_transport,
-        );
+        return post_raw_otlp_http_transport(&collector_transport.endpoint, payload, &mut tls_transport);
     }
 
     let mut plain_transport = stream;
@@ -462,12 +307,8 @@ fn connect_with_timeout(authority: &str, timeout: Duration) -> io::Result<TcpStr
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("collector or upstream address could not be resolved: {authority}"),
-        )
-    }))
+    Err(last_err
+        .unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("collector or upstream address could not be resolved: {authority}"))))
 }
 
 fn to_io_error(err: logjet::Error) -> io::Error {
@@ -482,16 +323,10 @@ struct BridgeState {
 
 fn read_bridge_state(path: Option<&Path>) -> io::Result<BridgeState> {
     let Some(path) = path else {
-        return Ok(BridgeState {
-            stream_id: None,
-            last_seq: 0,
-        });
+        return Ok(BridgeState { stream_id: None, last_seq: 0 });
     };
     if !path.exists() {
-        return Ok(BridgeState {
-            stream_id: None,
-            last_seq: 0,
-        });
+        return Ok(BridgeState { stream_id: None, last_seq: 0 });
     }
 
     let text = fs::read_to_string(path)?;
@@ -509,23 +344,13 @@ fn write_bridge_state(path: Option<&Path>, state: &BridgeState) -> io::Result<()
     }
     fs::write(
         path,
-        format!(
-            "stream_id={}\nlast_seq={}\n",
-            state
-                .stream_id
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unset".to_string()),
-            state.last_seq
-        ),
+        format!("stream_id={}\nlast_seq={}\n", state.stream_id.map(|value| value.to_string()).unwrap_or_else(|| "unset".to_string()), state.last_seq),
     )
 }
 
 fn parse_bridge_state(text: &str) -> io::Result<BridgeState> {
     if let Ok(last_seq) = text.trim().parse::<u64>() {
-        return Ok(BridgeState {
-            stream_id: None,
-            last_seq,
-        });
+        return Ok(BridgeState { stream_id: None, last_seq });
     }
 
     let mut stream_id = None;
@@ -540,43 +365,30 @@ fn parse_bridge_state(text: &str) -> io::Result<BridgeState> {
                 stream_id = if value == "unset" {
                     Some(None)
                 } else {
-                    Some(Some(value.parse::<u64>().map_err(|err| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("invalid bridge state stream_id: {err}"),
-                        )
-                    })?))
+                    Some(Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("invalid bridge state stream_id: {err}")))?,
+                    ))
                 };
             }
             "last_seq" => {
-                last_seq = Some(value.trim().parse::<u64>().map_err(|err| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("invalid bridge state last_seq: {err}"),
-                    )
-                })?);
+                last_seq = Some(
+                    value
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("invalid bridge state last_seq: {err}")))?,
+                );
             }
             _ => {}
         }
     }
 
-    let last_seq = last_seq.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid bridge state: missing last_seq",
-        )
-    })?;
-    Ok(BridgeState {
-        stream_id: stream_id.unwrap_or(None),
-        last_seq,
-    })
+    let last_seq = last_seq.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid bridge state: missing last_seq"))?;
+    Ok(BridgeState { stream_id: stream_id.unwrap_or(None), last_seq })
 }
 
-fn reconcile_bridge_state(
-    source: &str,
-    state: &mut BridgeState,
-    hello: &ReplayHello,
-) -> io::Result<()> {
+fn reconcile_bridge_state(source: &str, state: &mut BridgeState, hello: &ReplayHello) -> io::Result<()> {
     if let Some(saved_stream_id) = state.stream_id {
         if saved_stream_id != hello.stream_id {
             eprintln!(
@@ -666,46 +478,24 @@ impl CollectorEndpoint {
         if let Some(rest) = input.strip_prefix("http://") {
             let (authority, path) = split_authority_and_path(rest);
             if authority.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "collector.url missing host:port",
-                ));
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "collector.url missing host:port"));
             }
-            return Ok(Self {
-                authority: authority.to_string(),
-                path: normalise_path(path),
-                tls: false,
-            });
+            return Ok(Self { authority: authority.to_string(), path: normalise_path(path), tls: false });
         }
 
         if let Some(rest) = input.strip_prefix("https://") {
             let (authority, path) = split_authority_and_path(rest);
             if authority.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "collector.url missing host:port",
-                ));
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "collector.url missing host:port"));
             }
-            return Ok(Self {
-                authority: authority.to_string(),
-                path: normalise_path(path),
-                tls: true,
-            });
+            return Ok(Self { authority: authority.to_string(), path: normalise_path(path), tls: true });
         }
 
-        Ok(Self {
-            authority: input.to_string(),
-            path: "/v1/logs".to_string(),
-            tls: false,
-        })
+        Ok(Self { authority: input.to_string(), path: "/v1/logs".to_string(), tls: false })
     }
 }
 
-fn post_raw_otlp_http_transport<T: io::Read + io::Write>(
-    endpoint: &CollectorEndpoint,
-    payload: &[u8],
-    transport: &mut T,
-) -> io::Result<()> {
+fn post_raw_otlp_http_transport<T: io::Read + io::Write>(endpoint: &CollectorEndpoint, payload: &[u8], transport: &mut T) -> io::Result<()> {
     write!(
         transport,
         "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -719,10 +509,7 @@ fn post_raw_otlp_http_transport<T: io::Read + io::Write>(
     let mut response = String::new();
     std::io::Read::read_to_string(transport, &mut response)?;
     if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
-        return Err(io::Error::other(format!(
-            "collector returned non-200 response: {}",
-            response.lines().next().unwrap_or("unknown response")
-        )));
+        return Err(io::Error::other(format!("collector returned non-200 response: {}", response.lines().next().unwrap_or("unknown response"))));
     }
 
     Ok(())

@@ -24,20 +24,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match arg.as_str() {
             "--tls" => tls = true,
             "--delay-ms" => {
-                delay_ms = args
-                    .next()
-                    .ok_or("missing value for --delay-ms")?
-                    .parse::<u64>()?;
+                delay_ms = args.next().ok_or("missing value for --delay-ms")?.parse::<u64>()?;
             }
             "--cert-file" => {
-                cert_file = Some(PathBuf::from(
-                    args.next().ok_or("missing value for --cert-file")?,
-                ));
+                cert_file = Some(PathBuf::from(args.next().ok_or("missing value for --cert-file")?));
             }
             "--key-file" => {
-                key_file = Some(PathBuf::from(
-                    args.next().ok_or("missing value for --key-file")?,
-                ));
+                key_file = Some(PathBuf::from(args.next().ok_or("missing value for --key-file")?));
             }
             value => bind_addr = value.to_string(),
         }
@@ -70,8 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 request.respond(response)?;
             }
             Err(err) => {
-                let response = Response::from_string(format!("decode error: {err}"))
-                    .with_status_code(StatusCode(400));
+                let response = Response::from_string(format!("decode error: {err}")).with_status_code(StatusCode(400));
                 request.respond(response)?;
             }
         }
@@ -81,10 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 fn run_tls(
-    bind_addr: &str,
-    cert_file: Option<PathBuf>,
-    key_file: Option<PathBuf>,
-    delay_ms: u64,
+    bind_addr: &str, cert_file: Option<PathBuf>, key_file: Option<PathBuf>, delay_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cert_file = cert_file.ok_or("missing --cert-file for --tls")?;
     let key_file = key_file.ok_or("missing --key-file for --tls")?;
@@ -106,9 +95,7 @@ fn run_tls(
 }
 
 fn handle_tls_client(
-    stream: std::net::TcpStream,
-    config: Arc<rustls::ServerConfig>,
-    delay_ms: u64,
+    stream: std::net::TcpStream, config: Arc<rustls::ServerConfig>, delay_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn = ServerConnection::new(config)?;
     let mut transport = StreamOwned::new(conn, stream);
@@ -119,8 +106,7 @@ fn handle_tls_client(
 }
 
 fn handle_tls_http_request(
-    transport: &mut StreamOwned<ServerConnection, std::net::TcpStream>,
-    delay_ms: u64,
+    transport: &mut StreamOwned<ServerConnection, std::net::TcpStream>, delay_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let request = read_http_request(transport)?;
     if request.method != "POST" || request.path != "/v1/logs" {
@@ -161,51 +147,31 @@ fn read_http_request<T: Read>(transport: &mut T) -> io::Result<ParsedHttpRequest
             break;
         }
         if buffer.len() > 16 * 1024 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "http header too large",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "http header too large"));
         }
     }
 
-    let header = std::str::from_utf8(&buffer[..buffer.len() - 4])
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid http header"))?;
+    let header = std::str::from_utf8(&buffer[..buffer.len() - 4]).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid http header"))?;
     let mut lines = header.lines();
-    let request_line = lines
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing request line"))?;
+    let request_line = lines.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing request line"))?;
     let mut parts = request_line.split_whitespace();
-    let method = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing method"))?
-        .to_string();
-    let path = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing path"))?
-        .to_string();
+    let method = parts.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing method"))?.to_string();
+    let path = parts.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing path"))?.to_string();
 
     let mut content_length = None;
     for line in lines {
         if let Some((name, value)) = line.split_once(':')
             && name.eq_ignore_ascii_case("content-length")
         {
-            content_length = Some(value.trim().parse::<usize>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid content-length")
-            })?);
+            content_length = Some(value.trim().parse::<usize>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid content-length"))?);
         }
     }
 
-    let content_length = content_length
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content-length"))?;
+    let content_length = content_length.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content-length"))?;
     let mut body = Vec::new();
-    transport
-        .take(content_length as u64)
-        .read_to_end(&mut body)?;
+    transport.take(content_length as u64).read_to_end(&mut body)?;
     if body.len() != content_length {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "short http body",
-        ));
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short http body"));
     }
 
     Ok(ParsedHttpRequest { method, path, body })
@@ -218,17 +184,9 @@ fn write_http_response<T: Write>(transport: &mut T, status: u16, body: &str) -> 
         404 => "Not Found",
         _ => "Error",
     };
-    write!(
-        transport,
-        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        status,
-        status_text,
-        body.len(),
-        body
-    )?;
+    write!(transport, "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", status, status_text, body.len(), body)?;
     transport.flush()
 }
 fn content_type_header() -> Header {
-    Header::from_bytes(&b"Content-Type"[..], &b"application/x-protobuf"[..])
-        .expect("static content-type header is valid")
+    Header::from_bytes(&b"Content-Type"[..], &b"application/x-protobuf"[..]).expect("static content-type header is valid")
 }

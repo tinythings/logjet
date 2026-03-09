@@ -37,22 +37,12 @@ pub struct OwnedRecord {
 
 impl OwnedRecord {
     pub fn as_record(&self) -> Record<'_> {
-        Record {
-            record_type: self.record_type,
-            seq: self.seq,
-            ts_unix_ns: self.ts_unix_ns,
-            payload: &self.payload,
-        }
+        Record { record_type: self.record_type, seq: self.seq, ts_unix_ns: self.ts_unix_ns, payload: &self.payload }
     }
 }
 
 impl<'a> From<Record<'a>> for OwnedRecord {
     fn from(value: Record<'a>) -> Self {
-        Self {
-            record_type: value.record_type,
-            seq: value.seq,
-            ts_unix_ns: value.ts_unix_ns,
-            payload: value.payload.to_vec(),
-        }
+        Self { record_type: value.record_type, seq: value.seq, ts_unix_ns: value.ts_unix_ns, payload: value.payload.to_vec() }
     }
 }

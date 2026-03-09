@@ -1,6 +1,5 @@
 use super::{
-    BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy,
-    classify_otlp_batch_priority, read_http_request, write_http_response,
+    BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy, classify_otlp_batch_priority, read_http_request, write_http_response,
 };
 use crate::config::{IngestOverloadConfig, SeverityFloor};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
@@ -117,14 +116,8 @@ fn ingest_policy_rate_limits_low_priority_batches() {
         priority_severity_floor: SeverityFloor::Error,
         report_every_ms: 0,
     });
-    assert_eq!(
-        policy.decide(BatchPriority::Warn).unwrap(),
-        IngestDecision::Accept
-    );
-    assert_eq!(
-        policy.decide(BatchPriority::Warn).unwrap(),
-        IngestDecision::RejectRateLimited
-    );
+    assert_eq!(policy.decide(BatchPriority::Warn).unwrap(), IngestDecision::Accept);
+    assert_eq!(policy.decide(BatchPriority::Warn).unwrap(), IngestDecision::RejectRateLimited);
 }
 
 #[test]
@@ -134,24 +127,15 @@ fn ingest_policy_allows_priority_bypass_above_threshold() {
         priority_severity_floor: SeverityFloor::Error,
         report_every_ms: 0,
     });
-    assert_eq!(
-        policy.decide(BatchPriority::Warn).unwrap(),
-        IngestDecision::Accept
-    );
-    assert_eq!(
-        policy.decide(BatchPriority::Error).unwrap(),
-        IngestDecision::AcceptPriorityBypass
-    );
+    assert_eq!(policy.decide(BatchPriority::Warn).unwrap(), IngestDecision::Accept);
+    assert_eq!(policy.decide(BatchPriority::Error).unwrap(), IngestDecision::AcceptPriorityBypass);
 }
 
 #[test]
 fn classify_otlp_batch_priority_uses_highest_log_severity() {
     let batch = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
-            resource: Some(Resource {
-                attributes: Vec::new(),
-                dropped_attributes_count: 0,
-            }),
+            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0 }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
                     name: "test".to_string(),
@@ -164,9 +148,7 @@ fn classify_otlp_batch_priority_uses_highest_log_severity() {
                         severity_number: 13,
                         severity_text: "WARN".to_string(),
                         body: Some(AnyValue {
-                            value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                                "warn".to_string(),
-                            )),
+                            value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue("warn".to_string())),
                         }),
                         ..Default::default()
                     },
@@ -174,9 +156,7 @@ fn classify_otlp_batch_priority_uses_highest_log_severity() {
                         severity_number: 17,
                         severity_text: "ERROR".to_string(),
                         body: Some(AnyValue {
-                            value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                                "error".to_string(),
-                            )),
+                            value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue("error".to_string())),
                         }),
                         ..Default::default()
                     },

@@ -1,23 +1,15 @@
 use std::env;
 use std::time::Duration;
 
-use opentelemetry_proto::tonic::collector::logs::v1::{
-    ExportLogsServiceRequest, logs_service_client::LogsServiceClient,
-};
+use opentelemetry_proto::tonic::collector::logs::v1::{ExportLogsServiceRequest, logs_service_client::LogsServiceClient};
 use tonic::Request;
 
 use otlp_demo::{build_excuse_request, format_batch_plain};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:4317".to_string());
-    let endpoint = if addr.starts_with("http://") || addr.starts_with("https://") {
-        addr
-    } else {
-        format!("http://{addr}")
-    };
+    let addr = env::args().nth(1).unwrap_or_else(|| "127.0.0.1:4317".to_string());
+    let endpoint = if addr.starts_with("http://") || addr.starts_with("https://") { addr } else { format!("http://{addr}") };
 
     eprintln!("otlp-bofh-grpc-emitter sending OTLP logs to {endpoint}");
 
@@ -35,10 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn send_batch(
-    endpoint: &str,
-    request: ExportLogsServiceRequest,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn send_batch(endpoint: &str, request: ExportLogsServiceRequest) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = LogsServiceClient::connect(endpoint.to_string()).await?;
     client.export(Request::new(request)).await?;
     Ok(())

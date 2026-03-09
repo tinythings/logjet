@@ -86,17 +86,7 @@ impl BlockHeader {
         let record_count = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
         let header_crc32c = u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
 
-        Ok(Self {
-            version,
-            codec,
-            flags,
-            header_len,
-            reserved,
-            uncompressed_len,
-            compressed_len,
-            record_count,
-            header_crc32c,
-        })
+        Ok(Self { version, codec, flags, header_len, reserved, uncompressed_len, compressed_len, record_count, header_crc32c })
     }
 
     pub fn compute_header_crc(&self, ext_bytes: &[u8]) -> u32 {
@@ -119,13 +109,8 @@ impl BlockHeaderExt {
         }
 
         Ok(Self {
-            base_seq: u64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]),
-            base_ts_unix_ns: u64::from_le_bytes([
-                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
-                bytes[15],
-            ]),
+            base_seq: u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]),
+            base_ts_unix_ns: u64::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]]),
         })
     }
 }

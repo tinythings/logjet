@@ -8,13 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = LogjetReader::new(BufReader::new(file));
 
     while let Some(record) = reader.next_record()? {
-        println!(
-            "type={:?} seq={} ts={} payload_len={}",
-            record.record_type,
-            record.seq,
-            record.ts_unix_ns,
-            record.payload.len()
-        );
+        println!("type={:?} seq={} ts={} payload_len={}", record.record_type, record.seq, record.ts_unix_ns, record.payload.len());
     }
 
     println!("stats={:?}", reader.stats());

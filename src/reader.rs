@@ -4,8 +4,7 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use crate::crc::crc32c;
 use crate::error::{Error, Result};
 use crate::format::{
-    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, BlockHeader,
-    BlockHeaderExt, DEFAULT_MAX_BLOCK_SIZE, DEFAULT_SYNC_MARKER,
+    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, BlockHeader, BlockHeaderExt, DEFAULT_MAX_BLOCK_SIZE, DEFAULT_SYNC_MARKER,
 };
 use crate::record::{OwnedRecord, RecordType};
 
@@ -18,11 +17,7 @@ pub struct ReaderConfig {
 
 impl Default for ReaderConfig {
     fn default() -> Self {
-        Self {
-            sync_marker: DEFAULT_SYNC_MARKER,
-            max_compressed_len: DEFAULT_MAX_BLOCK_SIZE,
-            max_uncompressed_len: DEFAULT_MAX_BLOCK_SIZE,
-        }
+        Self { sync_marker: DEFAULT_SYNC_MARKER, max_compressed_len: DEFAULT_MAX_BLOCK_SIZE, max_uncompressed_len: DEFAULT_MAX_BLOCK_SIZE }
     }
 }
 
@@ -52,22 +47,13 @@ impl<R: Read + Seek> LogjetReader<R> {
     }
 
     pub fn with_config(inner: R, config: ReaderConfig) -> Self {
-        Self {
-            inner,
-            config,
-            stats: ReaderStats::default(),
-            pending: VecDeque::new(),
-        }
+        Self { inner, config, stats: ReaderStats::default(), pending: VecDeque::new() }
     }
 
     pub fn next_record(&mut self) -> Result<Option<OwnedRecord>> {
         loop {
             if let Some(record) = self.pending.pop_front() {
-                self.stats.records_ok = self
-                    .stats
-                    .records_ok
-                    .checked_add(1)
-                    .ok_or(Error::NumericOverflow("records_ok"))?;
+                self.stats.records_ok = self.stats.records_ok.checked_add(1).ok_or(Error::NumericOverflow("records_ok"))?;
                 return Ok(Some(record));
             }
 
@@ -83,22 +69,15 @@ impl<R: Read + Seek> LogjetReader<R> {
         loop {
             let Some(sync_start) = self.find_next_sync()? else {
                 let eof = self.inner.seek(SeekFrom::End(0))?;
-                self.stats.bytes_skipped = self
-                    .stats
-                    .bytes_skipped
-                    .checked_add(eof.saturating_sub(scan_origin))
-                    .ok_or(Error::NumericOverflow("bytes_skipped"))?;
+                self.stats.bytes_skipped =
+                    self.stats.bytes_skipped.checked_add(eof.saturating_sub(scan_origin)).ok_or(Error::NumericOverflow("bytes_skipped"))?;
                 self.inner.seek(SeekFrom::Start(eof))?;
                 return Ok(false);
             };
 
             match self.try_read_block_at(sync_start) {
                 Ok(records) => {
-                    self.stats.blocks_ok = self
-                        .stats
-                        .blocks_ok
-                        .checked_add(1)
-                        .ok_or(Error::NumericOverflow("blocks_ok"))?;
+                    self.stats.blocks_ok = self.stats.blocks_ok.checked_add(1).ok_or(Error::NumericOverflow("blocks_ok"))?;
                     self.stats.bytes_skipped = self
                         .stats
                         .bytes_skipped
@@ -108,20 +87,12 @@ impl<R: Read + Seek> LogjetReader<R> {
                     return Ok(true);
                 }
                 Err(Error::Io(err)) if err.kind() == ErrorKind::UnexpectedEof => {
-                    self.stats.blocks_bad = self
-                        .stats
-                        .blocks_bad
-                        .checked_add(1)
-                        .ok_or(Error::NumericOverflow("blocks_bad"))?;
+                    self.stats.blocks_bad = self.stats.blocks_bad.checked_add(1).ok_or(Error::NumericOverflow("blocks_bad"))?;
                     self.inner.seek(SeekFrom::Start(sync_start + 1))?;
                 }
                 Err(Error::Io(err)) => return Err(Error::Io(err)),
                 Err(_) => {
-                    self.stats.blocks_bad = self
-                        .stats
-                        .blocks_bad
-                        .checked_add(1)
-                        .ok_or(Error::NumericOverflow("blocks_bad"))?;
+                    self.stats.blocks_bad = self.stats.blocks_bad.checked_add(1).ok_or(Error::NumericOverflow("blocks_bad"))?;
                     self.inner.seek(SeekFrom::Start(sync_start + 1))?;
                 }
             }
@@ -176,32 +147,19 @@ impl<R: Read + Seek> LogjetReader<R> {
             return Err(Error::HeaderTooShort(header.header_len));
         }
         let header_len = usize::from(header.header_len);
-        let ext_len = header_len
-            .checked_sub(BLOCK_HEADER_FIXED_LEN)
-            .ok_or(Error::InvalidHeader("header length underflow"))?;
+        let ext_len = header_len.checked_sub(BLOCK_HEADER_FIXED_LEN).ok_or(Error::InvalidHeader("header length underflow"))?;
         if ext_len < BLOCK_HEADER_EXT_LEN {
             return Err(Error::InvalidHeader("missing required header extension"));
         }
 
-        validate_length(
-            "compressed_len",
-            header.compressed_len as usize,
-            self.config.max_compressed_len,
-        )?;
-        validate_length(
-            "uncompressed_len",
-            header.uncompressed_len as usize,
-            self.config.max_uncompressed_len,
-        )?;
+        validate_length("compressed_len", header.compressed_len as usize, self.config.max_compressed_len)?;
+        validate_length("uncompressed_len", header.uncompressed_len as usize, self.config.max_uncompressed_len)?;
 
         let mut ext_bytes = vec![0u8; ext_len];
         self.inner.read_exact(&mut ext_bytes)?;
         let expected_header_crc = header.compute_header_crc(&ext_bytes);
         if expected_header_crc != header.header_crc32c {
-            return Err(Error::HeaderCrcMismatch {
-                expected: header.header_crc32c,
-                actual: expected_header_crc,
-            });
+            return Err(Error::HeaderCrcMismatch { expected: header.header_crc32c, actual: expected_header_crc });
         }
         let ext = BlockHeaderExt::decode(&ext_bytes[..BLOCK_HEADER_EXT_LEN])?;
 
@@ -212,23 +170,17 @@ impl<R: Read + Seek> LogjetReader<R> {
         self.inner.read_exact(&mut block_crc_bytes)?;
         let expected_block_crc = u32::from_le_bytes(block_crc_bytes);
 
-        let mut crc_bytes =
-            Vec::with_capacity(BLOCK_HEADER_FIXED_LEN + ext_bytes.len() + compressed.len());
+        let mut crc_bytes = Vec::with_capacity(BLOCK_HEADER_FIXED_LEN + ext_bytes.len() + compressed.len());
         crc_bytes.extend_from_slice(&fixed);
         crc_bytes.extend_from_slice(&ext_bytes);
         crc_bytes.extend_from_slice(&compressed);
         let actual_block_crc = crc32c(&crc_bytes);
         if expected_block_crc != actual_block_crc {
-            return Err(Error::BlockCrcMismatch {
-                expected: expected_block_crc,
-                actual: actual_block_crc,
-            });
+            return Err(Error::BlockCrcMismatch { expected: expected_block_crc, actual: actual_block_crc });
         }
 
         let mut payload = Vec::with_capacity(header.uncompressed_len as usize);
-        header
-            .codec
-            .decompress(&compressed, header.uncompressed_len as usize, &mut payload)?;
+        header.codec.decompress(&compressed, header.uncompressed_len as usize, &mut payload)?;
 
         let records = parse_records(&payload, header.record_count, ext)?;
         Ok(records)
@@ -237,20 +189,12 @@ impl<R: Read + Seek> LogjetReader<R> {
 
 fn validate_length(field: &'static str, value: usize, limit: usize) -> Result<()> {
     if value > limit {
-        return Err(Error::LengthTooLarge {
-            field,
-            value: value as u64,
-            limit,
-        });
+        return Err(Error::LengthTooLarge { field, value: value as u64, limit });
     }
     Ok(())
 }
 
-fn parse_records(
-    payload: &[u8],
-    record_count: u32,
-    ext: BlockHeaderExt,
-) -> Result<VecDeque<OwnedRecord>> {
+fn parse_records(payload: &[u8], record_count: u32, ext: BlockHeaderExt) -> Result<VecDeque<OwnedRecord>> {
     let mut records = VecDeque::with_capacity(record_count as usize);
     let mut cursor = 0usize;
 
@@ -264,26 +208,17 @@ fn parse_records(
         let seq_delta = decode_varint(payload, &mut cursor)?;
         let ts_delta = decode_varint(payload, &mut cursor)?;
         let payload_len = decode_varint(payload, &mut cursor)?;
-        let payload_len =
-            usize::try_from(payload_len).map_err(|_| Error::NumericOverflow("payload_len"))?;
+        let payload_len = usize::try_from(payload_len).map_err(|_| Error::NumericOverflow("payload_len"))?;
 
-        let end = cursor
-            .checked_add(payload_len)
-            .ok_or(Error::NumericOverflow("record payload end"))?;
+        let end = cursor.checked_add(payload_len).ok_or(Error::NumericOverflow("record payload end"))?;
         if end > payload.len() {
             return Err(Error::Truncated("record payload"));
         }
 
         records.push_back(OwnedRecord {
             record_type,
-            seq: ext
-                .base_seq
-                .checked_add(seq_delta)
-                .ok_or(Error::NumericOverflow("record seq"))?,
-            ts_unix_ns: ext
-                .base_ts_unix_ns
-                .checked_add(ts_delta)
-                .ok_or(Error::NumericOverflow("record ts"))?,
+            seq: ext.base_seq.checked_add(seq_delta).ok_or(Error::NumericOverflow("record seq"))?,
+            ts_unix_ns: ext.base_ts_unix_ns.checked_add(ts_delta).ok_or(Error::NumericOverflow("record ts"))?,
             payload: payload[cursor..end].to_vec(),
         });
         cursor = end;
