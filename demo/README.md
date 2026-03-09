@@ -33,6 +33,8 @@ It also contains scenario demos under subdirectories:
   - five emitters running continuously into one `logjetd` and one live collector
 - [`multi-client-behaviour`](./multi-client-behaviour)
   - one replay client stalls while another keeps flowing
+- [`replay-handoff`](./replay-handoff)
+  - a late replay client drains retained backlog and then continues live on the same connection
 - [`file-replay`](./file-replay)
   - replay stored `.logjet` files into a collector
 - [`file-tooling`](./file-tooling)
