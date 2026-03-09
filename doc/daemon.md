@@ -41,19 +41,19 @@ logjetd inspect /var/lib/logjet
 List rotated file segments for one spool:
 
 ```bash
-logjetd segments --path /var/lib/logjet --name bofh.logjet
+logjetd segments --path /var/lib/logjet --name app.logjet
 ```
 
 Prune oldest rotated file segments and keep only the newest two files:
 
 ```bash
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-files 2
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-files 2
 ```
 
 Preview byte-budget pruning without deleting anything:
 
 ```bash
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-bytes 1048576 --dry-run
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-run
 ```
 
 Continuously bridge from another `logjetd` replay listener into an OTLP

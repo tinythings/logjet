@@ -89,7 +89,7 @@ List ordered rotated segments for one spool.
 Example:
 
 ```text
-logjetd segments --path /var/lib/logjet --name bofh.logjet
+logjetd segments --path /var/lib/logjet --name app.logjet
 ```
 
 ## replay
@@ -100,14 +100,14 @@ payloads into an OTLP/HTTP collector.
 Example:
 
 ```text
-logjetd replay --path /var/logs --name bofh.logjet --dest http://127.0.0.1:4318/v1/logs
+logjetd replay --path /var/logs --name app.logjet --dest http://127.0.0.1:4318/v1/logs
 ```
 
 Replay order is:
 
-- `bofh.logjet`
-- `bofh-1.logjet`
-- `bofh-2.logjet`
+- `app.logjet`
+- `app-1.logjet`
+- `app-2.logjet`
 - and so on
 
 Replay is immediate and does not preserve original timing.
@@ -120,8 +120,8 @@ Remove oldest rotated file segments deliberately.
 Examples:
 
 ```text
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-files 2
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-bytes 1048576 --dry-run
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-files 2
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-run
 ```
 
 # OPTIONS
@@ -146,9 +146,9 @@ Base file name used to locate replay segments.
 
 Example:
 
-- `bofh.logjet`
-- `bofh-1.logjet`
-- `bofh-2.logjet`
+- `app.logjet`
+- `app-1.logjet`
+- `app-2.logjet`
 
 Used only with the `replay` command.
 
@@ -338,7 +338,7 @@ logjetd inspect ./logs
 Replay files to a local collector:
 
 ```text
-logjetd --config ./logjetd.conf replay --path ./logs --name bofh.logjet
+logjetd --config ./logjetd.conf replay --path ./logs --name app.logjet
 ```
 
 Bridge from a remote replay listener into a collector:
