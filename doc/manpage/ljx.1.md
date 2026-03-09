@@ -14,7 +14,7 @@ ljx - offline toolbox for inspecting and transforming `.logjet` files
 
 `ljx` `stats` *input*
 
-`ljx` `cat` *input*
+`ljx` `view` *input*
 
 `ljx` `split` *input* *output-prefix*
 
@@ -86,11 +86,11 @@ Planned summaries include:
 
 `stats` is planned but may not be complete in release `0.1`.
 
-## cat
+## view
 
-Print records in a human-readable form for inspection.
+Browse filtered records in an interactive terminal UI.
 
-`cat` is planned but may not be complete in release `0.1`.
+`view` is available for interactive inspection and uses a bounded-memory scan.
 
 ## split
 
@@ -290,7 +290,7 @@ Use this when you need cardinality instead of an output file.
 ## 15. Print records for terminal inspection
 
 ```text
-ljx cat telemetry.logjet
+ljx view telemetry.logjet
 ```
 
 Use this when you want a human-readable record listing.
@@ -298,7 +298,7 @@ Use this when you want a human-readable record listing.
 ## 16. Print records with hex payload rendering
 
 ```text
-ljx cat telemetry.logjet --hex-payload
+ljx view telemetry.logjet --hex-payload
 ```
 
 Use this when payload bytes are binary and text rendering is misleading.
