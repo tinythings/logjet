@@ -5,8 +5,8 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace]
-members = ["logjetd", "demo"]
-default-members = [".", "logjetd", "demo"]
+members = [".", "logjetd", "demo", "ljx"]
+default-members = [".", "logjetd", "demo", "ljx"]
 
 [profile.release]
 lto = true
@@ -19,3 +19,7 @@ incremental = false
 [dependencies]
 crc32c = "0.6"
 lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+opentelemetry-proto = { version = "0.28", features = ["gen-tonic", "logs"] }
+prost = "0.13"
