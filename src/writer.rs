@@ -4,8 +4,8 @@ use crate::codec::Codec;
 use crate::crc::crc32c;
 use crate::error::{Error, Result};
 use crate::format::{
-    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, DEFAULT_BLOCK_TARGET_SIZE,
-    DEFAULT_SYNC_MARKER, FORMAT_VERSION, BlockHeader, BlockHeaderExt,
+    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, BlockHeader,
+    BlockHeaderExt, DEFAULT_BLOCK_TARGET_SIZE, DEFAULT_SYNC_MARKER, FORMAT_VERSION,
 };
 use crate::record::RecordType;
 
@@ -76,12 +76,12 @@ impl<W: Write> LogjetWriter<W> {
             }
         };
 
-        let seq_delta = seq
-            .checked_sub(base_seq)
-            .ok_or(Error::InvalidHeader("sequence must be monotonic within block"))?;
-        let ts_delta = ts_unix_ns
-            .checked_sub(base_ts)
-            .ok_or(Error::InvalidHeader("timestamp must be monotonic within block"))?;
+        let seq_delta = seq.checked_sub(base_seq).ok_or(Error::InvalidHeader(
+            "sequence must be monotonic within block",
+        ))?;
+        let ts_delta = ts_unix_ns.checked_sub(base_ts).ok_or(Error::InvalidHeader(
+            "timestamp must be monotonic within block",
+        ))?;
 
         self.encoded_record_buf.push(record_type as u8);
         encode_varint(seq_delta, &mut self.encoded_record_buf)?;
@@ -141,14 +141,14 @@ impl<W: Write> LogjetWriter<W> {
             .codec
             .compress(&self.payload_buf, &mut self.compressed_buf)?;
 
-        let uncompressed_len = u32::try_from(self.payload_buf.len())
-            .map_err(|_| Error::LengthTooLarge {
+        let uncompressed_len =
+            u32::try_from(self.payload_buf.len()).map_err(|_| Error::LengthTooLarge {
                 field: "uncompressed_len",
                 value: self.payload_buf.len() as u64,
                 limit: u32::MAX as usize,
             })?;
-        let compressed_len = u32::try_from(self.compressed_buf.len())
-            .map_err(|_| Error::LengthTooLarge {
+        let compressed_len =
+            u32::try_from(self.compressed_buf.len()).map_err(|_| Error::LengthTooLarge {
                 field: "compressed_len",
                 value: self.compressed_buf.len() as u64,
                 limit: u32::MAX as usize,

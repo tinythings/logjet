@@ -4,8 +4,8 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use crate::crc::crc32c;
 use crate::error::{Error, Result};
 use crate::format::{
-    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, DEFAULT_MAX_BLOCK_SIZE,
-    DEFAULT_SYNC_MARKER, BlockHeader, BlockHeaderExt,
+    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, BlockHeader,
+    BlockHeaderExt, DEFAULT_MAX_BLOCK_SIZE, DEFAULT_SYNC_MARKER,
 };
 use crate::record::{OwnedRecord, RecordType};
 
@@ -226,11 +226,9 @@ impl<R: Read + Seek> LogjetReader<R> {
         }
 
         let mut payload = Vec::with_capacity(header.uncompressed_len as usize);
-        header.codec.decompress(
-            &compressed,
-            header.uncompressed_len as usize,
-            &mut payload,
-        )?;
+        header
+            .codec
+            .decompress(&compressed, header.uncompressed_len as usize, &mut payload)?;
 
         let records = parse_records(&payload, header.record_count, ext)?;
         Ok(records)

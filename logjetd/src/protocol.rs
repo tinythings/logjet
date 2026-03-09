@@ -41,7 +41,10 @@ pub fn read_record<R: Read>(reader: &mut R) -> io::Result<Option<WireRecord>> {
     read_record_with_limit(reader, usize::MAX)
 }
 
-pub fn read_record_with_limit<R: Read>(reader: &mut R, max_payload_len: usize) -> io::Result<Option<WireRecord>> {
+pub fn read_record_with_limit<R: Read>(
+    reader: &mut R,
+    max_payload_len: usize,
+) -> io::Result<Option<WireRecord>> {
     let mut magic = [0u8; 8];
     match reader.read_exact(&mut magic) {
         Ok(()) => {}
@@ -87,18 +90,24 @@ pub fn read_record_with_limit<R: Read>(reader: &mut R, max_payload_len: usize) -
     Ok(Some(WireRecord {
         record_type,
         seq: u64::from_le_bytes([
-            header[4], header[5], header[6], header[7], header[8], header[9], header[10], header[11],
+            header[4], header[5], header[6], header[7], header[8], header[9], header[10],
+            header[11],
         ]),
         ts_unix_ns: u64::from_le_bytes([
-            header[12], header[13], header[14], header[15], header[16], header[17], header[18], header[19],
+            header[12], header[13], header[14], header[15], header[16], header[17], header[18],
+            header[19],
         ]),
         payload,
     }))
 }
 
 pub fn write_record<W: Write>(writer: &mut W, record: &WireRecord) -> io::Result<()> {
-    let payload_len = u32::try_from(record.payload.len())
-        .map_err(|_| io::Error::new(ErrorKind::InvalidInput, "payload too large for wire protocol"))?;
+    let payload_len = u32::try_from(record.payload.len()).map_err(|_| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            "payload too large for wire protocol",
+        )
+    })?;
 
     writer.write_all(&WIRE_MAGIC)?;
     writer.write_all(&[WIRE_VERSION, record.record_type as u8])?;
@@ -133,7 +142,8 @@ pub fn read_replay_request<R: Read>(reader: &mut R) -> io::Result<ReplayRequest>
     Ok(ReplayRequest {
         consume: header[1] & 0x01 != 0,
         from_seq: u64::from_le_bytes([
-            header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15],
+            header[8], header[9], header[10], header[11], header[12], header[13], header[14],
+            header[15],
         ]),
     })
 }
@@ -169,13 +179,16 @@ pub fn read_replay_hello<R: Read>(reader: &mut R) -> io::Result<ReplayHello> {
 
     Ok(ReplayHello {
         stream_id: u64::from_le_bytes([
-            header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15],
+            header[8], header[9], header[10], header[11], header[12], header[13], header[14],
+            header[15],
         ]),
         first_seq: u64::from_le_bytes([
-            header[16], header[17], header[18], header[19], header[20], header[21], header[22], header[23],
+            header[16], header[17], header[18], header[19], header[20], header[21], header[22],
+            header[23],
         ]),
         last_seq: u64::from_le_bytes([
-            header[24], header[25], header[26], header[27], header[28], header[29], header[30], header[31],
+            header[24], header[25], header[26], header[27], header[28], header[29], header[30],
+            header[31],
         ]),
     })
 }
@@ -212,7 +225,8 @@ pub fn read_replay_ack<R: Read>(reader: &mut R) -> io::Result<ReplayAck> {
 
     Ok(ReplayAck {
         ack_seq: u64::from_le_bytes([
-            header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15],
+            header[8], header[9], header[10], header[11], header[12], header[13], header[14],
+            header[15],
         ]),
     })
 }
