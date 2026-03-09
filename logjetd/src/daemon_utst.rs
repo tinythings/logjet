@@ -1,6 +1,6 @@
 use super::{
-    BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy, classify_otlp_batch_priority,
-    read_http_request, write_http_response,
+    BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy,
+    classify_otlp_batch_priority, read_http_request, write_http_response,
 };
 use crate::config::{IngestOverloadConfig, SeverityFloor};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
@@ -117,7 +117,10 @@ fn ingest_policy_rate_limits_low_priority_batches() {
         priority_severity_floor: SeverityFloor::Error,
         report_every_ms: 0,
     });
-    assert_eq!(policy.decide(BatchPriority::Warn).unwrap(), IngestDecision::Accept);
+    assert_eq!(
+        policy.decide(BatchPriority::Warn).unwrap(),
+        IngestDecision::Accept
+    );
     assert_eq!(
         policy.decide(BatchPriority::Warn).unwrap(),
         IngestDecision::RejectRateLimited
@@ -131,7 +134,10 @@ fn ingest_policy_allows_priority_bypass_above_threshold() {
         priority_severity_floor: SeverityFloor::Error,
         report_every_ms: 0,
     });
-    assert_eq!(policy.decide(BatchPriority::Warn).unwrap(), IngestDecision::Accept);
+    assert_eq!(
+        policy.decide(BatchPriority::Warn).unwrap(),
+        IngestDecision::Accept
+    );
     assert_eq!(
         policy.decide(BatchPriority::Error).unwrap(),
         IngestDecision::AcceptPriorityBypass
