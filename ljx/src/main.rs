@@ -27,6 +27,6 @@ fn run() -> Result<()> {
         Command::Filter(args) => commands::filter::run(args),
         Command::Count(args) => commands::count::run(args),
         Command::Stats(args) => commands::stats::run(args),
-        Command::Cat(args) => commands::cat::run(args),
+        Command::View(args) => commands::view::run(args),
     }
 }
