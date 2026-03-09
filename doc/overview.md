@@ -3,7 +3,7 @@
 `logjet` is split into two parts:
 
 - `logjet`: a Rust library and `.logjet` block format for storing raw OTLP protobuf batches
-- `logjetd`: a daemon that accepts OTLP logs, keeps a backlog, and replays or blasts stored data later
+- `ljd`: a daemon that accepts OTLP logs, keeps a backlog, and replays or blasts stored data later
 
 ## Components
 
@@ -16,7 +16,7 @@ The library provides:
 - corruption tolerance through sync markers and per-block CRC32C
 - block-local compression with `lz4` or `none`
 
-### `logjetd`
+### `ljd`
 
 The daemon provides:
 
@@ -45,26 +45,26 @@ The daemon provides:
 
 ## Intended Use
 
-`logjetd` is meant to sit next to a local telemetry source such as an OTel
+`ljd` is meant to sit next to a local telemetry source such as an OTel
 Appliance (`OA`).
 
 Typical flow:
 
 1. a local source connects to the ingest listener
-2. `logjetd` stores records in memory or `.logjet` files
+2. `ljd` stores records in memory or `.logjet` files
 3. a downstream consumer connects to the replay listener
-4. `logjetd` sends retained backlog first
-5. `logjetd` continues sending newly ingested records
+4. `ljd` sends retained backlog first
+5. `ljd` continues sending newly ingested records
 
-`logjetd` can also run remotely in bridge mode:
+`ljd` can also run remotely in bridge mode:
 
-1. connect to another `logjetd` replay listener
+1. connect to another `ljd` replay listener
 2. request records after a known sequence
 3. keep or drain retained backlog
 4. stay attached for live records
 5. forward raw OTLP protobuf payloads into an OTLP/HTTP collector
 
-`logjetd` can also replay stored `.logjet` files later into an OTLP/HTTP
+`ljd` can also replay stored `.logjet` files later into an OTLP/HTTP
 collector without preserving original timing.
 
 This is optimised for:

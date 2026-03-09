@@ -24,7 +24,7 @@ From this directory:
 
 This starts:
 
-1. appliance-side `logjetd`
+1. appliance-side `ljd`
 2. a steady message stream
 
 The replay listener is configured with:
@@ -73,7 +73,7 @@ While the stalled client is running:
 
 - Terminal 2 keeps printing new `MULTI` messages
 - Terminal 3 reports that it received one record and then stalled
-- appliance-side `logjetd` eventually logs a replay client error caused by timeout
+- appliance-side `ljd` eventually logs a replay client error caused by timeout
 
 That is the point:
 

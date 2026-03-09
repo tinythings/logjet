@@ -3,7 +3,7 @@
 This demo shows the point of `upstream.state-file`.
 
 The appliance side keeps producing logs. The consumer side can die and come
-back. When it returns, `logjetd bridge` resumes from the last successfully
+back. When it returns, `ljd bridge` resumes from the last successfully
 forwarded sequence instead of replaying from zero.
 
 That means:
@@ -21,13 +21,13 @@ appliance side. It is written on the downstream consumer side.
 
 The split is:
 
-- appliance-side `logjetd`
+- appliance-side `ljd`
   - receives OTLP
   - keeps backlog in memory
   - exposes a replay listener
   - does not need to write a bridge checkpoint file
 
-- consumer-side `logjetd bridge`
+- consumer-side `ljd bridge`
   - connects to the appliance replay listener
   - forwards logs to the collector
   - stores the last forwarded sequence in `upstream.state-file`
@@ -53,7 +53,7 @@ From this directory:
 
 This starts:
 
-1. appliance-side `logjetd`
+1. appliance-side `ljd`
 2. a dialogue-style message emitter
 
 The appliance side uses in-memory retention only.
@@ -72,7 +72,7 @@ From this directory:
 This starts:
 
 1. the collector
-2. consumer-side `logjetd bridge`
+2. consumer-side `ljd bridge`
 
 The consumer config contains:
 

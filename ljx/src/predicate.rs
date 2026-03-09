@@ -64,9 +64,7 @@ impl PredicateArgs {
             (None, Some(text)) => Some(PayloadMatcher::new(&text, true, self.ignore_case)?),
             (None, None) => None,
             (Some(_), Some(_)) => {
-                return Err(Error::Usage(
-                    "choose either -e/--grep or -F/--fixed-string, not both".to_string(),
-                ));
+                return Err(Error::Usage("choose either -e/--grep or -F/--fixed-string, not both".to_string()));
             }
         };
 
@@ -96,52 +94,52 @@ pub fn parse_filter_query(query: &str, mode: FilterMode) -> Result<RecordPredica
     // Bare text in the TUI stays ergonomic and depends on the active filter mode.
     if !trimmed.starts_with('-') {
         return match mode {
-            FilterMode::Strings => PredicateArgs {
-                fixed_string: Some(trimmed.to_string()),
-                ..PredicateArgs::default()
-            }
-            .build(),
-            FilterMode::Regex => PredicateArgs {
-                grep: Some(trimmed.to_string()),
-                ..PredicateArgs::default()
-            }
-            .build(),
+            FilterMode::Strings => PredicateArgs { fixed_string: Some(trimmed.to_string()), ..PredicateArgs::default() }.build(),
+            FilterMode::Regex => PredicateArgs { grep: Some(trimmed.to_string()), ..PredicateArgs::default() }.build(),
         };
     }
 
-    let argv = shlex::split(trimmed)
-        .ok_or_else(|| Error::Usage("invalid filter expression: unterminated quotes".to_string()))?;
+    let argv = shlex::split(trimmed).ok_or_else(|| Error::Usage("invalid filter expression: unterminated quotes".to_string()))?;
     let mut full_argv = Vec::with_capacity(argv.len() + 1);
     full_argv.push("view-filter".to_string());
     full_argv.extend(argv);
 
     let mut command = PredicateCli::command();
-    let mut matches = command
-        .try_get_matches_from_mut(full_argv)
-        .map_err(|err| Error::Usage(err.to_string()))?;
-    let parsed =
-        PredicateCli::from_arg_matches_mut(&mut matches).map_err(|err| Error::Usage(err.to_string()))?;
+    let mut matches = command.try_get_matches_from_mut(full_argv).map_err(|err| Error::Usage(err.to_string()))?;
+    let parsed = PredicateCli::from_arg_matches_mut(&mut matches).map_err(|err| Error::Usage(err.to_string()))?;
     parsed.predicate.build()
 }
 
 impl RecordPredicate {
     pub fn matches(&self, record: &OwnedRecord) -> bool {
-        if let Some(expected) = self.record_type && record.record_type != expected {
+        if let Some(expected) = self.record_type
+            && record.record_type != expected
+        {
             return false;
         }
-        if let Some(min) = self.seq_min && record.seq < min {
+        if let Some(min) = self.seq_min
+            && record.seq < min
+        {
             return false;
         }
-        if let Some(max) = self.seq_max && record.seq > max {
+        if let Some(max) = self.seq_max
+            && record.seq > max
+        {
             return false;
         }
-        if let Some(min) = self.ts_min && record.ts_unix_ns < min {
+        if let Some(min) = self.ts_min
+            && record.ts_unix_ns < min
+        {
             return false;
         }
-        if let Some(max) = self.ts_max && record.ts_unix_ns > max {
+        if let Some(max) = self.ts_max
+            && record.ts_unix_ns > max
+        {
             return false;
         }
-        if let Some(matcher) = &self.payload_matcher && !matcher.is_match(&record.payload) {
+        if let Some(matcher) = &self.payload_matcher
+            && !matcher.is_match(&record.payload)
+        {
             return false;
         }
 
@@ -151,11 +149,7 @@ impl RecordPredicate {
 
 impl PayloadMatcher {
     fn new(pattern: &str, fixed_string: bool, ignore_case: bool) -> Result<Self> {
-        let source = if fixed_string {
-            regex::escape(pattern)
-        } else {
-            pattern.to_string()
-        };
+        let source = if fixed_string { regex::escape(pattern) } else { pattern.to_string() };
         let regex = RegexBuilder::new(&source)
             .case_insensitive(ignore_case)
             .build()
@@ -191,22 +185,12 @@ mod tests {
     use logjet::{OwnedRecord, RecordType};
 
     fn sample_record(payload: &[u8]) -> OwnedRecord {
-        OwnedRecord {
-            record_type: RecordType::Logs,
-            seq: 42,
-            ts_unix_ns: 1_700_000_000,
-            payload: payload.to_vec(),
-        }
+        OwnedRecord { record_type: RecordType::Logs, seq: 42, ts_unix_ns: 1_700_000_000, payload: payload.to_vec() }
     }
 
     #[test]
     fn fixed_string_match_is_literal() {
-        let predicate = PredicateArgs {
-            fixed_string: Some("java.crap.failed".to_string()),
-            ..PredicateArgs::default()
-        }
-        .build()
-        .unwrap();
+        let predicate = PredicateArgs { fixed_string: Some("java.crap.failed".to_string()), ..PredicateArgs::default() }.build().unwrap();
 
         assert!(predicate.matches(&sample_record(b"xxx java.crap.failed yyy")));
         assert!(!predicate.matches(&sample_record(b"javaXcrapXfailed")));
@@ -214,12 +198,7 @@ mod tests {
 
     #[test]
     fn regex_match_supports_wildcards() {
-        let predicate = PredicateArgs {
-            grep: Some(r"java\..*\.bs".to_string()),
-            ..PredicateArgs::default()
-        }
-        .build()
-        .unwrap();
+        let predicate = PredicateArgs { grep: Some(r"java\..*\.bs".to_string()), ..PredicateArgs::default() }.build().unwrap();
 
         assert!(predicate.matches(&sample_record(b"java.very.long.bs")));
         assert!(!predicate.matches(&sample_record(b"java.very.long.cs")));
@@ -227,20 +206,8 @@ mod tests {
 
     #[test]
     fn ignore_case_applies_to_fixed_string_and_regex() {
-        let fixed = PredicateArgs {
-            fixed_string: Some("error".to_string()),
-            ignore_case: true,
-            ..PredicateArgs::default()
-        }
-        .build()
-        .unwrap();
-        let regex = PredicateArgs {
-            grep: Some("error".to_string()),
-            ignore_case: true,
-            ..PredicateArgs::default()
-        }
-        .build()
-        .unwrap();
+        let fixed = PredicateArgs { fixed_string: Some("error".to_string()), ignore_case: true, ..PredicateArgs::default() }.build().unwrap();
+        let regex = PredicateArgs { grep: Some("error".to_string()), ignore_case: true, ..PredicateArgs::default() }.build().unwrap();
 
         let record = sample_record(b"prefix eRrOr suffix");
         assert!(fixed.matches(&record));
@@ -267,12 +234,7 @@ mod tests {
 
     #[test]
     fn invalid_regex_is_reported() {
-        let error = PredicateArgs {
-            grep: Some("(".to_string()),
-            ..PredicateArgs::default()
-        }
-        .build()
-        .unwrap_err();
+        let error = PredicateArgs { grep: Some("(".to_string()), ..PredicateArgs::default() }.build().unwrap_err();
 
         assert!(error.to_string().contains("invalid payload matcher"));
     }

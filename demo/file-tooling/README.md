@@ -2,8 +2,8 @@
 
 This demo shows the operational file-management commands for file mode:
 
-- `logjetd segments`
-- `logjetd prune`
+- `ljd segments`
+- `ljd prune`
 
 ## Point
 
@@ -34,9 +34,9 @@ From this directory:
 
 The script:
 
-1. starts file-backed `logjetd`
+1. starts file-backed `ljd`
 2. sends enough OTLP batches to rotate several `ops*.logjet` files
-3. shows the current segment layout with `logjetd segments`
+3. shows the current segment layout with `ljd segments`
 4. previews pruning by file count
 5. previews pruning by byte budget
 6. prunes oldest segments and keeps only the newest two files
@@ -47,25 +47,25 @@ The script:
 List the rotated spool:
 
 ```bash
-../../target/debug/logjetd segments --path ./logs --name ops.logjet
+../../target/debug/ljd segments --path ./logs --name ops.logjet
 ```
 
 Preview pruning by file count:
 
 ```bash
-../../target/debug/logjetd prune --path ./logs --name ops.logjet --keep-files 2 --dry-run
+../../target/debug/ljd prune --path ./logs --name ops.logjet --keep-files 2 --dry-run
 ```
 
 Preview pruning by byte budget:
 
 ```bash
-../../target/debug/logjetd prune --path ./logs --name ops.logjet --keep-bytes 2048 --dry-run
+../../target/debug/ljd prune --path ./logs --name ops.logjet --keep-bytes 2048 --dry-run
 ```
 
 Prune for real:
 
 ```bash
-../../target/debug/logjetd prune --path ./logs --name ops.logjet --keep-files 2
+../../target/debug/ljd prune --path ./logs --name ops.logjet --keep-files 2
 ```
 
 ## Expected Result

@@ -13,7 +13,7 @@ make demo
 
 That gives you:
 
-- `target/debug/logjetd`
+- `target/debug/ljd`
 - `target/debug/otlp-demo-collector`
 
 
@@ -45,7 +45,7 @@ From this directory:
 The script:
 
 1. starts the OTLP collector mockup
-2. runs `logjetd --config ./logjetd.conf replay --path ./logs --name bofh.logjet`
+2. runs `ljd --config ./logjetd.conf replay --path ./logs --name bofh.logjet`
 3. blasts all recorded OTLP batches to the collector
 
 Expected result:

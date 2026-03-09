@@ -12,9 +12,7 @@ pub fn run(args: CountArgs) -> Result<()> {
     let mut count = 0u64;
     while let Some(record) = reader.next_record()? {
         if predicate.matches(&record) {
-            count = count
-                .checked_add(1)
-                .ok_or(logjet::Error::NumericOverflow("count"))?;
+            count = count.checked_add(1).ok_or(logjet::Error::NumericOverflow("count"))?;
         }
     }
 

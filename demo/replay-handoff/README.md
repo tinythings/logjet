@@ -1,6 +1,6 @@
 # Replay Handoff Demo
 
-This demo isolates the backlog-to-live handoff inside `logjetd serve`.
+This demo isolates the backlog-to-live handoff inside `ljd serve`.
 
 It proves one replay client can:
 
@@ -25,7 +25,7 @@ Terminal 1, from this directory:
 ./run-appliance.sh
 ```
 
-This starts `logjetd`, writes three retained messages before any replay client
+This starts `ljd`, writes three retained messages before any replay client
 connects, and then keeps sending one live message per second.
 
 Terminal 2, from this directory:

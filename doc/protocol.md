@@ -1,6 +1,6 @@
 # Current Wire Protocol
 
-`logjetd` currently uses a small custom TCP wire protocol between ingest clients
+`ljd` currently uses a small custom TCP wire protocol between ingest clients
 and replay clients.
 
 This is not OTLP/gRPC and not OTLP/HTTP.
@@ -59,16 +59,16 @@ Meaning:
 
 ## Semantics
 
-- ingest clients send framed records to `logjetd`
-- replay clients first receive replay hello, then send `from_seq`, then receive framed records from `logjetd`
-- `logjetd` does not decode the OTLP payload
+- ingest clients send framed records to `ljd`
+- replay clients first receive replay hello, then send `from_seq`, then receive framed records from `ljd`
+- `ljd` does not decode the OTLP payload
 - sequence ordering is preserved if producers send ordered sequence numbers
 - reconnecting bridge clients can resume from the last forwarded sequence without restarting from zero
 - if the upstream stream identity changes, bridge resets stale saved sequence state automatically
 
 ## Why It Exists
 
-The current protocol is intentionally small and dependency-light so `logjetd`
+The current protocol is intentionally small and dependency-light so `ljd`
 can remain easy to build on constrained systems.
 
 It is a transport layer for the current daemon implementation, not the final

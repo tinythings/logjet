@@ -34,7 +34,7 @@ From this directory:
 
 This starts:
 
-1. appliance-side `logjetd`
+1. appliance-side `ljd`
 2. a simple `ALPHA 001`, `ALPHA 002`, `ALPHA 003` message stream
 
 This script also removes any old `bridge.state` file before the first run.
@@ -50,7 +50,7 @@ From this directory:
 This starts:
 
 1. the collector
-2. consumer-side `logjetd bridge`
+2. consumer-side `ljd bridge`
 
 The consumer keeps its state in:
 

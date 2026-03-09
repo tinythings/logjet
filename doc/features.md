@@ -1,13 +1,13 @@
-# logjetd Features
+# ljd Features
 
-This file tracks the current feature set and practical use cases of `logjetd`.
+This file tracks the current feature set and practical use cases of `ljd`.
 It is meant to evolve as the daemon grows.
 
 ## Current Features
 
 ### 1. OTLP log ingest
 
-`logjetd` can accept real OTLP/HTTP protobuf log export requests on:
+`ljd` can accept real OTLP/HTTP protobuf log export requests on:
 
 ```text
 POST /v1/logs
@@ -32,7 +32,7 @@ Current behaviour:
 
 ### 2. Append-only `.logjet` file output
 
-In file mode, `logjetd` writes raw OTLP protobuf batches into `.logjet` files
+In file mode, `ljd` writes raw OTLP protobuf batches into `.logjet` files
 using the `logjet` block format.
 
 Current behaviour:
@@ -46,13 +46,13 @@ Current behaviour:
   - `name-1.logjet`
   - `name-2.logjet`
 - file-mode operational tooling exists through:
-  - `logjetd segments --path ... --name ...`
-  - `logjetd prune --path ... --name ... --keep-files ...`
-  - `logjetd prune --path ... --name ... --keep-bytes ...`
+  - `ljd segments --path ... --name ...`
+  - `ljd prune --path ... --name ... --keep-files ...`
+  - `ljd prune --path ... --name ... --keep-bytes ...`
 
 ### 3. In-memory ring buffer mode
 
-In buffer mode, `logjetd` can hold retained records in RAM.
+In buffer mode, `ljd` can hold retained records in RAM.
 
 Current behaviour:
 
@@ -70,7 +70,7 @@ Memory model:
 
 ### 4. Replay listener
 
-`logjetd` exposes a replay socket for downstream consumers.
+`ljd` exposes a replay socket for downstream consumers.
 
 Current behaviour:
 
@@ -90,15 +90,15 @@ Current limitation:
 
 ### 5. Continuous bridge mode
 
-`logjetd` can run as a downstream bridge process with:
+`ljd` can run as a downstream bridge process with:
 
 ```text
-logjetd bridge [--source <host:port>]
+ljd bridge [--source <host:port>]
 ```
 
 Current behaviour:
 
-- connects to another `logjetd` replay listener
+- connects to another `ljd` replay listener
 - requests replay starting after the last sequence already forwarded
 - can keep upstream records or drain them, depending on `upstream.mode`
 - stays attached and forwards new log records live
@@ -115,7 +115,7 @@ Current behaviour:
 This is the current path for:
 
 ```text
-OA -> logjetd <- network <- logjetd -> OTel Collector
+OA -> ljd <- network <- ljd -> OTel Collector
 ```
 
 ### 6. Optional TLS on replay and bridge transport
@@ -137,11 +137,11 @@ Current limitation:
 
 ### 7. One-shot file replay to OTLP/HTTP
 
-`logjetd` can replay stored `.logjet` files directly into an OTLP/HTTP
+`ljd` can replay stored `.logjet` files directly into an OTLP/HTTP
 collector with:
 
 ```text
-logjetd replay --path <dir> --name <base.logjet> [--dest <url-or-host:port>]
+ljd replay --path <dir> --name <base.logjet> [--dest <url-or-host:port>]
 ```
 
 Current behaviour:
@@ -156,7 +156,7 @@ Current behaviour:
 
 ### 8. YAML configuration
 
-`logjetd` reads configuration from:
+`ljd` reads configuration from:
 
 - `/etc/logjet.conf` by default
 - a file passed with `-c` or `--config`
@@ -183,24 +183,24 @@ Current config areas:
 
 ### 9. Inspection tooling
 
-`logjetd` can inspect stored `.logjet` files or directories and print metadata
+`ljd` can inspect stored `.logjet` files or directories and print metadata
 about retained records.
 
 ### 10. File-mode operational tooling
 
-`logjetd` can report and prune rotated file segments explicitly.
+`ljd` can report and prune rotated file segments explicitly.
 
 Current behaviour:
 
-- `logjetd segments --path <dir> --name <base.logjet>` prints ordered segment metadata
+- `ljd segments --path <dir> --name <base.logjet>` prints ordered segment metadata
 - output includes:
   - segment id
   - file path
   - file size
   - record count
   - first and last sequence in that segment
-- `logjetd prune --path <dir> --name <base.logjet> --keep-files <n>` removes oldest rotated segments and keeps the newest `n` segment files
-- `logjetd prune --path <dir> --name <base.logjet> --keep-bytes <bytes>` removes oldest rotated segments until the newest retained set fits within the byte budget
+- `ljd prune --path <dir> --name <base.logjet> --keep-files <n>` removes oldest rotated segments and keeps the newest `n` segment files
+- `ljd prune --path <dir> --name <base.logjet> --keep-bytes <bytes>` removes oldest rotated segments until the newest retained set fits within the byte budget
 - `--dry-run` shows what would be removed without deleting anything
 - the newest active segment is always retained
 
@@ -211,7 +211,7 @@ Current behaviour:
 Use case:
 
 - an emitter sends OTLP logs locally
-- `logjetd` stores them in `.logjet` files
+- `ljd` stores them in `.logjet` files
 - files can be inspected, extracted, or replayed later
 
 Useful when:
@@ -250,7 +250,7 @@ Useful when:
 Use case:
 
 - use the OTLP demo emitter
-- send logs into `logjetd`
+- send logs into `ljd`
 - store them or inspect them locally
 
 Useful when:
@@ -290,8 +290,8 @@ Useful when:
 
 Use case:
 
-- one `logjetd` instance runs next to `OA`
-- a second `logjetd` instance connects to the first over the network
+- one `ljd` instance runs next to `OA`
+- a second `ljd` instance connects to the first over the network
 - the second instance forwards retained backlog and live OTLP logs into an OTel Collector
 
 Useful when:

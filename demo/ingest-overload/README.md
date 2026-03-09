@@ -14,7 +14,7 @@ The intended effect is:
 - the first few `WARN` batches fit under the rate limit
 - later `WARN` batches are rejected while the overload window is full
 - `ERROR` batches still get through during that same overload window
-- `logjetd` prints overload counters for operator visibility
+- `ljd` prints overload counters for operator visibility
 
 ## Build First
 
@@ -32,7 +32,7 @@ From this directory:
 ./run-appliance.sh
 ```
 
-This starts `logjetd`, then sends:
+This starts `ljd`, then sends:
 
 1. a fast `WARN` burst from `service=overload-warn`
 2. a fast `ERROR` burst from `service=overload-error`
@@ -42,10 +42,10 @@ Expected appliance-side output:
 
 - many `WARN` sends fail with `HTTP/1.1 429 Too Many Requests`
 - `ERROR` sends succeed even though the daemon is already overloaded
-- `logjetd` prints lines such as:
+- `ljd` prints lines such as:
 
 ```text
-logjetd ingest overload stats accepted=... priority-bypass=... rate-limited=...
+ljd ingest overload stats accepted=... priority-bypass=... rate-limited=...
 ```
 
 ## Terminal 2: Consumer Side
@@ -59,7 +59,7 @@ From this directory:
 This starts:
 
 1. the OTel Collector mock
-2. the wire forwarder from `logjetd` replay into the collector
+2. the wire forwarder from `ljd` replay into the collector
 
 Expected collector output:
 

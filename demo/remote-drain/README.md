@@ -3,14 +3,14 @@
 This demo shows the intended network shape:
 
 ```text
-OA -> logjetd <- network <- logjetd -> OTel Collector
+OA -> ljd <- network <- ljd -> OTel Collector
 ```
 
 In this demo:
 
-- the appliance-side `logjetd` accepts OTLP/HTTP logs locally
+- the appliance-side `ljd` accepts OTLP/HTTP logs locally
 - the appliance-side emitter stands in for `OA`
-- the remote-side `logjetd` runs in `bridge` mode
+- the remote-side `ljd` runs in `bridge` mode
 - the remote-side collector mockup stands in for an OTel Collector
 - the appliance-side daemon uses memory retention with a permanent kept prefix
 
@@ -29,7 +29,7 @@ make demo
 
 That gives you:
 
-- `target/debug/logjetd`
+- `target/debug/ljd`
 - `target/debug/otlp-bofh-emitter`
 - `target/debug/otlp-demo-collector`
 
@@ -43,7 +43,7 @@ From this directory:
 
 This starts:
 
-1. appliance-side `logjetd` with local OTLP/HTTP ingest
+1. appliance-side `ljd` with local OTLP/HTTP ingest
 2. memory retention with:
    - `buffer.keep: 3`
    - `buffer.messages: 5`
@@ -70,7 +70,7 @@ From this directory:
 This starts:
 
 1. the OTLP collector mockup on `127.0.0.1:4320`
-2. remote-side `logjetd bridge`
+2. remote-side `ljd bridge`
 3. a connection from the remote side into the appliance replay listener
 
 Expected result:

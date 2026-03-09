@@ -11,9 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use chrono::{TimeZone, Utc};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, RecordType, WriterConfig};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
@@ -37,9 +35,7 @@ const TICK_RATE: Duration = Duration::from_millis(100);
 
 pub fn run(args: ViewArgs) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return Err(Error::Usage(
-            "ljx view needs an interactive terminal; pipe-oriented output belongs in `ljx filter`".to_string(),
-        ));
+        return Err(Error::Usage("ljx view needs an interactive terminal; pipe-oriented output belongs in `ljx filter`".to_string()));
     }
 
     let mut stdout = io::stdout();
@@ -85,10 +81,7 @@ struct DetailRecord {
 #[derive(Debug, Clone)]
 enum ScanUpdate {
     Batch(Vec<EntryMeta>),
-    Finished {
-        scanned: u64,
-        matched: u64,
-    },
+    Finished { scanned: u64, matched: u64 },
     Failed(String),
 }
 
@@ -173,9 +166,7 @@ impl ViewApp {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
-        if self.focus == Focus::List
-            && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
-        {
+        if self.focus == Focus::List && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
             self.cancel_scan();
             return Ok(true);
         }
@@ -348,11 +339,7 @@ impl ViewApp {
         let predicate = parse_filter_query(&self.applied_query, self.filter_mode)?;
 
         let spool_path = create_temp_path()?;
-        let spool_reader = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&spool_path)?;
+        let spool_reader = OpenOptions::new().read(true).write(true).create_new(true).open(&spool_path)?;
         let spool_writer = spool_reader.try_clone()?;
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_worker = Arc::clone(&cancel);
@@ -373,15 +360,7 @@ impl ViewApp {
         });
 
         self.status = format!("Scanning matches for {:?}", self.applied_query);
-        self.current_scan = Some(ActiveScan {
-            rx,
-            cancel,
-            spool_path,
-            spool_reader,
-            scanned: 0,
-            matched: 0,
-            finished: false,
-        });
+        self.current_scan = Some(ActiveScan { rx, cancel, spool_path, spool_reader, scanned: 0, matched: 0, finished: false });
 
         Ok(())
     }
@@ -429,11 +408,7 @@ impl ViewApp {
             self.save_message = Some("No scan data to save.".to_string());
             return Ok(());
         };
-        let output_dir = self
-            .input
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let output_dir = self.input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
         let output_path = output_dir.join(filename);
         if output_path == self.input || output_path.exists() {
             self.save_message = Some(format!("File {filename} already exist"));
@@ -441,20 +416,12 @@ impl ViewApp {
             return Ok(());
         }
 
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&output_path)?;
+        let file = OpenOptions::new().write(true).create_new(true).open(&output_path)?;
         let writer = BufWriter::new(file);
         let mut logjet = LogjetWriter::with_config(writer, WriterConfig::default());
         for meta in &self.entries {
             let detail = read_spool_record(&mut scan.spool_reader, *meta)?;
-            logjet.push(
-                detail.meta.record_type,
-                detail.meta.seq,
-                detail.meta.ts_unix_ns,
-                &detail.payload,
-            )?;
+            logjet.push(detail.meta.record_type, detail.meta.seq, detail.meta.ts_unix_ns, &detail.payload)?;
         }
         let mut writer = logjet.into_inner()?;
         writer.flush()?;
@@ -496,8 +463,7 @@ impl ViewApp {
                         scan.matched = matched;
                         scan.finished = true;
                         finished = true;
-                        status_override =
-                            Some(format!("Scan complete: {matched} matches out of {scanned} records"));
+                        status_override = Some(format!("Scan complete: {matched} matches out of {scanned} records"));
                     }
                     ScanUpdate::Failed(message) => {
                         scan.finished = true;
@@ -559,12 +525,7 @@ impl ViewApp {
         let meta = self.entries[index];
         let detail = read_spool_record(&mut scan.spool_reader, meta)?;
         let summary = format_summary(&detail, self.hex_payload);
-        remember_summary(
-            &mut self.summary_cache,
-            &mut self.summary_order,
-            index,
-            summary.clone(),
-        );
+        remember_summary(&mut self.summary_cache, &mut self.summary_order, index, summary.clone());
         Ok(summary)
     }
 
@@ -588,19 +549,13 @@ impl ViewApp {
     fn render(&mut self, frame: &mut Frame<'_>) {
         let areas = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(10),
-                Constraint::Length(1),
-            ])
+            .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(1)])
             .split(frame.area());
 
         self.render_search(frame, areas[0]);
 
-        let body = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(64), Constraint::Percentage(36)])
-            .split(areas[1]);
+        let body =
+            Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(64), Constraint::Percentage(36)]).split(areas[1]);
 
         self.render_list(frame, body[0]);
         self.render_details(frame, body[1]);
@@ -621,9 +576,7 @@ impl ViewApp {
             FilterMode::Regex => " Filter (regex) ",
         };
         let block = pane_block(title, self.focus == Focus::Search);
-        let paragraph = Paragraph::new(self.query_input.as_str())
-            .block(block)
-            .style(Style::default().fg(Color::White));
+        let paragraph = Paragraph::new(self.query_input.as_str()).block(block).style(Style::default().fg(Color::White));
         frame.render_widget(paragraph, area);
 
         if self.focus == Focus::Search {
@@ -660,36 +613,23 @@ impl ViewApp {
             let row_width = inner.width.saturating_sub(1) as usize;
             for index in self.list_offset..end {
                 let style = if index == self.selected {
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(Color::Indexed(28))
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(Color::White).bg(Color::Indexed(28)).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
 
-                let summary = self
-                    .summary_for(index)
-                    .unwrap_or_else(|_| "<failed to render summary>".to_string());
+                let summary = self.summary_for(index).unwrap_or_else(|_| "<failed to render summary>".to_string());
                 let summary = fit_to_width(&summary, row_width);
                 lines.push(Line::from(Span::styled(summary, style)));
             }
         }
 
-        let paragraph = Paragraph::new(Text::from(lines))
-            .scroll((0, 0))
-            .wrap(Wrap { trim: false })
-            .style(Style::default().fg(Color::White));
+        let paragraph = Paragraph::new(Text::from(lines)).scroll((0, 0)).wrap(Wrap { trim: false }).style(Style::default().fg(Color::White));
         frame.render_widget(paragraph, inner);
 
         if !self.entries.is_empty() {
-            let mut scrollbar_state = ScrollbarState::new(self.entries.len())
-                .position(self.selected.min(self.entries.len().saturating_sub(1)));
-            frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight),
-                inner,
-                &mut scrollbar_state,
-            );
+            let mut scrollbar_state = ScrollbarState::new(self.entries.len()).position(self.selected.min(self.entries.len().saturating_sub(1)));
+            frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, &mut scrollbar_state);
         }
     }
 
@@ -704,10 +644,8 @@ impl ViewApp {
             vec![Line::from("No record selected yet.")]
         };
 
-        let paragraph = Paragraph::new(Text::from(lines))
-            .scroll((self.detail_scroll, 0))
-            .wrap(Wrap { trim: false })
-            .style(Style::default().fg(Color::White));
+        let paragraph =
+            Paragraph::new(Text::from(lines)).scroll((self.detail_scroll, 0)).wrap(Wrap { trim: false }).style(Style::default().fg(Color::White));
         frame.render_widget(paragraph, inner);
     }
 
@@ -727,28 +665,12 @@ impl ViewApp {
                 area.x,
                 y,
                 area.width,
-                &[
-                    status_key("ESC"),
-                    status_text(" to close   "),
-                    status_key("UP/DOWN"),
-                    status_text(" scroll"),
-                ],
+                &[status_key("ESC"), status_text(" to close   "), status_key("UP/DOWN"), status_text(" scroll")],
             );
             return;
         }
         if self.focus == Focus::SavePrompt {
-            draw_status_spans(
-                buf,
-                area.x,
-                y,
-                area.width,
-                &[
-                    status_key("ENTER"),
-                    status_text(" save   "),
-                    status_key("ESC"),
-                    status_text(" cancel"),
-                ],
-            );
+            draw_status_spans(buf, area.x, y, area.width, &[status_key("ENTER"), status_text(" save   "), status_key("ESC"), status_text(" cancel")]);
             return;
         }
         if self.focus == Focus::SaveError {
@@ -765,15 +687,7 @@ impl ViewApp {
 
         if status_width > 0 {
             let status_x = area.right().saturating_sub(status_width);
-            buf.set_stringn(
-                status_x,
-                y,
-                status,
-                status_width as usize,
-                Style::default()
-                    .fg(Color::LightGreen)
-                    .bg(Color::Indexed(28)),
-            );
+            buf.set_stringn(status_x, y, status, status_width as usize, Style::default().fg(Color::LightGreen).bg(Color::Indexed(28)));
         }
     }
 
@@ -781,10 +695,7 @@ impl ViewApp {
         let area = centered_rect(52, 10, frame.area());
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(Span::styled(
-                " Save current content ",
-                Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD),
-            ))
+            .title(Span::styled(" Save current content ", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)))
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
             .border_style(Style::default().fg(Color::White).bg(Color::Gray))
@@ -794,19 +705,11 @@ impl ViewApp {
 
         let label = "Filename: ";
         let input_width = inner.width.saturating_sub(label.chars().count() as u16 + 2);
-        let row = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: 1,
-        };
+        let row = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(label, Style::default().fg(Color::Black).bg(Color::Gray)),
-                Span::styled(
-                    fit_to_width(&self.save_filename, input_width as usize),
-                    Style::default().fg(Color::Black).bg(Color::White),
-                ),
+                Span::styled(fit_to_width(&self.save_filename, input_width as usize), Style::default().fg(Color::Black).bg(Color::White)),
             ])),
             row,
         );
@@ -824,13 +727,7 @@ impl ViewApp {
         let area = centered_rect(38, 12, frame.area());
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(Span::styled(
-                " Error ",
-                Style::default()
-                    .fg(Color::Red)
-                    .bg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ))
+            .title(Span::styled(" Error ", Style::default().fg(Color::Red).bg(Color::White).add_modifier(Modifier::BOLD)))
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::White).bg(Color::Red))
@@ -839,9 +736,7 @@ impl ViewApp {
         frame.render_widget(block, area);
         if let Some(message) = &self.save_message {
             frame.render_widget(
-                Paragraph::new(render_save_error_message(message))
-                    .style(Style::default().bg(Color::Red))
-                    .wrap(Wrap { trim: false }),
+                Paragraph::new(render_save_error_message(message)).style(Style::default().bg(Color::Red)).wrap(Wrap { trim: false }),
                 inner,
             );
         }
@@ -852,13 +747,7 @@ impl ViewApp {
         frame.render_widget(Clear, area);
 
         let block = Block::default()
-            .title(Span::styled(
-                " Log record ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Indexed(30))
-                    .add_modifier(Modifier::BOLD),
-            ))
+            .title(Span::styled(" Log record ", Style::default().fg(Color::Black).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)))
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::Indexed(30)).bg(Color::Gray))
@@ -866,57 +755,31 @@ impl ViewApp {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
-            .split(inner);
+        let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Length(1)]).split(inner);
 
         let info_entries = if let Some(detail) = &self.selected_detail {
             render_modal_info_entries(detail)
         } else {
             vec![("info".to_string(), "No record loaded.".to_string())]
         };
-        let key_width = info_entries
-            .iter()
-            .map(|(key, _)| key.chars().count())
-            .max()
-            .unwrap_or(4)
-            .max(4);
-        let preferred_info_width = info_entries
-            .iter()
-            .map(|(_, value)| (key_width + 2 + value.chars().count() + 1) as u16)
-            .max()
-            .unwrap_or((key_width + 3) as u16);
+        let key_width = info_entries.iter().map(|(key, _)| key.chars().count()).max().unwrap_or(4).max(4);
+        let preferred_info_width =
+            info_entries.iter().map(|(_, value)| (key_width + 2 + value.chars().count() + 1) as u16).max().unwrap_or((key_width + 3) as u16);
         let max_info_width = chunks[0].width.saturating_div(2).max(16);
         let info_width = preferred_info_width.min(max_info_width).max(16);
         let divider_width = 1;
-        let message_width = chunks[0]
-            .width
-            .saturating_sub(info_width)
-            .saturating_sub(divider_width);
+        let message_width = chunks[0].width.saturating_sub(info_width).saturating_sub(divider_width);
 
         let body = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(message_width),
-                Constraint::Length(divider_width),
-                Constraint::Length(info_width),
-            ])
+            .constraints([Constraint::Length(message_width), Constraint::Length(divider_width), Constraint::Length(info_width)])
             .split(chunks[0]);
 
-        let divider = (0..body[1].height)
-            .map(|_| Line::from(Span::styled("│", Style::default().fg(Color::Indexed(30)).bg(Color::Gray))))
-            .collect::<Vec<_>>();
-        frame.render_widget(
-            Paragraph::new(divider).style(Style::default().bg(Color::Gray)),
-            body[1],
-        );
+        let divider =
+            (0..body[1].height).map(|_| Line::from(Span::styled("│", Style::default().fg(Color::Indexed(30)).bg(Color::Gray)))).collect::<Vec<_>>();
+        frame.render_widget(Paragraph::new(divider).style(Style::default().bg(Color::Gray)), body[1]);
 
-        let footer = if let Some(detail) = &self.selected_detail {
-            render_modal_footer(detail)
-        } else {
-            render_modal_footer_placeholder()
-        };
+        let footer = if let Some(detail) = &self.selected_detail { render_modal_footer(detail) } else { render_modal_footer_placeholder() };
         let message = self.modal_text.as_deref().unwrap_or("No record loaded.");
         let paragraph = Paragraph::new(message)
             .style(Style::default().fg(Color::Black).bg(Color::Gray))
@@ -924,29 +787,16 @@ impl ViewApp {
             .wrap(Wrap { trim: false });
         frame.render_widget(paragraph, body[0]);
 
-        let value_width = info_width
-            .saturating_sub((key_width + 2 + 1) as u16) as usize;
-        let info_lines = info_entries
-            .into_iter()
-            .map(|(key, value)| modal_info_line(&key, value, key_width, value_width))
-            .collect::<Vec<_>>();
-        let info = Paragraph::new(Text::from(info_lines))
-            .style(Style::default().fg(Color::Black).bg(Color::Gray))
-            .scroll((0, 0));
+        let value_width = info_width.saturating_sub((key_width + 2 + 1) as u16) as usize;
+        let info_lines = info_entries.into_iter().map(|(key, value)| modal_info_line(&key, value, key_width, value_width)).collect::<Vec<_>>();
+        let info = Paragraph::new(Text::from(info_lines)).style(Style::default().fg(Color::Black).bg(Color::Gray)).scroll((0, 0));
         frame.render_widget(info, body[2]);
-        frame.render_widget(
-            Paragraph::new(footer).style(Style::default().bg(Color::Indexed(30))),
-            chunks[1],
-        );
+        frame.render_widget(Paragraph::new(footer).style(Style::default().bg(Color::Indexed(30))), chunks[1]);
     }
 }
 
 fn scan_matches(
-    input_path: &Path,
-    predicate: crate::predicate::RecordPredicate,
-    mut spool: File,
-    cancel: Arc<AtomicBool>,
-    tx: mpsc::Sender<ScanUpdate>,
+    input_path: &Path, predicate: crate::predicate::RecordPredicate, mut spool: File, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanUpdate>,
 ) -> Result<(u64, u64)> {
     let input = InputHandle::open(input_path)?;
     let mut reader = LogjetReader::new(input.into_buf_reader());
@@ -958,27 +808,21 @@ fn scan_matches(
         let Some(record) = reader.next_record()? else {
             break;
         };
-        scanned = scanned
-            .checked_add(1)
-            .ok_or(logjet::Error::NumericOverflow("view scanned"))?;
+        scanned = scanned.checked_add(1).ok_or(logjet::Error::NumericOverflow("view scanned"))?;
 
         if predicate.matches(&record) {
             let meta = write_spool_record(&mut spool, &record)?;
             tx_batch.push(meta);
-            matched = matched
-                .checked_add(1)
-                .ok_or(logjet::Error::NumericOverflow("view matched"))?;
+            matched = matched.checked_add(1).ok_or(logjet::Error::NumericOverflow("view matched"))?;
 
             if tx_batch.len() >= SCAN_BATCH_SIZE {
-                tx.send(ScanUpdate::Batch(std::mem::take(&mut tx_batch)))
-                    .map_err(|err| Error::Usage(err.to_string()))?;
+                tx.send(ScanUpdate::Batch(std::mem::take(&mut tx_batch))).map_err(|err| Error::Usage(err.to_string()))?;
             }
         }
     }
 
     if !tx_batch.is_empty() {
-        tx.send(ScanUpdate::Batch(tx_batch))
-            .map_err(|err| Error::Usage(err.to_string()))?;
+        tx.send(ScanUpdate::Batch(tx_batch)).map_err(|err| Error::Usage(err.to_string()))?;
     }
 
     Ok((scanned, matched))
@@ -989,19 +833,12 @@ fn write_spool_record(file: &mut File, record: &OwnedRecord) -> Result<EntryMeta
     file.write_all(&[record.record_type as u8])?;
     file.write_all(&record.seq.to_le_bytes())?;
     file.write_all(&record.ts_unix_ns.to_le_bytes())?;
-    let payload_len = u64::try_from(record.payload.len())
-        .map_err(|_| logjet::Error::NumericOverflow("view payload_len"))?;
+    let payload_len = u64::try_from(record.payload.len()).map_err(|_| logjet::Error::NumericOverflow("view payload_len"))?;
     file.write_all(&payload_len.to_le_bytes())?;
     file.write_all(&record.payload)?;
     file.flush()?;
 
-    Ok(EntryMeta {
-        offset,
-        record_type: record.record_type,
-        seq: record.seq,
-        ts_unix_ns: record.ts_unix_ns,
-        payload_len,
-    })
+    Ok(EntryMeta { offset, record_type: record.record_type, seq: record.seq, ts_unix_ns: record.ts_unix_ns, payload_len })
 }
 
 fn read_spool_record(file: &mut File, meta: EntryMeta) -> Result<DetailRecord> {
@@ -1011,12 +848,7 @@ fn read_spool_record(file: &mut File, meta: EntryMeta) -> Result<DetailRecord> {
     Ok(DetailRecord { meta, payload })
 }
 
-fn remember_summary(
-    cache: &mut HashMap<usize, String>,
-    order: &mut VecDeque<usize>,
-    index: usize,
-    summary: String,
-) {
+fn remember_summary(cache: &mut HashMap<usize, String>, order: &mut VecDeque<usize>, index: usize, summary: String) {
     cache.insert(index, summary);
     order.push_back(index);
     while order.len() > SUMMARY_CACHE_LIMIT {
@@ -1027,7 +859,6 @@ fn remember_summary(
 }
 
 fn format_summary(detail: &DetailRecord, hex_payload: bool) -> String {
-    
     if hex_payload {
         hex_preview(&detail.payload, 32)
     } else if let Some(message) = extract_otlp_log_message(&detail.payload) {
@@ -1045,26 +876,14 @@ fn render_detail_lines(detail: &DetailRecord, hex_payload: bool) -> Vec<Line<'st
             Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
         ),
         key_value_line("Sequence:", detail.meta.seq.to_string(), Style::default().fg(Color::White)),
-        key_value_line(
-            "Timestamp:",
-            format_timestamp(detail.meta.ts_unix_ns),
-            Style::default().fg(Color::White),
-        ),
-        key_value_line(
-            "Payload:",
-            format!("{} bytes", detail.meta.payload_len),
-            Style::default().fg(Color::White),
-        ),
+        key_value_line("Timestamp:", format_timestamp(detail.meta.ts_unix_ns), Style::default().fg(Color::White)),
+        key_value_line("Payload:", format!("{} bytes", detail.meta.payload_len), Style::default().fg(Color::White)),
         Line::from(""),
     ];
 
     lines.extend(render_otlp_lines(detail));
     if lines.len() == 5 {
-        let preview = if hex_payload {
-            hex_preview(&detail.payload, 64)
-        } else {
-            text_preview(&detail.payload, DETAIL_PREVIEW_BYTES)
-        };
+        let preview = if hex_payload { hex_preview(&detail.payload, 64) } else { text_preview(&detail.payload, DETAIL_PREVIEW_BYTES) };
         lines.push(key_value_line("Preview:", preview, Style::default().fg(Color::White)));
     }
 
@@ -1105,9 +924,7 @@ fn render_otlp_lines(detail: &DetailRecord) -> Vec<Line<'static>> {
             scope_count += 1;
             for log_record in &scope_logs.log_records {
                 record_count += 1;
-                if !log_record.severity_text.is_empty()
-                    && !severities.iter().any(|existing| existing == &log_record.severity_text)
-                {
+                if !log_record.severity_text.is_empty() && !severities.iter().any(|existing| existing == &log_record.severity_text) {
                     severities.push(log_record.severity_text.clone());
                 }
             }
@@ -1122,18 +939,10 @@ fn render_otlp_lines(detail: &DetailRecord) -> Vec<Line<'static>> {
     ];
 
     if !services.is_empty() {
-        lines.push(key_value_line(
-            "Services:",
-            services.join(", "),
-            Style::default().fg(Color::White),
-        ));
+        lines.push(key_value_line("Services:", services.join(", "), Style::default().fg(Color::White)));
     }
     if !severities.is_empty() {
-        lines.push(key_value_line(
-            "Severity:",
-            severities.join(", "),
-            severity_style(severities.first().map(String::as_str).unwrap_or("")),
-        ));
+        lines.push(key_value_line("Severity:", severities.join(", "), severity_style(severities.first().map(String::as_str).unwrap_or(""))));
     }
 
     lines
@@ -1160,30 +969,17 @@ fn render_modal_message(detail: &DetailRecord, hex_payload: bool) -> String {
         return message;
     }
 
-    if hex_payload {
-        hex_dump(&detail.payload)
-    } else {
-        String::from_utf8_lossy(&detail.payload).into_owned()
-    }
+    if hex_payload { hex_dump(&detail.payload) } else { String::from_utf8_lossy(&detail.payload).into_owned() }
 }
 
 fn render_modal_footer(detail: &DetailRecord) -> Line<'static> {
     let (size_num, size_unit) = format_size_parts(detail.meta.payload_len);
     Line::from(vec![
-        Span::styled(
-            format!("#{}", detail.meta.seq),
-            Style::default().fg(Color::LightGreen),
-        ),
+        Span::styled(format!("#{}", detail.meta.seq), Style::default().fg(Color::LightGreen)),
         footer_sep(),
-        Span::styled(
-            format_timestamp(detail.meta.ts_unix_ns),
-            Style::default().fg(Color::White),
-        ),
+        Span::styled(format_timestamp(detail.meta.ts_unix_ns), Style::default().fg(Color::White)),
         footer_sep(),
-        Span::styled(
-            record_kind_label(detail.meta.record_type).to_string(),
-            Style::default().fg(Color::Black).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(record_kind_label(detail.meta.record_type).to_string(), Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)),
         footer_sep(),
         Span::styled(size_num, Style::default().fg(Color::Yellow)),
         Span::styled(size_unit, Style::default().fg(Color::Black)),
@@ -1253,14 +1049,10 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
             }
             for record in &scope_logs.log_records {
                 record_attr_count += record.attributes.len();
-                if !record.severity_text.is_empty()
-                    && !severities.iter().any(|existing| existing == &record.severity_text)
-                {
+                if !record.severity_text.is_empty() && !severities.iter().any(|existing| existing == &record.severity_text) {
                     severities.push(record.severity_text.clone());
                 }
-                if !record.event_name.is_empty()
-                    && !event_names.iter().any(|existing| existing == &record.event_name)
-                {
+                if !record.event_name.is_empty() && !event_names.iter().any(|existing| existing == &record.event_name) {
                     event_names.push(record.event_name.clone());
                 }
                 if !record.trace_id.is_empty() {
@@ -1302,10 +1094,7 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
 fn modal_info_line(key: &str, value: String, key_width: usize, value_width: usize) -> Line<'static> {
     let value = trim_single_line(&value, value_width);
     Line::from(vec![
-        Span::styled(
-            format!("{key:<width$}: ", width = key_width),
-            Style::default().fg(Color::Indexed(136)),
-        ),
+        Span::styled(format!("{key:<width$}: ", width = key_width), Style::default().fg(Color::Indexed(136))),
         Span::styled(value, Style::default().fg(Color::Black)),
     ])
 }
@@ -1372,10 +1161,7 @@ fn fit_to_width(input: &str, width: usize) -> String {
 }
 
 fn key_value_line(label: &str, value: String, value_style: Style) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{label:<12} "), Style::default().fg(Color::Indexed(136))),
-        Span::styled(value, value_style),
-    ])
+    Line::from(vec![Span::styled(format!("{label:<12} "), Style::default().fg(Color::Indexed(136))), Span::styled(value, value_style)])
 }
 
 fn severity_style(value: &str) -> Style {
@@ -1407,10 +1193,7 @@ fn format_timestamp(ts_unix_ns: u64) -> String {
 
 fn hex_preview(bytes: &[u8], limit: usize) -> String {
     let shown = bytes.iter().take(limit);
-    let mut out = shown
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let mut out = shown.map(|byte| format!("{byte:02x}")).collect::<Vec<_>>().join(" ");
     if bytes.len() > limit {
         out.push_str(" ...");
     }
@@ -1449,16 +1232,8 @@ fn centered_rect(width_percent: u16, height_percent: u16, area: Rect) -> Rect {
 }
 
 fn pane_block<'a>(title: &'a str, active: bool) -> Block<'a> {
-    let title_style = if active {
-        Style::default().fg(Color::Black).bg(Color::LightGreen)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-    let border_style = if active {
-        Style::default().fg(Color::LightGreen)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
+    let title_style = if active { Style::default().fg(Color::Black).bg(Color::LightGreen) } else { Style::default().fg(Color::Gray) };
+    let border_style = if active { Style::default().fg(Color::LightGreen) } else { Style::default().fg(Color::Gray) };
 
     Block::default()
         .title(Span::styled(title, title_style))
@@ -1499,29 +1274,14 @@ fn status_help_spans(focus: Focus) -> Vec<Span<'static>> {
 }
 
 fn status_key(text: &str) -> Span<'static> {
-    Span::styled(
-        text.to_string(),
-        Style::default()
-            .fg(Color::White)
-            .bg(Color::Indexed(28))
-            .add_modifier(Modifier::BOLD),
-    )
+    Span::styled(text.to_string(), Style::default().fg(Color::White).bg(Color::Indexed(28)).add_modifier(Modifier::BOLD))
 }
 
 fn status_text(text: &str) -> Span<'static> {
-    Span::styled(
-        text.to_string(),
-        Style::default().fg(Color::Black).bg(Color::Indexed(28)),
-    )
+    Span::styled(text.to_string(), Style::default().fg(Color::Black).bg(Color::Indexed(28)))
 }
 
-fn draw_status_spans(
-    buf: &mut ratatui::buffer::Buffer,
-    x: u16,
-    y: u16,
-    width: u16,
-    spans: &[Span<'static>],
-) {
+fn draw_status_spans(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, width: u16, spans: &[Span<'static>]) {
     let mut cursor_x = x;
     let mut remaining = width;
     for span in spans {
@@ -1538,36 +1298,21 @@ fn render_save_error_message(message: &str) -> Line<'static> {
     const PREFIX: &str = "File ";
     const SUFFIX: &str = " already exist";
 
-    if let Some(filename) = message
-        .strip_prefix(PREFIX)
-        .and_then(|rest| rest.strip_suffix(SUFFIX))
-    {
+    if let Some(filename) = message.strip_prefix(PREFIX).and_then(|rest| rest.strip_suffix(SUFFIX)) {
         return Line::from(vec![
             Span::styled(PREFIX, Style::default().fg(Color::White).bg(Color::Red)),
-            Span::styled(
-                filename.to_string(),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .bg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(filename.to_string(), Style::default().fg(Color::Yellow).bg(Color::Red).add_modifier(Modifier::BOLD)),
             Span::styled(SUFFIX, Style::default().fg(Color::White).bg(Color::Red)),
         ]);
     }
 
-    Line::from(Span::styled(
-        message.to_string(),
-        Style::default().fg(Color::White).bg(Color::Red),
-    ))
+    Line::from(Span::styled(message.to_string(), Style::default().fg(Color::White).bg(Color::Red)))
 }
 
 fn create_temp_path() -> Result<PathBuf> {
     let base = std::env::temp_dir();
     let pid = std::process::id();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| Error::Usage(format!("system clock error: {err}")))?
-        .as_nanos();
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|err| Error::Usage(format!("system clock error: {err}")))?.as_nanos();
     for attempt in 0..1000u32 {
         let candidate = base.join(format!("ljx-view-{pid}-{nanos}-{attempt}.tmp"));
         if !candidate.exists() {
@@ -1579,10 +1324,7 @@ fn create_temp_path() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DetailRecord, EntryMeta, extract_otlp_log_message, format_summary,
-        render_modal_message, text_preview,
-    };
+    use super::{DetailRecord, EntryMeta, extract_otlp_log_message, format_summary, render_modal_message, text_preview};
     use logjet::RecordType;
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use opentelemetry_proto::tonic::common::v1::any_value::Value;
@@ -1599,13 +1341,7 @@ mod tests {
     #[test]
     fn summary_uses_trimmed_single_line_preview() {
         let detail = DetailRecord {
-            meta: EntryMeta {
-                offset: 0,
-                record_type: RecordType::Logs,
-                seq: 7,
-                ts_unix_ns: 9,
-                payload_len: 13,
-            },
+            meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 7, ts_unix_ns: 9, payload_len: 13 },
             payload: b"line one\nline two".to_vec(),
         };
         let summary = format_summary(&detail, false);
@@ -1616,10 +1352,7 @@ mod tests {
     fn summary_prefers_decoded_otlp_log_message() {
         let batch = ExportLogsServiceRequest {
             resource_logs: vec![ResourceLogs {
-                resource: Some(Resource {
-                    attributes: Vec::new(),
-                    dropped_attributes_count: 0,
-                }),
+                resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0 }),
                 scope_logs: vec![ScopeLogs {
                     scope: Some(InstrumentationScope {
                         name: "test".to_string(),
@@ -1632,9 +1365,7 @@ mod tests {
                         observed_time_unix_nano: 0,
                         severity_number: 0,
                         severity_text: String::new(),
-                        body: Some(AnyValue {
-                            value: Some(Value::StringValue("hello from body".to_string())),
-                        }),
+                        body: Some(AnyValue { value: Some(Value::StringValue("hello from body".to_string())) }),
                         attributes: Vec::new(),
                         dropped_attributes_count: 0,
                         flags: 0,
@@ -1649,13 +1380,7 @@ mod tests {
         };
         let payload = batch.encode_to_vec();
         let detail = DetailRecord {
-            meta: EntryMeta {
-                offset: 0,
-                record_type: RecordType::Logs,
-                seq: 1,
-                ts_unix_ns: 2,
-                payload_len: payload.len() as u64,
-            },
+            meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64 },
             payload,
         };
 
@@ -1666,13 +1391,7 @@ mod tests {
     #[test]
     fn modal_falls_back_to_raw_payload() {
         let detail = DetailRecord {
-            meta: EntryMeta {
-                offset: 0,
-                record_type: RecordType::Metrics,
-                seq: 1,
-                ts_unix_ns: 2,
-                payload_len: 5,
-            },
+            meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: 5 },
             payload: b"hello".to_vec(),
         };
         let body = render_modal_message(&detail, false);

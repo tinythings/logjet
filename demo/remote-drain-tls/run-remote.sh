@@ -3,11 +3,11 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET_DIR="$SCRIPT_DIR/../../target/debug"
-LOGJETD="$TARGET_DIR/logjetd"
+LJD="$TARGET_DIR/ljd"
 COLLECTOR="$TARGET_DIR/otlp-demo-collector"
 CONFIG="$SCRIPT_DIR/remote-logjetd.conf"
 
-for bin in "$LOGJETD" "$COLLECTOR"; do
+for bin in "$LJD" "$COLLECTOR"; do
     if [ ! -x "$bin" ]; then
         echo "missing $bin"
         echo "build everything first with: make demo"
@@ -43,4 +43,4 @@ sleep 1
 echo "starting remote-side bridge with TLS and client certificate"
 echo "it connects to 127.0.0.1:7002 but validates server name appliance.demo.logjet"
 echo "config: $CONFIG"
-"$LOGJETD" --config "$CONFIG" bridge
+"$LJD" --config "$CONFIG" bridge
