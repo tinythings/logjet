@@ -3,11 +3,11 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET_DIR="$SCRIPT_DIR/../../target/debug"
-LOGJETD="$TARGET_DIR/logjetd"
+LJD="$TARGET_DIR/ljd"
 EMITTER="$TARGET_DIR/otlp-bofh-emitter"
 CONFIG="$SCRIPT_DIR/http-limit.conf"
 
-for bin in "$LOGJETD" "$EMITTER"; do
+for bin in "$LJD" "$EMITTER"; do
     if [ ! -x "$bin" ]; then
         echo "missing $bin"
         echo "build everything first with: make demo"
@@ -18,14 +18,14 @@ done
 cd "$SCRIPT_DIR"
 
 cleanup() {
-    kill "${LOGJETD_PID:-}" 2>/dev/null || true
+    kill "${LJD_PID:-}" 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM
 
-echo "starting logjetd with tiny ingest.max-batch-bytes"
-"$LOGJETD" --config "$CONFIG" &
-LOGJETD_PID=$!
+echo "starting ljd with tiny ingest.max-batch-bytes"
+"$LJD" --config "$CONFIG" &
+LJD_PID=$!
 
 sleep 1
 

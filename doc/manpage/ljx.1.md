@@ -25,7 +25,7 @@ ljx - offline toolbox for inspecting and transforming `.logjet` files
 `ljx` is the standalone file tool in the `logjet` ecosystem.
 
 It works directly on `.logjet` files and is intentionally separate from
-`logjetd`.
+`ljd`.
 
 `ljx` does:
 
@@ -37,7 +37,7 @@ It works directly on `.logjet` files and is intentionally separate from
 
 `ljx` does not:
 
-- start or control `logjetd`
+- start or control `ljd`
 - depend on daemon runtime state
 - grep raw bytes blindly
 

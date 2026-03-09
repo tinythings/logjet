@@ -53,11 +53,7 @@ pub enum Command {
     Count(CountArgs),
     #[command(about = "Compute summary statistics for one .logjet file")]
     Stats(StatsArgs),
-    #[command(
-        name = "view",
-        alias = "cat",
-        about = "Interactively browse filtered records in a terminal UI"
-    )]
+    #[command(name = "view", alias = "cat", about = "Interactively browse filtered records in a terminal UI")]
     View(ViewArgs),
 }
 
@@ -75,12 +71,7 @@ pub struct FilterArgs {
     #[arg(value_name = "INPUT", help = "Input .logjet file or - for stdin")]
     pub input: PathBuf,
 
-    #[arg(
-        short,
-        long,
-        value_name = "OUTPUT",
-        help = "Output .logjet file or - for stdout"
-    )]
+    #[arg(short, long, value_name = "OUTPUT", help = "Output .logjet file or - for stdout")]
     pub output: PathBuf,
 
     #[arg(long, value_enum, default_value_t = OutputCodec::Lz4)]

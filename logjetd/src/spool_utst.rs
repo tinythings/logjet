@@ -273,7 +273,7 @@ fn prune_named_segments_dry_run_does_not_remove_files() {
 
 fn unique_temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("logjetd-{label}-{nanos}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("ljd-{label}-{nanos}-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
 }

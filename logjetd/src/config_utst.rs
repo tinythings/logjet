@@ -226,5 +226,5 @@ fn write_temp_config(label: &str, body: &str) -> PathBuf {
 
 fn unique_temp_path(label: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("logjetd-{label}-{nanos}-{}.yaml", std::process::id()))
+    std::env::temp_dir().join(format!("ljd-{label}-{nanos}-{}.yaml", std::process::id()))
 }

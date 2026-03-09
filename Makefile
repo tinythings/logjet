@@ -22,7 +22,7 @@ fix: setup
 	cargo clippy $(CORE_WORKSPACE) --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
 
 test: setup
-	cargo build -p logjetd -p ljx
+	cargo build -p ljd -p ljx
 	cargo build -p otlp-demo --bin otlp-bofh-emitter
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run $(CORE_WORKSPACE); \
@@ -33,23 +33,23 @@ test: setup
 
 test-unit: setup
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p logjet --lib -p logjetd --bins -p ljx --bin ljx; \
+		cargo nextest run -p logjet --lib -p ljd --bins -p ljx --bin ljx; \
 	else \
 		echo "cargo-nextest not available, falling back to cargo test unit-only targets"; \
 		cargo test -p logjet --lib; \
-		cargo test -p logjetd --bin logjetd; \
+		cargo test -p ljd --bin ljd; \
 		cargo test -p ljx --bin ljx; \
 	fi
 
 test-integration: setup
-	cargo build -p logjetd -p ljx
+	cargo build -p ljd -p ljx
 	cargo build -p otlp-demo --bin otlp-bofh-emitter
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p logjetd --test bridge_flows; \
+		cargo nextest run -p ljd --test bridge_flows; \
 		cargo nextest run -p logjet --test ljx_cli; \
 	else \
 		echo "cargo-nextest not available, falling back to cargo test integration targets"; \
-		cargo test -p logjetd --test bridge_flows; \
+		cargo test -p ljd --test bridge_flows; \
 		cargo test -p logjet --test ljx_cli; \
 	fi
 

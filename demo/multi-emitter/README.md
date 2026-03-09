@@ -1,14 +1,14 @@
 # Multi-Emitter Demo
 
-This demo shows that several emitters can send OTLP logs into one `logjetd`,
+This demo shows that several emitters can send OTLP logs into one `ljd`,
 and one downstream consumer can receive the merged retained stream later.
 
 The demo uses:
 
 - five separate OTLP/HTTP emitters
-- one `logjetd` in memory-buffer mode
+- one `ljd` in memory-buffer mode
 - one OTLP collector mockup
-- one wire forwarder from the `logjetd` replay listener into the collector
+- one wire forwarder from the `ljd` replay listener into the collector
 
 Each emitter sends one identifying message:
 
@@ -31,7 +31,7 @@ make demo
 
 That gives you:
 
-- `target/debug/logjetd`
+- `target/debug/ljd`
 - `target/debug/otlp-bofh-emitter`
 - `target/debug/otlp-demo-collector`
 - `target/debug/otlp-wire-forwarder`
@@ -46,7 +46,7 @@ From this directory:
 
 The script:
 
-1. starts `logjetd`
+1. starts `ljd`
 2. sends five one-shot OTLP messages from five separate emitters
 3. starts the collector
 4. connects the wire forwarder to the replay listener
@@ -60,6 +60,6 @@ Expected result:
 
 This demonstrates:
 
-- many emitters can connect to one `logjetd`
-- `logjetd` stores one merged retained stream
+- many emitters can connect to one `ljd`
+- `ljd` stores one merged retained stream
 - one downstream consumer can receive that merged stream later

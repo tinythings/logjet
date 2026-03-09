@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET_DIR="$SCRIPT_DIR/../../target/debug"
 COLLECTOR="$TARGET_DIR/otlp-demo-collector"
-LOGJETD="$TARGET_DIR/logjetd"
+LJD="$TARGET_DIR/ljd"
 CONFIG="$SCRIPT_DIR/logjetd.conf"
 
 if [ ! -x "$COLLECTOR" ]; then
@@ -13,8 +13,8 @@ if [ ! -x "$COLLECTOR" ]; then
     exit 1
 fi
 
-if [ ! -x "$LOGJETD" ]; then
-    echo "missing $LOGJETD"
+if [ ! -x "$LJD" ]; then
+    echo "missing $LJD"
     echo "build it first with: make demo"
     exit 1
 fi
@@ -43,4 +43,4 @@ trap cleanup EXIT INT TERM
 sleep 1
 
 echo "replaying bofh.logjet from ./logs using collector.url from $CONFIG"
-"$LOGJETD" --config "$CONFIG" replay --path "./logs" --name "bofh.logjet"
+"$LJD" --config "$CONFIG" replay --path "./logs" --name "bofh.logjet"

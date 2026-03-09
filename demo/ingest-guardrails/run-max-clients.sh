@@ -3,11 +3,11 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET_DIR="$SCRIPT_DIR/../../target/debug"
-LOGJETD="$TARGET_DIR/logjetd"
+LJD="$TARGET_DIR/ljd"
 WIRE_EMITTER="$TARGET_DIR/wire-hold-emitter"
 CONFIG="$SCRIPT_DIR/wire-limit.conf"
 
-for bin in "$LOGJETD" "$WIRE_EMITTER"; do
+for bin in "$LJD" "$WIRE_EMITTER"; do
     if [ ! -x "$bin" ]; then
         echo "missing $bin"
         echo "build everything first with: make demo"
@@ -20,14 +20,14 @@ cd "$SCRIPT_DIR"
 cleanup() {
     kill "${FIRST_PID:-}" 2>/dev/null || true
     kill "${SECOND_PID:-}" 2>/dev/null || true
-    kill "${LOGJETD_PID:-}" 2>/dev/null || true
+    kill "${LJD_PID:-}" 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM
 
-echo "starting logjetd with ingest.max-clients: 1"
-"$LOGJETD" --config "$CONFIG" &
-LOGJETD_PID=$!
+echo "starting ljd with ingest.max-clients: 1"
+"$LJD" --config "$CONFIG" &
+LJD_PID=$!
 
 sleep 1
 

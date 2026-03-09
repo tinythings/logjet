@@ -24,7 +24,7 @@ From this directory:
 
 This starts:
 
-1. appliance-side `logjetd`
+1. appliance-side `ljd`
 2. three preserved startup messages:
    - `BOOT MESSAGE #1`
    - `BOOT MESSAGE #2`

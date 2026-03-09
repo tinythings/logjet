@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET_DIR="$SCRIPT_DIR/../../target/debug"
-LOGJETD="$TARGET_DIR/logjetd"
+LJD="$TARGET_DIR/ljd"
 EMITTER="$TARGET_DIR/otlp-bofh-emitter"
 COLLECTOR="$TARGET_DIR/otlp-demo-collector"
 CONFIG="$SCRIPT_DIR/logjetd.conf"
@@ -12,7 +12,7 @@ DAMAGED_DIR="$SCRIPT_DIR/damaged"
 ORIGINAL_FILE="$LOG_DIR/killbill.logjet"
 DAMAGED_FILE="$DAMAGED_DIR/killbill.logjet"
 
-for bin in "$LOGJETD" "$EMITTER" "$COLLECTOR"; do
+for bin in "$LJD" "$EMITTER" "$COLLECTOR"; do
     if [ ! -x "$bin" ]; then
         echo "missing $bin"
         echo "build everything first with: make demo"
@@ -24,7 +24,7 @@ cd "$SCRIPT_DIR"
 
 cleanup() {
     kill "${COLLECTOR_PID:-}" 2>/dev/null || true
-    kill "${LOGJETD_PID:-}" 2>/dev/null || true
+    kill "${LJD_PID:-}" 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM
@@ -33,9 +33,9 @@ echo "cleaning previous demo files"
 rm -rf "$LOG_DIR" "$DAMAGED_DIR"
 mkdir -p "$LOG_DIR" "$DAMAGED_DIR"
 
-echo "starting logjetd to write one .logjet file with 100 messages"
-"$LOGJETD" --config "$CONFIG" &
-LOGJETD_PID=$!
+echo "starting ljd to write one .logjet file with 100 messages"
+"$LJD" --config "$CONFIG" &
+LJD_PID=$!
 
 sleep 1
 
@@ -47,9 +47,9 @@ while [ "$i" -le 100 ]; do
 done
 
 sleep 1
-kill "$LOGJETD_PID"
-wait "$LOGJETD_PID" 2>/dev/null || true
-unset LOGJETD_PID
+kill "$LJD_PID"
+wait "$LJD_PID" 2>/dev/null || true
+unset LJD_PID
 
 if [ ! -f "$ORIGINAL_FILE" ]; then
     echo "expected $ORIGINAL_FILE to exist"
@@ -71,11 +71,11 @@ fi
 
 echo
 echo "inspecting original file"
-"$LOGJETD" inspect "$ORIGINAL_FILE"
+"$LJD" inspect "$ORIGINAL_FILE"
 
 echo
 echo "inspecting damaged middle-third file"
-"$LOGJETD" inspect "$DAMAGED_FILE"
+"$LJD" inspect "$DAMAGED_FILE"
 
 echo
 echo "starting collector on 127.0.0.1:4321"
@@ -86,10 +86,10 @@ sleep 1
 
 echo
 echo "replaying only the damaged middle-third file"
-"$LOGJETD" --config "$CONFIG" replay --path "$DAMAGED_DIR" --name "killbill.logjet"
+"$LJD" --config "$CONFIG" replay --path "$DAMAGED_DIR" --name "killbill.logjet"
 
 echo
 echo "point of the demo:"
 echo "- the first bytes of the damaged file are not a valid file start"
-echo "- logjetd scans forward until it finds the next block sync marker"
+echo "- ljd scans forward until it finds the next block sync marker"
 echo "- records in surviving later blocks are still replayed"

@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    ChildGuard, MockCollector, TestDir, connect_replay_client, free_port, logjetd_command, post_otlp_http, read_replay_message, replay_messages,
+    ChildGuard, MockCollector, TestDir, connect_replay_client, free_port, ljd_command, post_otlp_http, read_replay_message, replay_messages,
     wait_for_tcp, wait_until,
 };
 
@@ -30,7 +30,7 @@ fn bridge_keep_forwards_backlog_in_order() -> io::Result<()> {
     )?;
 
     let _appliance = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&appliance_config).arg("serve");
         cmd
     })?;
@@ -43,7 +43,7 @@ fn bridge_keep_forwards_backlog_in_order() -> io::Result<()> {
 
     let collector = MockCollector::start(collector_port)?;
     let _bridge = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
         cmd
     })?;
@@ -76,7 +76,7 @@ fn bridge_drain_consumes_upstream_records() -> io::Result<()> {
     )?;
 
     let _appliance = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&appliance_config).arg("serve");
         cmd
     })?;
@@ -89,7 +89,7 @@ fn bridge_drain_consumes_upstream_records() -> io::Result<()> {
 
     let collector = MockCollector::start(collector_port)?;
     let _bridge = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
         cmd
     })?;
@@ -125,7 +125,7 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
     )?;
 
     let _appliance = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&appliance_config).arg("serve");
         cmd
     })?;
@@ -140,7 +140,7 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
 
     {
         let _bridge = ChildGuard::spawn({
-            let mut cmd = logjetd_command();
+            let mut cmd = ljd_command();
             cmd.arg("--config").arg(&bridge_config).arg("bridge");
             cmd
         })?;
@@ -153,7 +153,7 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
 
     {
         let _bridge = ChildGuard::spawn({
-            let mut cmd = logjetd_command();
+            let mut cmd = ljd_command();
             cmd.arg("--config").arg(&bridge_config).arg("bridge");
             cmd
         })?;
@@ -197,7 +197,7 @@ fn bridge_keep_works_with_file_rotation() -> io::Result<()> {
     )?;
 
     let _appliance = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&appliance_config).arg("serve");
         cmd
     })?;
@@ -211,7 +211,7 @@ fn bridge_keep_works_with_file_rotation() -> io::Result<()> {
 
     let collector = MockCollector::start(collector_port)?;
     let _bridge = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
         cmd
     })?;
@@ -268,14 +268,14 @@ fn bridge_resets_saved_state_when_upstream_stream_changes() -> io::Result<()> {
     let collector = MockCollector::start(collector_port)?;
 
     let _bridge = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
         cmd
     })?;
 
     {
         let _appliance = ChildGuard::spawn({
-            let mut cmd = logjetd_command();
+            let mut cmd = ljd_command();
             cmd.arg("--config").arg(&appliance_alpha).arg("serve");
             cmd
         })?;
@@ -290,7 +290,7 @@ fn bridge_resets_saved_state_when_upstream_stream_changes() -> io::Result<()> {
 
     {
         let _appliance = ChildGuard::spawn({
-            let mut cmd = logjetd_command();
+            let mut cmd = ljd_command();
             cmd.arg("--config").arg(&appliance_bravo).arg("serve");
             cmd
         })?;
@@ -327,7 +327,7 @@ fn bridge_block_mode_handles_slow_collector_without_losing_order() -> io::Result
     )?;
 
     let _appliance = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&appliance_config).arg("serve");
         cmd
     })?;
@@ -336,7 +336,7 @@ fn bridge_block_mode_handles_slow_collector_without_losing_order() -> io::Result
 
     let collector = MockCollector::start_with_delay(collector_port, Duration::from_millis(150))?;
     let _bridge = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
         cmd
     })?;
@@ -379,7 +379,7 @@ fn replay_recovers_after_middle_of_file_is_removed() -> io::Result<()> {
 
     {
         let _appliance = ChildGuard::spawn({
-            let mut cmd = logjetd_command();
+            let mut cmd = ljd_command();
             cmd.arg("--config").arg(&appliance_config).arg("serve");
             cmd
         })?;
@@ -402,7 +402,7 @@ fn replay_recovers_after_middle_of_file_is_removed() -> io::Result<()> {
 
     let collector = MockCollector::start(collector_port)?;
     let status = {
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("replay").arg("--path").arg(&spool_dir).arg("--name").arg("recover.logjet").arg("--dest").arg(format!("127.0.0.1:{collector_port}"));
         cmd.status()?
     };
@@ -435,7 +435,7 @@ fn bridge_forwards_large_payloads_end_to_end() -> io::Result<()> {
     )?;
 
     let _appliance = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&appliance_config).arg("serve");
         cmd
     })?;
@@ -444,7 +444,7 @@ fn bridge_forwards_large_payloads_end_to_end() -> io::Result<()> {
 
     let collector = MockCollector::start(collector_port)?;
     let _bridge = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
         cmd
     })?;
@@ -472,7 +472,7 @@ fn multiple_replay_clients_receive_backlog_independently() -> io::Result<()> {
     )?;
 
     let _appliance = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&appliance_config).arg("serve");
         cmd
     })?;
@@ -513,7 +513,7 @@ fn replay_client_receives_backlog_then_live_records_without_reconnect() -> io::R
     )?;
 
     let _appliance = ChildGuard::spawn({
-        let mut cmd = logjetd_command();
+        let mut cmd = ljd_command();
         cmd.arg("--config").arg(&appliance_config).arg("serve");
         cmd
     })?;

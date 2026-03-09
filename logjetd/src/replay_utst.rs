@@ -123,5 +123,5 @@ fn test_collector_transport(mode: BackpressureMode, max_buffered_records: usize)
 
 fn unique_temp_path(label: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("logjetd-{label}-{nanos}-{}.state", std::process::id()))
+    std::env::temp_dir().join(format!("ljd-{label}-{nanos}-{}.state", std::process::id()))
 }

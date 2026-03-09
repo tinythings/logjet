@@ -24,7 +24,7 @@ pub struct TestDir {
 impl TestDir {
     pub fn new(label: &str) -> io::Result<Self> {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("logjetd-it-{label}-{nanos}-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ljd-it-{label}-{nanos}-{}", std::process::id()));
         fs::create_dir_all(&path)?;
         Ok(Self { path })
     }
@@ -64,8 +64,8 @@ impl Drop for ChildGuard {
     }
 }
 
-pub fn logjetd_command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_logjetd"))
+pub fn ljd_command() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_ljd"))
 }
 
 pub fn free_port() -> io::Result<u16> {

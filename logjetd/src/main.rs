@@ -18,7 +18,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("logjetd: {err}");
+            eprintln!("ljd: {err}");
             ExitCode::FAILURE
         }
     }
@@ -176,15 +176,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_usage() {
-    println!("logjetd");
+    println!("ljd");
     println!();
     println!("Usage:");
-    println!("  logjetd [serve] [-c|--config <path>]");
-    println!("  logjetd inspect <path>");
-    println!("  logjetd segments --path <dir> --name <base.logjet>");
-    println!("  logjetd replay [-c|--config <path>] --path <dir> --name <base.logjet> [--dest <url-or-host:port>]");
-    println!("  logjetd prune --path <dir> --name <base.logjet> [--keep-files <n> | --keep-bytes <bytes>] [--dry-run]");
-    println!("  logjetd bridge [-c|--config <path>] [--source <host:port>]");
+    println!("  ljd [serve] [-c|--config <path>]");
+    println!("  ljd inspect <path>");
+    println!("  ljd segments --path <dir> --name <base.logjet>");
+    println!("  ljd replay [-c|--config <path>] --path <dir> --name <base.logjet> [--dest <url-or-host:port>]");
+    println!("  ljd prune --path <dir> --name <base.logjet> [--keep-files <n> | --keep-bytes <bytes>] [--dry-run]");
+    println!("  ljd bridge [-c|--config <path>] [--source <host:port>]");
     println!();
     println!("Commands:");
     println!("  serve    Run ingest and replay listeners using YAML configuration");
