@@ -40,6 +40,7 @@ test-unit: setup
 	fi
 
 test-integration: setup
+	cargo build -p logjetd -p ljx
 	cargo build -p otlp-demo --bin otlp-bofh-emitter
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p logjetd --test bridge_flows; \
