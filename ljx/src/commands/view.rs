@@ -1027,14 +1027,14 @@ fn remember_summary(
 }
 
 fn format_summary(detail: &DetailRecord, hex_payload: bool) -> String {
-    let preview = if hex_payload {
+    
+    if hex_payload {
         hex_preview(&detail.payload, 32)
     } else if let Some(message) = extract_otlp_log_message(&detail.payload) {
         trim_single_line(&message, 160)
     } else {
         text_preview(&detail.payload, 160)
-    };
-    preview
+    }
 }
 
 fn render_detail_lines(detail: &DetailRecord, hex_payload: bool) -> Vec<Line<'static>> {
