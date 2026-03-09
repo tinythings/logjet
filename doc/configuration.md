@@ -1,6 +1,6 @@
 # Configuration
 
-`logjetd` reads YAML configuration from:
+`ljd` reads YAML configuration from:
 
 - `/etc/logjet.conf` by default
 - a custom path passed through `-c` or `--config`
@@ -120,7 +120,7 @@ Important:
 
 Maximum size of one `.logjet` file segment in KiB before rotation.
 
-When the current file exceeds this size, `logjetd` opens the next file:
+When the current file exceeds this size, `ljd` opens the next file:
 
 - `name.logjet`
 - `name-1.logjet`
@@ -130,9 +130,9 @@ Important:
 
 - applies only when `output: file`
 - old rotated files are kept
-- use `logjetd segments --path ... --name ...` to inspect one rotated spool
-- use `logjetd prune --path ... --name ... --keep-files <n>` to trim oldest archived segments by file count
-- use `logjetd prune --path ... --name ... --keep-bytes <bytes> --dry-run` to preview byte-budget pruning without deleting files
+- use `ljd segments --path ... --name ...` to inspect one rotated spool
+- use `ljd prune --path ... --name ... --keep-files <n>` to trim oldest archived segments by file count
+- use `ljd prune --path ... --name ... --keep-bytes <bytes> --dry-run` to preview byte-budget pruning without deleting files
 
 ### `file.name`
 
@@ -150,7 +150,7 @@ Important:
 
 ### `collector.url`
 
-Default destination used by `logjetd replay` when `--dest` is not provided.
+Default destination used by `ljd replay` when `--dest` is not provided.
 
 Accepted forms:
 
@@ -170,10 +170,10 @@ If the URL starts with `https://`, collector export uses TLS.
 
 ### `collector.timeout-ms`
 
-Socket timeout in milliseconds used by `logjetd replay` when posting stored
+Socket timeout in milliseconds used by `ljd replay` when posting stored
 OTLP payloads to `collector.url`.
 
-It is also used by `logjetd bridge` when posting replayed OTLP payloads to the
+It is also used by `ljd bridge` when posting replayed OTLP payloads to the
 collector.
 
 ### `collector.ca-file`
@@ -250,7 +250,7 @@ Important:
 
 ### `ingest.overload-report-ms`
 
-How often `logjetd` prints aggregated ingest overload counters to stderr while
+How often `ljd` prints aggregated ingest overload counters to stderr while
 overload events are happening.
 
 Important:
@@ -307,7 +307,7 @@ Important:
 
 - default is `disconnect`
 - this setting affects bridge export to the collector
-- `logjetd replay` remains a one-shot bulk operation and does not use this policy
+- `ljd replay` remains a one-shot bulk operation and does not use this policy
 
 ### `backpressure.max-buffered-records`
 
@@ -318,7 +318,7 @@ Important:
 
 - default is `16`
 - must be greater than zero
-- applies only to `logjetd bridge`
+- applies only to `ljd bridge`
 - `block` waits for queue space
 - `disconnect` fails the bridge connection when the queue is full
 - `drop-newest` drops the newest queued record when the queue is full
@@ -343,19 +343,19 @@ Important:
 
 ### `upstream.replay`
 
-Source `host:port` for `logjetd bridge`.
+Source `host:port` for `ljd bridge`.
 
-This should point at another `logjetd` replay listener, not an OTLP endpoint.
+This should point at another `ljd` replay listener, not an OTLP endpoint.
 
 Example:
 
 - `10.0.0.15:7002`
 
-If this key is omitted, `logjetd bridge` requires `--source`.
+If this key is omitted, `ljd bridge` requires `--source`.
 
 ### `upstream.mode`
 
-Retention mode requested by `logjetd bridge` from the upstream replay listener.
+Retention mode requested by `ljd bridge` from the upstream replay listener.
 
 Values:
 
@@ -373,7 +373,7 @@ Important:
 
 ### `upstream.state-file`
 
-Optional local file used by `logjetd bridge` to persist the last successfully
+Optional local file used by `ljd bridge` to persist the last successfully
 forwarded sequence.
 
 Important:
@@ -388,14 +388,14 @@ Important:
 
 ### `upstream.retry-ms`
 
-Reconnect delay in milliseconds for `logjetd bridge`.
+Reconnect delay in milliseconds for `ljd bridge`.
 
 When the upstream replay connection closes or fails, bridge mode waits this
 long before reconnecting.
 
 ### `upstream.connect-timeout-ms`
 
-TCP connect timeout in milliseconds for `logjetd bridge` when opening the
+TCP connect timeout in milliseconds for `ljd bridge` when opening the
 upstream replay connection.
 
 ### `tls.enable`
@@ -443,7 +443,7 @@ When enabled:
 
 ### `tls.server-name`
 
-Override server name used by `logjetd bridge` for TLS certificate validation.
+Override server name used by `ljd bridge` for TLS certificate validation.
 
 Use this when:
 
@@ -452,12 +452,12 @@ Use this when:
 
 ### `ingest.protocol`
 
-Selects how `logjetd` accepts incoming telemetry.
+Selects how `ljd` accepts incoming telemetry.
 
 Values:
 
 - `wire`
-  - the current internal framed TCP protocol used by `logjetd` replay clients and custom clients
+  - the current internal framed TCP protocol used by `ljd` replay clients and custom clients
   - this is not OTLP
 - `otlp-http`
   - OTLP over HTTP protobuf
@@ -466,7 +466,7 @@ Values:
   - OTLP over gRPC
   - accepts the standard logs `Export` RPC
 
-If you want a normal OpenTelemetry producer to send logs directly to `logjetd`,
+If you want a normal OpenTelemetry producer to send logs directly to `ljd`,
 use either `otlp-http` or `otlp-grpc`.
 
 ### `ingest.tls-enable`
@@ -475,8 +475,8 @@ Enable TLS for OTLP ingest listeners.
 
 Behaviour:
 
-- with `ingest.protocol: otlp-http`, `logjetd` accepts HTTPS on `/v1/logs`
-- with `ingest.protocol: otlp-grpc`, `logjetd` accepts gRPC over TLS
+- with `ingest.protocol: otlp-http`, `ljd` accepts HTTPS on `/v1/logs`
+- with `ingest.protocol: otlp-grpc`, `ljd` accepts gRPC over TLS
 
 ### `ingest.ca-file`
 
@@ -570,13 +570,13 @@ If omitted:
 - set either `buffer.size` or `buffer.messages`, never both
 - `buffer.size` limits the rotating in-memory tail by bytes
 - `buffer.messages` limits the rotating in-memory tail by message count
-- `collector.url` is used by `logjetd replay` when `--dest` is omitted
+- `collector.url` is used by `ljd replay` when `--dest` is omitted
 - `collector.timeout-ms` controls replay and bridge HTTP socket timeout
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to HTTPS collector export
 - `backpressure.enabled` enables bridge backpressure policy handling
 - `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
 - `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection
-- `upstream.replay` is used by `logjetd bridge` when `--source` is omitted
+- `upstream.replay` is used by `ljd bridge` when `--source` is omitted
 - `upstream.mode: keep` leaves upstream retained records in place after replay
 - `upstream.mode: drain` consumes upstream retained records after successful bridge export
 - `upstream.state-file` stores the last forwarded sequence and upstream stream identity on the downstream bridge side

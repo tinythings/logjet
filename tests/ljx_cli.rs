@@ -13,7 +13,7 @@ use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use prost::Message;
 
 #[test]
-fn ljx_filters_real_logjetd_output_from_mock_emitter() -> io::Result<()> {
+fn ljx_filters_real_ljd_output_from_mock_emitter() -> io::Result<()> {
     ensure_test_binaries_exist()?;
 
     let dir = TestDir::new("ljx-cli")?;
@@ -34,33 +34,25 @@ fn ljx_filters_real_logjetd_output_from_mock_emitter() -> io::Result<()> {
         ),
     )?;
 
-    eprintln!("starting logjetd");
+    eprintln!("starting ljd");
     let _daemon = ChildGuard::spawn({
-        let mut cmd = Command::new(logjetd_bin());
+        let mut cmd = Command::new(ljd_bin());
         cmd.arg("--config").arg(&config).arg("serve");
         cmd
     })
-    .map_err(|err| io::Error::other(format!("failed to start logjetd: {err}")))?;
+    .map_err(|err| io::Error::other(format!("failed to start ljd: {err}")))?;
     eprintln!("waiting for ingest tcp");
     wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))
         .map_err(|err| io::Error::other(format!("failed waiting for ingest tcp: {err}")))?;
 
-    for message in [
-        "java.crap.failed",
-        "java.alpha.bs",
-        "ERROR boom",
-        "eRrOr splash",
-        "banana",
-    ] {
+    for message in ["java.crap.failed", "java.alpha.bs", "ERROR boom", "eRrOr splash", "banana"] {
         eprintln!("emitting {message}");
         run_emitter(ingest_port, message)?;
     }
 
     eprintln!("waiting for spool file");
-    wait_until(Duration::from_secs(5), || {
-        Ok(spool_path.exists() && fs::metadata(&spool_path)?.len() > 0)
-    })
-    .map_err(|err| io::Error::other(format!("failed waiting for spool file: {err}")))?;
+    wait_until(Duration::from_secs(5), || Ok(spool_path.exists() && fs::metadata(&spool_path)?.len() > 0))
+        .map_err(|err| io::Error::other(format!("failed waiting for spool file: {err}")))?;
 
     let records = read_logjet_records(&spool_path)?;
     assert_eq!(records.len(), 5);
@@ -72,100 +64,29 @@ fn ljx_filters_real_logjetd_output_from_mock_emitter() -> io::Result<()> {
     eprintln!("running ljx assertions");
     assert_eq!(run_ljx_count(&spool_path, &[])?, "5");
     assert_eq!(run_ljx_count(&spool_path, &["--type", "logs"])?, "5");
-    assert_eq!(
-        run_ljx_count(&spool_path, &["-F", "java.crap.failed"])?,
-        "1"
-    );
-    assert_eq!(
-        run_ljx_count(&spool_path, &["-e", r"java\..*\.bs"])?,
-        "1"
-    );
+    assert_eq!(run_ljx_count(&spool_path, &["-F", "java.crap.failed"])?, "1");
+    assert_eq!(run_ljx_count(&spool_path, &["-e", r"java\..*\.bs"])?, "1");
     assert_eq!(run_ljx_count(&spool_path, &["-F", "error", "-i"])?, "2");
-    assert_eq!(
-        run_ljx_count(
-            &spool_path,
-            &[
-                "--seq-min",
-                &seq_min.to_string(),
-                "--seq-max",
-                &seq_max.to_string(),
-            ],
-        )?,
-        "3"
-    );
-    assert_eq!(
-        run_ljx_count(
-            &spool_path,
-            &[
-                "--ts-min",
-                &ts_min.to_string(),
-                "--ts-max",
-                &ts_max.to_string(),
-            ],
-        )?,
-        "3"
-    );
+    assert_eq!(run_ljx_count(&spool_path, &["--seq-min", &seq_min.to_string(), "--seq-max", &seq_max.to_string(),],)?, "3");
+    assert_eq!(run_ljx_count(&spool_path, &["--ts-min", &ts_min.to_string(), "--ts-max", &ts_max.to_string(),],)?, "3");
 
-    run_ljx_filter(
-        &spool_path,
-        &filtered_literal,
-        &["-F", "java.crap.failed"],
-    )?;
-    assert_eq!(
-        read_logjet_messages(&filtered_literal)?,
-        vec!["java.crap.failed".to_string()]
-    );
+    run_ljx_filter(&spool_path, &filtered_literal, &["-F", "java.crap.failed"])?;
+    assert_eq!(read_logjet_messages(&filtered_literal)?, vec!["java.crap.failed".to_string()]);
 
     run_ljx_filter(&spool_path, &filtered_regex, &["-e", "error|panic", "-i"])?;
-    assert_eq!(
-        read_logjet_messages(&filtered_regex)?,
-        vec!["ERROR boom".to_string(), "eRrOr splash".to_string()]
-    );
+    assert_eq!(read_logjet_messages(&filtered_regex)?, vec!["ERROR boom".to_string(), "eRrOr splash".to_string()]);
 
-    run_ljx_filter(
-        &spool_path,
-        &filtered_seq,
-        &[
-            "--seq-min",
-            &seq_min.to_string(),
-            "--seq-max",
-            &seq_max.to_string(),
-        ],
-    )?;
-    assert_eq!(
-        read_logjet_messages(&filtered_seq)?,
-        vec![
-            "java.alpha.bs".to_string(),
-            "ERROR boom".to_string(),
-            "eRrOr splash".to_string()
-        ]
-    );
+    run_ljx_filter(&spool_path, &filtered_seq, &["--seq-min", &seq_min.to_string(), "--seq-max", &seq_max.to_string()])?;
+    assert_eq!(read_logjet_messages(&filtered_seq)?, vec!["java.alpha.bs".to_string(), "ERROR boom".to_string(), "eRrOr splash".to_string()]);
 
-    let stdout_output = run_ljx(
-        [
-            "filter".as_ref(),
-            spool_path.as_os_str(),
-            "-o".as_ref(),
-            "-".as_ref(),
-        ],
-        &["-F", "error", "-i"],
-    )?;
+    let stdout_output = run_ljx(["filter".as_ref(), spool_path.as_os_str(), "-o".as_ref(), "-".as_ref()], &["-F", "error", "-i"])?;
     if !stdout_output.status.success() {
-        return Err(io::Error::other(format!(
-            "ljx stdout filter failed: {}",
-            String::from_utf8_lossy(&stdout_output.stderr)
-        )));
+        return Err(io::Error::other(format!("ljx stdout filter failed: {}", String::from_utf8_lossy(&stdout_output.stderr))));
     }
     fs::write(&filtered_stdout, &stdout_output.stdout)?;
-    assert_eq!(
-        read_logjet_messages(&filtered_stdout)?,
-        vec!["ERROR boom".to_string(), "eRrOr splash".to_string()]
-    );
+    assert_eq!(read_logjet_messages(&filtered_stdout)?, vec!["ERROR boom".to_string(), "eRrOr splash".to_string()]);
 
-    let invalid = run_ljx(
-        ["count".as_ref(), spool_path.as_os_str()],
-        &["-F", "error", "-e", "panic"],
-    )?;
+    let invalid = run_ljx(["count".as_ref(), spool_path.as_os_str()], &["-F", "error", "-e", "panic"])?;
     assert!(!invalid.status.success());
     assert!(
         String::from_utf8_lossy(&invalid.stderr).contains("cannot be used with")
@@ -176,10 +97,10 @@ fn ljx_filters_real_logjetd_output_from_mock_emitter() -> io::Result<()> {
 }
 
 fn ensure_test_binaries_exist() -> io::Result<()> {
-    for path in [logjetd_bin(), ljx_bin(), emitter_bin()] {
+    for path in [ljd_bin(), ljx_bin(), emitter_bin()] {
         if !path.is_file() {
             return Err(io::Error::other(format!(
-                "missing test binary {}. build it first with: cargo build -p logjetd -p ljx -p otlp-demo --bin otlp-bofh-emitter",
+                "missing test binary {}. build it first with: cargo build -p ljd -p ljx -p otlp-demo --bin otlp-bofh-emitter",
                 path.display()
             )));
         }
@@ -199,59 +120,32 @@ fn run_emitter(ingest_port: u16, message: &str) -> io::Result<()> {
         .stderr(Stdio::null())
         .status()
         .map_err(|err| io::Error::other(format!("failed to start emitter: {err}")))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!("emitter failed for message: {message}")))
-    }
+    if status.success() { Ok(()) } else { Err(io::Error::other(format!("emitter failed for message: {message}"))) }
 }
 
 fn run_ljx_count(input: &Path, extra_args: &[&str]) -> io::Result<String> {
     let output = run_ljx(["count".as_ref(), input.as_os_str()], extra_args)?;
     if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "ljx count failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
+        return Err(io::Error::other(format!("ljx count failed: {}", String::from_utf8_lossy(&output.stderr))));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn run_ljx_filter(input: &Path, output: &Path, extra_args: &[&str]) -> io::Result<()> {
-    let output = run_ljx(
-        [
-            "filter".as_ref(),
-            input.as_os_str(),
-            "-o".as_ref(),
-            output.as_os_str(),
-        ],
-        extra_args,
-    )?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "ljx filter failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )))
-    }
+    let output = run_ljx(["filter".as_ref(), input.as_os_str(), "-o".as_ref(), output.as_os_str()], extra_args)?;
+    if output.status.success() { Ok(()) } else { Err(io::Error::other(format!("ljx filter failed: {}", String::from_utf8_lossy(&output.stderr)))) }
 }
 
 fn run_ljx<const N: usize>(prefix_args: [&OsStr; N], extra_args: &[&str]) -> io::Result<Output> {
     let mut command = Command::new(ljx_bin());
     command.args(prefix_args);
     command.args(extra_args);
-    command
-        .output()
-        .map_err(|err| io::Error::other(format!("failed to start ljx: {err}")))
+    command.output().map_err(|err| io::Error::other(format!("failed to start ljx: {err}")))
 }
 
 fn read_logjet_messages(path: &Path) -> io::Result<Vec<String>> {
-    Ok(read_logjet_records(path)?
-        .into_iter()
-        .map(|record| record.message)
-        .collect())
+    Ok(read_logjet_records(path)?.into_iter().map(|record| record.message).collect())
 }
 
 fn read_logjet_records(path: &Path) -> io::Result<Vec<DecodedRecord>> {
@@ -260,19 +154,14 @@ fn read_logjet_records(path: &Path) -> io::Result<Vec<DecodedRecord>> {
     let mut records = Vec::new();
     while let Some(record) = reader.next_record().map_err(io::Error::other)? {
         for message in decode_payload_messages(&record.payload)? {
-            records.push(DecodedRecord {
-                seq: record.seq,
-                ts_unix_ns: record.ts_unix_ns,
-                message,
-            });
+            records.push(DecodedRecord { seq: record.seq, ts_unix_ns: record.ts_unix_ns, message });
         }
     }
     Ok(records)
 }
 
 fn decode_payload_messages(payload: &[u8]) -> io::Result<Vec<String>> {
-    let batch = ExportLogsServiceRequest::decode(payload)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    let batch = ExportLogsServiceRequest::decode(payload).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
     let mut messages = Vec::new();
     for resource_logs in batch.resource_logs {
         for scope_logs in resource_logs.scope_logs {
@@ -289,9 +178,7 @@ fn decode_payload_messages(payload: &[u8]) -> io::Result<Vec<String>> {
 }
 
 fn target_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+    std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
 }
 
 struct DecodedRecord {
@@ -300,8 +187,8 @@ struct DecodedRecord {
     message: String,
 }
 
-fn logjetd_bin() -> PathBuf {
-    target_dir().join("debug").join(binary_name("logjetd"))
+fn ljd_bin() -> PathBuf {
+    target_dir().join("debug").join(binary_name("ljd"))
 }
 
 fn ljx_bin() -> PathBuf {
@@ -309,17 +196,11 @@ fn ljx_bin() -> PathBuf {
 }
 
 fn emitter_bin() -> PathBuf {
-    target_dir()
-        .join("debug")
-        .join(binary_name("otlp-bofh-emitter"))
+    target_dir().join("debug").join(binary_name("otlp-bofh-emitter"))
 }
 
 fn binary_name(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
+    if cfg!(windows) { format!("{name}.exe") } else { name.to_string() }
 }
 
 struct TestDir {
@@ -328,14 +209,8 @@ struct TestDir {
 
 impl TestDir {
     fn new(label: &str) -> io::Result<Self> {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "logjet-ljx-it-{label}-{nanos}-{}",
-            std::process::id()
-        ));
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("logjet-ljx-it-{label}-{nanos}-{}", std::process::id()));
         fs::create_dir_all(&path)?;
         Ok(Self { path })
     }
@@ -363,10 +238,7 @@ struct ChildGuard {
 
 impl ChildGuard {
     fn spawn(mut command: Command) -> io::Result<Self> {
-        let child = command
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+        let child = command.stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
         Ok(Self { child })
     }
 }
@@ -417,10 +289,7 @@ where
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "timed out waiting for condition",
-            ));
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "timed out waiting for condition"));
         }
         thread::sleep(Duration::from_millis(25));
     }

@@ -1,28 +1,28 @@
-% LOGJETD(1)
+% LJD(1)
 % Bo Maryniuk
 % March 2026
 
 # NAME
 
-logjetd - OTLP ingest, `.logjet` storage, replay, and file blasting daemon
+ljd - OTLP ingest, `.logjet` storage, replay, and file blasting daemon
 
 # SYNOPSIS
 
-`logjetd` [`serve`] [`-c`|`--config` *path*]
+`ljd` [`serve`] [`-c`|`--config` *path*]
 
-`logjetd` `inspect` *path*
+`ljd` `inspect` *path*
 
-`logjetd` `segments` `--path` *dir* `--name` *base.logjet*
+`ljd` `segments` `--path` *dir* `--name` *base.logjet*
 
-`logjetd` `replay` [`-c`|`--config` *path*] `--path` *dir* `--name` *base.logjet* [`--dest` *url-or-host:port*]
+`ljd` `replay` [`-c`|`--config` *path*] `--path` *dir* `--name` *base.logjet* [`--dest` *url-or-host:port*]
 
-`logjetd` `prune` `--path` *dir* `--name` *base.logjet* [`--keep-files` *n* | `--keep-bytes` *bytes*] [`--dry-run`]
+`ljd` `prune` `--path` *dir* `--name` *base.logjet* [`--keep-files` *n* | `--keep-bytes` *bytes*] [`--dry-run`]
 
-`logjetd` `bridge` [`-c`|`--config` *path*] [`--source` *host:port*]
+`ljd` `bridge` [`-c`|`--config` *path*] [`--source` *host:port*]
 
 # DESCRIPTION
 
-`logjetd` is a small telemetry daemon for constrained systems.
+`ljd` is a small telemetry daemon for constrained systems.
 
 It can:
 
@@ -31,7 +31,7 @@ It can:
 - optionally run OTLP/HTTP ingest over HTTPS and OTLP/gRPC ingest over TLS
 - store raw OTLP protobuf payloads either in memory or in append-only `.logjet` files
 - expose a replay listener for downstream consumers over the current internal wire protocol
-- connect to another `logjetd` replay listener and forward backlog plus live records into an OTLP/HTTP collector
+- connect to another `ljd` replay listener and forward backlog plus live records into an OTLP/HTTP collector
 - optionally protect replay and bridge transport with TLS
 - optionally export to an HTTPS OTLP collector
 - inspect `.logjet` files and directories
@@ -62,14 +62,14 @@ Current serve behaviour:
 
 ## bridge
 
-Connect to another `logjetd` replay listener, drain retained backlog, stay
+Connect to another `ljd` replay listener, drain retained backlog, stay
 attached for live records, and forward OTLP log payloads to the configured
 collector.
 
 Example:
 
 ```text
-logjetd --config ./logjetd.conf bridge --source 10.0.0.15:7002
+ljd --config ./logjetd.conf bridge --source 10.0.0.15:7002
 ```
 
 If `--source` is omitted, bridge uses `upstream.replay` from configuration.
@@ -81,7 +81,7 @@ Inspect a `.logjet` file or a directory containing `.logjet` files.
 Example:
 
 ```text
-logjetd inspect /var/lib/logjet
+ljd inspect /var/lib/logjet
 ```
 
 ## segments
@@ -91,7 +91,7 @@ List ordered rotated segments for one spool.
 Example:
 
 ```text
-logjetd segments --path /var/lib/logjet --name app.logjet
+ljd segments --path /var/lib/logjet --name app.logjet
 ```
 
 ## replay
@@ -102,7 +102,7 @@ payloads into an OTLP/HTTP collector.
 Example:
 
 ```text
-logjetd replay --path /var/logs --name app.logjet --dest http://127.0.0.1:4318/v1/logs
+ljd replay --path /var/logs --name app.logjet --dest http://127.0.0.1:4318/v1/logs
 ```
 
 Replay order is:
@@ -122,8 +122,8 @@ Remove oldest rotated file segments deliberately.
 Examples:
 
 ```text
-logjetd prune --path /var/lib/logjet --name app.logjet --keep-files 2
-logjetd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-run
+ljd prune --path /var/lib/logjet --name app.logjet --keep-files 2
+ljd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-run
 ```
 
 # OPTIONS
@@ -177,7 +177,7 @@ If only `host:port` is given, replay defaults to `/v1/logs`.
 
 ## `--source` *host:port*
 
-Upstream `logjetd` replay listener for the `bridge` command.
+Upstream `ljd` replay listener for the `bridge` command.
 
 If omitted, `bridge` uses `upstream.replay` from configuration.
 
@@ -311,7 +311,7 @@ Append-only file behaviour:
 - bounded bridge-side exporter queue through `backpressure.max-buffered-records`
 - optional TLS on replay/bridge transport
 - HTTPS OTLP collector export
-- one-shot file replay to OTLP/HTTP collectors with `logjetd replay`
+- one-shot file replay to OTLP/HTTP collectors with `ljd replay`
 - configurable replay destination via `collector.url`
 - inspection of `.logjet` files and directories
 
@@ -329,25 +329,25 @@ Append-only file behaviour:
 Run the daemon with explicit config:
 
 ```text
-logjetd --config ./logjetd.conf
+ljd --config ./logjetd.conf
 ```
 
 Inspect generated files:
 
 ```text
-logjetd inspect ./logs
+ljd inspect ./logs
 ```
 
 Replay files to a local collector:
 
 ```text
-logjetd --config ./logjetd.conf replay --path ./logs --name app.logjet
+ljd --config ./logjetd.conf replay --path ./logs --name app.logjet
 ```
 
 Bridge from a remote replay listener into a collector:
 
 ```text
-logjetd --config ./logjetd.conf bridge --source 10.0.0.15:7002
+ljd --config ./logjetd.conf bridge --source 10.0.0.15:7002
 ```
 
 # FILES
@@ -358,10 +358,10 @@ logjetd --config ./logjetd.conf bridge --source 10.0.0.15:7002
 `*.logjet`
 : append-only telemetry files written by file mode
 
-`doc/manpage/logjetd.1.md`
+`doc/manpage/ljd.1.md`
 : Markdown manpage source
 
-`doc/manpage/logjetd.1`
+`doc/manpage/ljd.1`
 : generated manpage output
 
 # EXIT STATUS

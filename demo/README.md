@@ -18,9 +18,9 @@ This directory contains two binaries for a two-terminal OTLP demo over TCP.
 It also contains scenario demos under subdirectories:
 
 - [`logjet-file`](./logjet-file)
-  - OTLP/HTTP emitter into file-backed `logjetd`
+  - OTLP/HTTP emitter into file-backed `ljd`
 - [`logjet-grpc-file`](./logjet-grpc-file)
-  - OTLP/gRPC emitter into file-backed `logjetd`
+  - OTLP/gRPC emitter into file-backed `ljd`
 - [`kill-bill`](./kill-bill)
   - cut a `.logjet` file down to its middle third and recover later good blocks
 - [`memory-buffer`](./memory-buffer)
@@ -28,9 +28,9 @@ It also contains scenario demos under subdirectories:
 - [`drain-once`](./drain-once)
   - preserved startup messages are consumed on the first drain and do not appear on the second
 - [`multi-emitter`](./multi-emitter)
-  - five emitters into one `logjetd`, then late replay into one collector
+  - five emitters into one `ljd`, then late replay into one collector
 - [`multi-emitter-continuous`](./multi-emitter-continuous)
-  - five emitters running continuously into one `logjetd` and one live collector
+  - five emitters running continuously into one `ljd` and one live collector
 - [`multi-client-behaviour`](./multi-client-behaviour)
   - one replay client stalls while another keeps flowing
 - [`replay-handoff`](./replay-handoff)
@@ -52,11 +52,11 @@ It also contains scenario demos under subdirectories:
 - [`ingest-overload`](./ingest-overload)
   - rate-limited ingest with operator-visible counters and severity-aware shedding
 - [`remote-drain`](./remote-drain)
-  - appliance-side `logjetd` drained by a remote-side `logjetd bridge`
+  - appliance-side `ljd` drained by a remote-side `ljd bridge`
 - [`remote-drain-tls`](./remote-drain-tls)
   - same remote-drain topology, but with TLS and mutual TLS on the replay link
 - [`secure-pipeline`](./secure-pipeline)
-  - HTTPS OTLP ingest into `logjetd`, then HTTPS collector export on replay
+  - HTTPS OTLP ingest into `ljd`, then HTTPS collector export on replay
 
 ## Enjoy It
 

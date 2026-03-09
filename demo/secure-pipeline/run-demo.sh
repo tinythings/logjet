@@ -3,12 +3,12 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET_DIR="$SCRIPT_DIR/../../target/debug"
-LOGJETD="$TARGET_DIR/logjetd"
+LJD="$TARGET_DIR/ljd"
 EMITTER="$TARGET_DIR/otlp-bofh-emitter"
 COLLECTOR="$TARGET_DIR/otlp-demo-collector"
 CONFIG="$SCRIPT_DIR/logjetd.conf"
 
-for bin in "$LOGJETD" "$EMITTER" "$COLLECTOR"; do
+for bin in "$LJD" "$EMITTER" "$COLLECTOR"; do
     if [ ! -x "$bin" ]; then
         echo "missing $bin"
         echo "build everything first with: make demo"
@@ -41,12 +41,12 @@ echo "starting HTTPS collector on 127.0.0.1:4321"
     --key-file "$SCRIPT_DIR/certs/collector.key" &
 COLLECTOR_PID=$!
 
-echo "starting logjetd with HTTPS OTLP ingest and HTTPS collector export"
-"$LOGJETD" --config "$CONFIG" &
-LOGJETD_PID=$!
+echo "starting ljd with HTTPS OTLP ingest and HTTPS collector export"
+"$LJD" --config "$CONFIG" &
+LJD_PID=$!
 
 cleanup() {
-    kill "${LOGJETD_PID:-}" 2>/dev/null || true
+    kill "${LJD_PID:-}" 2>/dev/null || true
     kill "${COLLECTOR_PID:-}" 2>/dev/null || true
 }
 
@@ -64,4 +64,4 @@ echo "sending 5 BOFH batches to https://127.0.0.1:4319/v1/logs"
 sleep 1
 
 echo "replaying stored records to HTTPS collector"
-"$LOGJETD" --config "$CONFIG" replay --path ./logs --name secure.logjet
+"$LJD" --config "$CONFIG" replay --path ./logs --name secure.logjet

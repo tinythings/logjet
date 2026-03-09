@@ -1,10 +1,10 @@
-# logjetd Daemon
+# ljd Daemon
 
-`logjetd` is a separate binary crate under [`logjetd/`](../logjetd).
+`ljd` is a separate binary crate under [`logjetd/`](../logjetd).
 
 ## What It Does
 
-`logjetd` accepts telemetry on an ingest socket, stores backlog, and can replay
+`ljd` accepts telemetry on an ingest socket, stores backlog, and can replay
 that backlog later.
 
 It supports two storage modes:
@@ -23,44 +23,44 @@ Default config path:
 Run with default config path:
 
 ```bash
-logjetd
+ljd
 ```
 
 Explicit config path:
 
 ```bash
-logjetd --config /path/to/logjet.conf
+ljd --config /path/to/logjet.conf
 ```
 
 Inspect a file or directory:
 
 ```bash
-logjetd inspect /var/lib/logjet
+ljd inspect /var/lib/logjet
 ```
 
 List rotated file segments for one spool:
 
 ```bash
-logjetd segments --path /var/lib/logjet --name app.logjet
+ljd segments --path /var/lib/logjet --name app.logjet
 ```
 
 Prune oldest rotated file segments and keep only the newest two files:
 
 ```bash
-logjetd prune --path /var/lib/logjet --name app.logjet --keep-files 2
+ljd prune --path /var/lib/logjet --name app.logjet --keep-files 2
 ```
 
 Preview byte-budget pruning without deleting anything:
 
 ```bash
-logjetd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-run
+ljd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-run
 ```
 
-Continuously bridge from another `logjetd` replay listener into an OTLP
+Continuously bridge from another `ljd` replay listener into an OTLP
 collector:
 
 ```bash
-logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
+ljd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 ```
 
 ## Runtime Behaviour
@@ -100,7 +100,7 @@ upstream.
 
 ### Continuous Bridge
 
-- `logjetd bridge` connects to another `logjetd` replay listener
+- `ljd bridge` connects to another `ljd` replay listener
 - requests either `keep` or `drain` mode from the upstream side
 - continues forwarding newly replayed records
 - forwards OTLP log payloads to `collector.url`
@@ -119,7 +119,7 @@ upstream.
 
 ### File Blast Replay
 
-- `logjetd replay --path ... --name ...`
+- `ljd replay --path ... --name ...`
 - reads ordered rotated `.logjet` files
 - sends stored OTLP log batches to a collector URL
 - uses `collector.url` by default
@@ -128,16 +128,16 @@ upstream.
 
 ### File Operational Tooling
 
-- `logjetd segments --path ... --name ...`
+- `ljd segments --path ... --name ...`
 - prints ordered metadata for one rotated spool:
   - segment id
   - file path
   - file size in bytes
   - record count
   - first and last sequence
-- `logjetd prune --path ... --name ... --keep-files <n>`
+- `ljd prune --path ... --name ... --keep-files <n>`
 - removes oldest rotated segments and keeps the newest `n` segment files
-- `logjetd prune --path ... --name ... --keep-bytes <bytes>`
+- `ljd prune --path ... --name ... --keep-bytes <bytes>`
 - removes oldest rotated segments until the newest retained set fits within the byte budget
 - `--dry-run` prints the paths that would be removed without deleting them
 - the newest active segment is always retained

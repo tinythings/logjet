@@ -167,7 +167,7 @@ fn maybe_report_overload(config: &IngestOverloadConfig, state: &mut IngestPolicy
         return;
     }
     eprintln!(
-        "logjetd ingest overload stats accepted={} priority-bypass={} rate-limited={} oversize-rejected={} client-cap-rejected={}",
+        "ljd ingest overload stats accepted={} priority-bypass={} rate-limited={} oversize-rejected={} client-cap-rejected={}",
         state.stats.accepted, state.stats.priority_bypass, state.stats.rate_limited, state.stats.oversize_rejected, state.stats.client_cap_rejected
     );
     state.next_report_at = now + Duration::from_millis(config.report_every_ms.max(1));
@@ -198,10 +198,10 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
     let tls = config.config.tls.clone();
 
     let replay_thread = thread::Builder::new()
-        .name("logjetd-replay".to_string())
+        .name("ljd-replay".to_string())
         .spawn(move || replay_loop(replay_addr, replay_spool, replay_max_clients, replay_client_timeout_ms, tls))?;
 
-    eprintln!("logjetd using config {}", config.config_path.display());
+    eprintln!("ljd using config {}", config.config_path.display());
     ingest_loop(
         config.config.ingest_addr,
         config.config.ingest_protocol,
@@ -223,7 +223,7 @@ fn ingest_loop(
         IngestProtocol::Wire => {
             let listener = TcpListener::bind(&bind_addr)?;
             eprintln!(
-                "logjetd ingest listening on {bind_addr} using wire protocol max-batch-bytes={} max-clients={}",
+                "ljd ingest listening on {bind_addr} using wire protocol max-batch-bytes={} max-clients={}",
                 ingest_limits.max_batch_bytes, ingest_limits.max_clients
             );
 
@@ -233,9 +233,9 @@ fn ingest_loop(
                 let ingest_policy = Arc::clone(&ingest_policy);
                 let limiter = Arc::clone(&limiter);
                 let max_batch_bytes = ingest_limits.max_batch_bytes;
-                thread::Builder::new().name("logjetd-ingest-client".to_string()).spawn(move || {
+                thread::Builder::new().name("ljd-ingest-client".to_string()).spawn(move || {
                     if let Err(err) = handle_ingest_client(stream, spool, ingest_policy, limiter, max_batch_bytes) {
-                        eprintln!("logjetd ingest client error: {err}");
+                        eprintln!("ljd ingest client error: {err}");
                     }
                 })?;
             }
@@ -245,7 +245,7 @@ fn ingest_loop(
                 return otlp_http_tls_loop(bind_addr, ingest_tls, ingest_limits, ingest_policy, spool, next_seq, limiter);
             }
             let server = Server::http(&bind_addr).map_err(|err| io::Error::other(err.to_string()))?;
-            eprintln!("logjetd ingest listening on http://{bind_addr}/v1/logs using otlp-http max-batch-bytes={}", ingest_limits.max_batch_bytes);
+            eprintln!("ljd ingest listening on http://{bind_addr}/v1/logs using otlp-http max-batch-bytes={}", ingest_limits.max_batch_bytes);
 
             for mut request in server.incoming_requests() {
                 if request.method() != &Method::Post || request.url() != "/v1/logs" {
@@ -292,7 +292,7 @@ fn ingest_loop(
             let addr: SocketAddr =
                 bind_addr.parse().map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC bind addr: {err}")))?;
             eprintln!(
-                "logjetd ingest listening on {}://{bind_addr} using otlp-grpc max-batch-bytes={} max-clients={}",
+                "ljd ingest listening on {}://{bind_addr} using otlp-grpc max-batch-bytes={} max-clients={}",
                 if ingest_tls.enable { "grpcs" } else { "grpc" },
                 ingest_limits.max_batch_bytes,
                 ingest_limits.max_clients
@@ -327,7 +327,7 @@ fn otlp_http_tls_loop(
     let listener = TcpListener::bind(&bind_addr)?;
     let tls_server = load_ingest_server_config(&ingest_tls)?;
     eprintln!(
-        "logjetd ingest listening on https://{bind_addr}/v1/logs using otlp-http max-batch-bytes={} max-clients={}",
+        "ljd ingest listening on https://{bind_addr}/v1/logs using otlp-http max-batch-bytes={} max-clients={}",
         ingest_limits.max_batch_bytes, ingest_limits.max_clients
     );
 
@@ -339,9 +339,9 @@ fn otlp_http_tls_loop(
         let tls_server = tls_server.clone();
         let limiter = Arc::clone(&limiter);
         let max_batch_bytes = ingest_limits.max_batch_bytes;
-        thread::Builder::new().name("logjetd-otlp-http-tls-client".to_string()).spawn(move || {
+        thread::Builder::new().name("ljd-otlp-http-tls-client".to_string()).spawn(move || {
             if let Err(err) = handle_otlp_http_tls_client(stream, tls_server, spool, ingest_policy, next_seq, limiter, max_batch_bytes) {
-                eprintln!("logjetd otlp-http tls client error: {err}");
+                eprintln!("ljd otlp-http tls client error: {err}");
             }
         })?;
     }
@@ -354,7 +354,7 @@ fn handle_otlp_http_tls_client(
     limiter: Arc<ConnectionLimiter>, max_batch_bytes: usize,
 ) -> io::Result<()> {
     let Some(_permit) = limiter.try_acquire() else {
-        eprintln!("logjetd ingest refused TLS client: ingest.max-clients reached");
+        eprintln!("ljd ingest refused TLS client: ingest.max-clients reached");
         ingest_policy.note_client_cap()?;
         return Ok(());
     };
@@ -514,12 +514,12 @@ fn replay_loop(
     let listener = TcpListener::bind(&bind_addr)?;
     let limiter = Arc::new(ConnectionLimiter::new(max_clients));
     let tls_server = if tls.enable {
-        eprintln!("logjetd replay TLS enabled on {bind_addr}");
+        eprintln!("ljd replay TLS enabled on {bind_addr}");
         Some(load_server_config(&tls)?)
     } else {
         None
     };
-    eprintln!("logjetd replay listening on {bind_addr} max-clients={max_clients} client-timeout-ms={client_timeout_ms}");
+    eprintln!("ljd replay listening on {bind_addr} max-clients={max_clients} client-timeout-ms={client_timeout_ms}");
 
     for stream in listener.incoming() {
         let stream = stream?;
@@ -529,9 +529,9 @@ fn replay_loop(
         let spool = Arc::clone(&spool);
         let tls_server = tls_server.clone();
         let limiter = Arc::clone(&limiter);
-        thread::Builder::new().name("logjetd-replay-client".to_string()).spawn(move || {
+        thread::Builder::new().name("ljd-replay-client".to_string()).spawn(move || {
             if let Err(err) = handle_replay_client(stream, spool, tls_server, limiter) {
-                eprintln!("logjetd replay client error: {err}");
+                eprintln!("ljd replay client error: {err}");
             }
         })?;
     }
@@ -543,7 +543,7 @@ fn handle_ingest_client(
     stream: TcpStream, spool: Arc<SharedSpool>, ingest_policy: Arc<SharedIngestPolicy>, limiter: Arc<ConnectionLimiter>, max_batch_bytes: usize,
 ) -> io::Result<()> {
     let Some(_permit) = limiter.try_acquire() else {
-        eprintln!("logjetd ingest refused wire client: ingest.max-clients reached");
+        eprintln!("ljd ingest refused wire client: ingest.max-clients reached");
         ingest_policy.note_client_cap()?;
         return Ok(());
     };
@@ -552,14 +552,14 @@ fn handle_ingest_client(
 
     while let Some(record) = read_record_with_limit(&mut reader, max_batch_bytes)? {
         if matches!(ingest_policy.decide(BatchPriority::Unknown)?, IngestDecision::RejectRateLimited) {
-            eprintln!("logjetd ingest dropped wire record seq={} because ingest rate limit was exceeded", record.seq);
+            eprintln!("ljd ingest dropped wire record seq={} because ingest rate limit was exceeded", record.seq);
             continue;
         }
         append_batch_record(&spool, record)?;
     }
 
     if let Some(peer) = peer {
-        eprintln!("logjetd ingest disconnected: {peer}");
+        eprintln!("ljd ingest disconnected: {peer}");
     }
     Ok(())
 }
@@ -601,7 +601,7 @@ fn handle_replay_client(
     stream: TcpStream, spool: Arc<SharedSpool>, tls_server: Option<Arc<ServerConfig>>, limiter: Arc<ConnectionLimiter>,
 ) -> io::Result<()> {
     let Some(_permit) = limiter.try_acquire() else {
-        eprintln!("logjetd replay refused client: replay.max-clients reached");
+        eprintln!("ljd replay refused client: replay.max-clients reached");
         return Ok(());
     };
     if let Some(server_config) = tls_server {
@@ -629,7 +629,7 @@ fn handle_replay_transport<T: io::Read + io::Write>(transport: &mut T, spool: Ar
         (spool_guard.replay_cursor_after(request.from_seq)?, spool.current_generation()?)
     };
 
-    eprintln!("logjetd replay client requested records after seq={} mode={}", request.from_seq, if request.consume { "drain" } else { "keep" });
+    eprintln!("ljd replay client requested records after seq={} mode={}", request.from_seq, if request.consume { "drain" } else { "keep" });
 
     if request.consume {
         return handle_replay_transport_drain(transport, spool, &mut cursor, &mut seen_generation);

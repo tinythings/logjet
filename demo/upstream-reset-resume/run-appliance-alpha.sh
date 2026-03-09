@@ -3,12 +3,12 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET_DIR="$SCRIPT_DIR/../../target/debug"
-LOGJETD="$TARGET_DIR/logjetd"
+LJD="$TARGET_DIR/ljd"
 EMITTER="$TARGET_DIR/otlp-bofh-emitter"
 CONFIG="$SCRIPT_DIR/appliance-logjetd.conf"
 STATE_FILE="$SCRIPT_DIR/bridge.state"
 
-for bin in "$LOGJETD" "$EMITTER"; do
+for bin in "$LJD" "$EMITTER"; do
     if [ ! -x "$bin" ]; then
         echo "missing $bin"
         echo "build everything first with: make demo"
@@ -21,11 +21,11 @@ cd "$SCRIPT_DIR"
 rm -f "$STATE_FILE"
 
 echo "starting ALPHA appliance stream and clearing old bridge.state"
-"$LOGJETD" --config "$CONFIG" &
-LOGJETD_PID=$!
+"$LJD" --config "$CONFIG" &
+LJD_PID=$!
 
 cleanup() {
-    kill "${LOGJETD_PID:-}" 2>/dev/null || true
+    kill "${LJD_PID:-}" 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM

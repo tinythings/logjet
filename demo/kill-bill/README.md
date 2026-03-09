@@ -29,9 +29,9 @@ From this directory:
 
 The script does this:
 
-1. starts `logjetd` in file mode
+1. starts `ljd` in file mode
 2. writes 100 numbered OTLP log messages into one `killbill.logjet` file
-3. stops `logjetd`
+3. stops `ljd`
 4. cuts out the middle third of the file by raw bytes
 5. saves only that byte slice as `./damaged/killbill.logjet`
 6. inspects the original file
