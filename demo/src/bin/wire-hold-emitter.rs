@@ -26,7 +26,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--service-name" => {
                 service_name = args.next().ok_or("missing value for --service-name")?;
             }
-            value if value.starts_with("--") => return Err(format!("unknown argument: {value}").into()),
+            value if value.starts_with("--") => {
+                return Err(format!("unknown argument: {value}").into());
+            }
             value => addr = value.to_string(),
         }
     }

@@ -30,10 +30,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .parse::<u64>()?;
             }
             "--cert-file" => {
-                cert_file = Some(PathBuf::from(args.next().ok_or("missing value for --cert-file")?));
+                cert_file = Some(PathBuf::from(
+                    args.next().ok_or("missing value for --cert-file")?,
+                ));
             }
             "--key-file" => {
-                key_file = Some(PathBuf::from(args.next().ok_or("missing value for --key-file")?));
+                key_file = Some(PathBuf::from(
+                    args.next().ok_or("missing value for --key-file")?,
+                ));
             }
             value => bind_addr = value.to_string(),
         }
@@ -157,7 +161,10 @@ fn read_http_request<T: Read>(transport: &mut T) -> io::Result<ParsedHttpRequest
             break;
         }
         if buffer.len() > 16 * 1024 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "http header too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "http header too large",
+            ));
         }
     }
 
@@ -191,9 +198,14 @@ fn read_http_request<T: Read>(transport: &mut T) -> io::Result<ParsedHttpRequest
     let content_length = content_length
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content-length"))?;
     let mut body = Vec::new();
-    transport.take(content_length as u64).read_to_end(&mut body)?;
+    transport
+        .take(content_length as u64)
+        .read_to_end(&mut body)?;
     if body.len() != content_length {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short http body"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "short http body",
+        ));
     }
 
     Ok(ParsedHttpRequest { method, path, body })
