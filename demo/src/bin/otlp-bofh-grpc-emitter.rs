@@ -2,7 +2,7 @@ use std::env;
 use std::time::Duration;
 
 use opentelemetry_proto::tonic::collector::logs::v1::{
-    logs_service_client::LogsServiceClient, ExportLogsServiceRequest,
+    ExportLogsServiceRequest, logs_service_client::LogsServiceClient,
 };
 use tonic::Request;
 

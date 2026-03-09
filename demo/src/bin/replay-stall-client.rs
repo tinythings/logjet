@@ -6,9 +6,7 @@ use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
-    let source = args
-        .next()
-        .unwrap_or_else(|| "127.0.0.1:7002".to_string());
+    let source = args.next().unwrap_or_else(|| "127.0.0.1:7002".to_string());
     let stall_ms = match args.next() {
         Some(value) => value.parse::<u64>()?,
         None => 10_000,
@@ -62,7 +60,10 @@ fn read_replay_hello(stream: &mut TcpStream) -> io::Result<ReplayHello> {
     let mut magic = [0u8; 8];
     stream.read_exact(&mut magic)?;
     if magic != *b"LJRPH001" {
-        return Err(io::Error::new(ErrorKind::InvalidData, "invalid replay hello magic"));
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "invalid replay hello magic",
+        ));
     }
 
     let mut header = [0u8; 32];
@@ -76,13 +77,16 @@ fn read_replay_hello(stream: &mut TcpStream) -> io::Result<ReplayHello> {
 
     Ok(ReplayHello {
         stream_id: u64::from_le_bytes([
-            header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15],
+            header[8], header[9], header[10], header[11], header[12], header[13], header[14],
+            header[15],
         ]),
         first_seq: u64::from_le_bytes([
-            header[16], header[17], header[18], header[19], header[20], header[21], header[22], header[23],
+            header[16], header[17], header[18], header[19], header[20], header[21], header[22],
+            header[23],
         ]),
         last_seq: u64::from_le_bytes([
-            header[24], header[25], header[26], header[27], header[28], header[29], header[30], header[31],
+            header[24], header[25], header[26], header[27], header[28], header[29], header[30],
+            header[31],
         ]),
     })
 }
@@ -100,19 +104,22 @@ fn read_wire_record<R: Read>(reader: &mut R) -> io::Result<Option<WireRecord>> {
     }
 
     if magic != *b"LJNETV01" {
-        return Err(io::Error::new(ErrorKind::InvalidData, "invalid wire protocol magic"));
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "invalid wire protocol magic",
+        ));
     }
 
     let mut header = [0u8; 24];
     reader.read_exact(&mut header)?;
-    let payload_len =
-        u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
+    let payload_len = u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
     let mut payload = vec![0u8; payload_len];
     reader.read_exact(&mut payload)?;
 
     Ok(Some(WireRecord {
         seq: u64::from_le_bytes([
-            header[4], header[5], header[6], header[7], header[8], header[9], header[10], header[11],
+            header[4], header[5], header[6], header[7], header[8], header[9], header[10],
+            header[11],
         ]),
     }))
 }

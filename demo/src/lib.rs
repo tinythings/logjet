@@ -93,9 +93,11 @@ pub fn build_message_request_for_service(
                     severity_number,
                     severity_text,
                     body: Some(AnyValue {
-                        value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                            body,
-                        )),
+                        value: Some(
+                            opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                                body,
+                            ),
+                        ),
                     }),
                     attributes: vec![
                         string_attr("demo.kind", "bofh"),
@@ -219,11 +221,16 @@ fn post_raw_otlp_http_transport<T: io::Read + io::Write>(
 fn load_demo_client_config(ca_path: &Path) -> io::Result<Arc<ClientConfig>> {
     let roots = load_root_store(ca_path)?;
     Ok(Arc::new(
-        ClientConfig::builder().with_root_certificates(roots).with_no_client_auth(),
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
     ))
 }
 
-fn demo_server_name(endpoint: &DemoEndpoint, override_name: Option<&str>) -> io::Result<ServerName<'static>> {
+fn demo_server_name(
+    endpoint: &DemoEndpoint,
+    override_name: Option<&str>,
+) -> io::Result<ServerName<'static>> {
     let name = override_name.unwrap_or_else(|| endpoint.server_name());
     ServerName::try_from(name.to_string())
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
@@ -284,7 +291,10 @@ impl DemoEndpoint {
     }
 
     fn server_name(&self) -> &str {
-        self.authority.rsplit_once(':').map(|(host, _)| host).unwrap_or(&self.authority)
+        self.authority
+            .rsplit_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(&self.authority)
     }
 }
 
@@ -400,9 +410,11 @@ fn string_attr(key: &str, value: &str) -> KeyValue {
     KeyValue {
         key: key.to_string(),
         value: Some(AnyValue {
-            value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                value.to_string(),
-            )),
+            value: Some(
+                opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                    value.to_string(),
+                ),
+            ),
         }),
     }
 }
@@ -418,7 +430,9 @@ fn int_attr(key: &str, value: i64) -> KeyValue {
 
 fn any_value_to_string(value: &AnyValue) -> Option<&str> {
     match value.value.as_ref()? {
-        opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(value) => Some(value.as_str()),
+        opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(value) => {
+            Some(value.as_str())
+        }
         _ => None,
     }
 }

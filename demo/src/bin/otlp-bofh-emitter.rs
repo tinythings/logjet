@@ -49,12 +49,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 severity = args.next().ok_or("missing value for --severity")?;
             }
             "--ca-file" => {
-                ca_file = Some(PathBuf::from(args.next().ok_or("missing value for --ca-file")?));
+                ca_file = Some(PathBuf::from(
+                    args.next().ok_or("missing value for --ca-file")?,
+                ));
             }
             "--server-name" => {
                 server_name = Some(args.next().ok_or("missing value for --server-name")?);
             }
-            value if value.starts_with("--") => return Err(format!("unknown argument: {value}").into()),
+            value if value.starts_with("--") => {
+                return Err(format!("unknown argument: {value}").into());
+            }
             value => addr = value.to_string(),
         }
     }
@@ -69,9 +73,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sequence = 1u64;
     loop {
         let request = match &once_message {
-            Some(message) => build_message_request_for_service(sequence, &service_name, &severity, message.clone()),
-            None if service_name == "bofh-emitter" && severity == "warn" => build_excuse_request(sequence),
-            None => build_excuse_request_for_service_with_severity(sequence, &service_name, &severity),
+            Some(message) => build_message_request_for_service(
+                sequence,
+                &service_name,
+                &severity,
+                message.clone(),
+            ),
+            None if service_name == "bofh-emitter" && severity == "warn" => {
+                build_excuse_request(sequence)
+            }
+            None => {
+                build_excuse_request_for_service_with_severity(sequence, &service_name, &severity)
+            }
         };
         print!("{}", format_batch_plain(&request));
         match otlp_demo::post_raw_otlp_http(
