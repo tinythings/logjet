@@ -56,6 +56,8 @@ Current serve behaviour:
 - OTLP/HTTP ingest is supported with `ingest.protocol: otlp-http`
 - OTLP/gRPC ingest is supported with `ingest.protocol: otlp-grpc`
 - a replay listener socket is exposed for downstream clients
+- replay sends retained backlog first, then hands the same client directly into live wakeups from ingest
+- replay keeps an explicit cursor per client across buffer eviction, drain cleanup, and file rotation
 - replay listener traffic currently uses the internal framed protocol, not OTLP egress
 
 ## bridge
@@ -298,6 +300,7 @@ Append-only file behaviour:
 - in-memory ring buffering with `buffer.keep`
 - replay listener for downstream consumers using the internal framed protocol
 - independent replay cursor per connected client
+- backlog-to-live replay handoff through direct ingest wakeups
 - basic replay-client caps through `replay.max-clients`
 - basic replay-client timeout through `replay.client-timeout-ms`
 - continuous bridge mode from replay listener to OTLP/HTTP collectors
@@ -317,7 +320,7 @@ Append-only file behaviour:
 - replay listener traffic is not OTLP
 - upstream storage reset and rollover handling is still basic
 - ingest overload handling is limited to payload-size caps and concurrent-client caps
-- multi-client replay isolation is still basic beyond per-client cursors and replay-client caps
+- multi-client replay isolation is still basic beyond per-client cursors, wakeups, and replay-client caps
 - file mode does not delete old rotated files
 - certificate management and deployment policy are still operator-managed
 
