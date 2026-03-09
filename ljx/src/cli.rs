@@ -37,18 +37,28 @@ pub fn build_cli() -> clap::Command {
             "{appname} <COMMAND> [OPTIONS] [ARGS]"
         ))
         .after_help(
-            "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'",
+            "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet",
         )
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(about = "Split one .logjet input into multiple outputs")]
     Split(SplitArgs),
+    #[command(about = "Join multiple .logjet inputs into one ordered output")]
     Join(JoinArgs),
+    #[command(about = "Filter records into a new .logjet stream")]
     Filter(FilterArgs),
+    #[command(about = "Count records matching a predicate")]
     Count(CountArgs),
+    #[command(about = "Compute summary statistics for one .logjet file")]
     Stats(StatsArgs),
-    Cat(CatArgs),
+    #[command(
+        name = "view",
+        alias = "cat",
+        about = "Interactively browse filtered records in a terminal UI"
+    )]
+    View(ViewArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -127,11 +137,11 @@ pub struct StatsArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct CatArgs {
-    #[arg(value_name = "INPUT")]
+pub struct ViewArgs {
+    #[arg(value_name = "INPUT", help = "Input .logjet file or - for stdin")]
     pub input: PathBuf,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, help = "Show payload previews in hex")]
     pub hex_payload: bool,
 }
 

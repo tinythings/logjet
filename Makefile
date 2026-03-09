@@ -22,6 +22,8 @@ fix: setup
 	cargo clippy $(CORE_WORKSPACE) --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
 
 test: setup
+	cargo build -p logjetd -p ljx
+	cargo build -p otlp-demo --bin otlp-bofh-emitter
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run $(CORE_WORKSPACE); \
 	else \

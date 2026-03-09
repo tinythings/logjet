@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, ReaderConfig};
 
 use crate::config::{BufferConfig, BufferLimit, FileConfig, StorageConfig};
-use crate::protocol::{WireRecord, write_record};
+use crate::protocol::WireRecord;
 
 #[derive(Debug)]
 pub enum Spool {
@@ -53,6 +53,24 @@ pub struct SegmentSummary {
     pub last_seq: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+pub enum ReplayCursor {
+    Buffer(BufferReplayCursor),
+    File(FileReplayCursor),
+}
+
+#[derive(Debug, Clone)]
+pub struct BufferReplayCursor {
+    next_index: usize,
+    last_seq: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileReplayCursor {
+    next_segment_id_hint: u64,
+    last_seq: u64,
+}
+
 impl Spool {
     pub fn open(config: StorageConfig) -> io::Result<Self> {
         match config {
@@ -71,17 +89,20 @@ impl Spool {
         }
     }
 
-    pub fn replay_since<W: io::Write>(&self, writer: &mut W, last_seq: &mut u64) -> io::Result<bool> {
+    pub fn replay_cursor_after(&self, last_seq: u64) -> io::Result<ReplayCursor> {
         match self {
-            Self::Buffer(spool) => spool.replay_since(writer, last_seq),
-            Self::File(spool) => spool.replay_since(writer, last_seq),
+            Self::Buffer(spool) => Ok(ReplayCursor::Buffer(spool.replay_cursor_after(last_seq))),
+            Self::File(spool) => Ok(ReplayCursor::File(spool.replay_cursor_after(last_seq))),
         }
     }
 
-    pub fn next_after(&self, last_seq: u64) -> io::Result<Option<WireRecord>> {
-        match self {
-            Self::Buffer(spool) => Ok(spool.next_after(last_seq)),
-            Self::File(spool) => spool.next_after(last_seq),
+    pub fn next_for_cursor(&self, cursor: &mut ReplayCursor) -> io::Result<Option<WireRecord>> {
+        match (self, cursor) {
+            (Self::Buffer(spool), ReplayCursor::Buffer(cursor)) => Ok(spool.next_for_cursor(cursor)),
+            (Self::File(spool), ReplayCursor::File(cursor)) => spool.next_for_cursor(cursor),
+            (Self::Buffer(_), ReplayCursor::File(_)) | (Self::File(_), ReplayCursor::Buffer(_)) => {
+                Err(io::Error::new(ErrorKind::InvalidInput, "replay cursor type does not match spool type"))
+            }
         }
     }
 
@@ -114,21 +135,13 @@ impl Spool {
             Some((_first_seq, last_seq)) => last_seq,
             None => 0,
         };
-        last_seq
-            .checked_add(1)
-            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "sequence seed overflow"))
+        last_seq.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "sequence seed overflow"))
     }
 }
 
 impl BufferSpool {
     fn new(config: BufferConfig) -> Self {
-        Self {
-            stream_id: generate_stream_id(),
-            limit: config.limit,
-            keep_messages: config.keep_messages,
-            records: VecDeque::new(),
-            tail_bytes: 0,
-        }
+        Self { stream_id: generate_stream_id(), limit: config.limit, keep_messages: config.keep_messages, records: VecDeque::new(), tail_bytes: 0 }
     }
 
     fn append(&mut self, record: WireRecord) {
@@ -141,27 +154,31 @@ impl BufferSpool {
         self.enforce_limits();
     }
 
-    fn replay_since<W: io::Write>(&self, writer: &mut W, last_seq: &mut u64) -> io::Result<bool> {
-        let mut sent_any = false;
-
-        for record in &self.records {
-            if record.seq <= *last_seq {
-                continue;
-            }
-
-            write_record(writer, record)?;
-            *last_seq = record.seq;
-            sent_any = true;
-        }
-
-        Ok(sent_any)
+    fn replay_cursor_after(&self, last_seq: u64) -> BufferReplayCursor {
+        let next_index = self.records.iter().position(|record| record.seq > last_seq).unwrap_or(self.records.len());
+        BufferReplayCursor { next_index, last_seq }
     }
 
-    fn next_after(&self, last_seq: u64) -> Option<WireRecord> {
-        self.records
-            .iter()
-            .find(|record| record.seq > last_seq)
-            .cloned()
+    fn next_for_cursor(&self, cursor: &mut BufferReplayCursor) -> Option<WireRecord> {
+        let index_still_aligned = match cursor.next_index {
+            0 => true,
+            value => self.records.get(value.saturating_sub(1)).map(|record| record.seq <= cursor.last_seq).unwrap_or(false),
+        };
+
+        if index_still_aligned
+            && let Some(record) = self.records.get(cursor.next_index)
+            && record.seq > cursor.last_seq
+        {
+            cursor.next_index += 1;
+            cursor.last_seq = record.seq;
+            return Some(record.clone());
+        }
+
+        let next_index = self.records.iter().position(|record| record.seq > cursor.last_seq)?;
+        let record = self.records.get(next_index)?.clone();
+        cursor.next_index = next_index + 1;
+        cursor.last_seq = record.seq;
+        Some(record)
     }
 
     fn consume_through(&mut self, seq: u64) {
@@ -193,12 +210,7 @@ impl BufferSpool {
     }
 
     fn recalculate_tail_bytes(&mut self) {
-        self.tail_bytes = self
-            .records
-            .iter()
-            .skip(self.keep_messages)
-            .map(record_size)
-            .sum();
+        self.tail_bytes = self.records.iter().skip(self.keep_messages).map(record_size).sum();
     }
 
     fn sequence_bounds(&self) -> Option<(u64, u64)> {
@@ -225,20 +237,14 @@ impl FileSpool {
                 if size < config.segment_size_bytes {
                     (segment.id, segment.path.clone(), size)
                 } else {
-                    let next_id = segment
-                        .id
-                        .checked_add(1)
-                        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
+                    let next_id = segment.id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
                     (next_id, segment_path(&config.dir, &base_stem, next_id), 0)
                 }
             }
             None => (0, segment_path(&config.dir, &base_stem, 0), 0),
         };
 
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&active_segment_path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&active_segment_path)?;
 
         let mut spool = Self {
             dir: config.dir,
@@ -261,9 +267,7 @@ impl FileSpool {
             self.rotate()?;
         }
 
-        self.active_writer
-            .push(record.record_type, record.seq, record.ts_unix_ns, &record.payload)
-            .map_err(to_io_error)?;
+        self.active_writer.push(record.record_type, record.seq, record.ts_unix_ns, &record.payload).map_err(to_io_error)?;
         self.active_writer.flush_block().map_err(to_io_error)?;
         self.refresh_active_size()?;
 
@@ -274,40 +278,18 @@ impl FileSpool {
         Ok(())
     }
 
-    fn replay_since<W: io::Write>(&self, writer: &mut W, last_seq: &mut u64) -> io::Result<bool> {
-        let mut sent_any = false;
-        let floor_seq = (*last_seq).max(self.consumed_through_seq);
-
-        for segment in list_segments(&self.dir, &self.base_stem)? {
-            let file = File::open(&segment.path)?;
-            let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
-
-            while let Some(record) = reader.next_record().map_err(to_io_error)? {
-                if record.seq <= floor_seq || record.seq <= *last_seq {
-                    continue;
-                }
-
-                write_record(
-                    writer,
-                    &WireRecord {
-                        record_type: record.record_type,
-                        seq: record.seq,
-                        ts_unix_ns: record.ts_unix_ns,
-                        payload: record.payload,
-                    },
-                )?;
-                *last_seq = record.seq;
-                sent_any = true;
-            }
-        }
-
-        Ok(sent_any)
+    fn replay_cursor_after(&self, last_seq: u64) -> FileReplayCursor {
+        FileReplayCursor { next_segment_id_hint: 0, last_seq }
     }
 
-    fn next_after(&self, last_seq: u64) -> io::Result<Option<WireRecord>> {
-        let floor_seq = last_seq.max(self.consumed_through_seq);
+    fn next_for_cursor(&self, cursor: &mut FileReplayCursor) -> io::Result<Option<WireRecord>> {
+        let floor_seq = cursor.last_seq.max(self.consumed_through_seq);
 
         for segment in list_segments(&self.dir, &self.base_stem)? {
+            if segment.id < cursor.next_segment_id_hint {
+                continue;
+            }
+
             let file = File::open(&segment.path)?;
             let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
 
@@ -316,6 +298,8 @@ impl FileSpool {
                     continue;
                 }
 
+                cursor.last_seq = record.seq;
+                cursor.next_segment_id_hint = segment.id;
                 return Ok(Some(WireRecord {
                     record_type: record.record_type,
                     seq: record.seq,
@@ -323,6 +307,8 @@ impl FileSpool {
                     payload: record.payload,
                 }));
             }
+
+            cursor.next_segment_id_hint = segment.id;
         }
 
         Ok(None)
@@ -340,15 +326,10 @@ impl FileSpool {
 
     fn rotate(&mut self) -> io::Result<()> {
         self.active_writer.flush_block().map_err(to_io_error)?;
-        self.active_segment_id = self
-            .active_segment_id
-            .checked_add(1)
-            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
+        self.active_segment_id =
+            self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.active_segment_path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
         self.active_writer = LogjetWriter::new(file);
         self.active_size_bytes = 0;
         Ok(())
@@ -384,15 +365,10 @@ impl FileSpool {
     fn advance_empty_active_segment(&mut self) -> io::Result<()> {
         self.active_writer.flush_block().map_err(to_io_error)?;
         let old_path = self.active_segment_path.clone();
-        self.active_segment_id = self
-            .active_segment_id
-            .checked_add(1)
-            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
+        self.active_segment_id =
+            self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.active_segment_path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
         self.active_writer = LogjetWriter::new(file);
         self.active_size_bytes = 0;
         if old_path.exists() {
@@ -449,14 +425,8 @@ pub fn print_named_segments(dir: &Path, file_name: &str) -> io::Result<()> {
             summary.path.display(),
             summary.size_bytes,
             summary.record_count,
-            summary
-                .first_seq
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            summary
-                .last_seq
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string())
+            summary.first_seq.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string()),
+            summary.last_seq.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string())
         );
     }
     Ok(())
@@ -492,23 +462,13 @@ pub fn summarise_named_segments(dir: &Path, file_name: &str) -> io::Result<Vec<S
 }
 
 pub fn prune_named_segments(
-    dir: &Path,
-    file_name: &str,
-    keep_files: Option<usize>,
-    keep_bytes: Option<u64>,
-    dry_run: bool,
+    dir: &Path, file_name: &str, keep_files: Option<usize>, keep_bytes: Option<u64>, dry_run: bool,
 ) -> io::Result<Vec<PathBuf>> {
     if keep_files.is_none() && keep_bytes.is_none() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "set --keep-files or --keep-bytes",
-        ));
+        return Err(io::Error::new(ErrorKind::InvalidInput, "set --keep-files or --keep-bytes"));
     }
     if keep_files.is_some() && keep_bytes.is_some() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "use either --keep-files or --keep-bytes, not both",
-        ));
+        return Err(io::Error::new(ErrorKind::InvalidInput, "use either --keep-files or --keep-bytes, not both"));
     }
 
     let summaries = summarise_named_segments(dir, file_name)?;
@@ -540,10 +500,7 @@ pub fn prune_named_segments(
         }
     }
 
-    let removed_paths = remove_ids
-        .into_iter()
-        .map(|index| summaries[index].path.clone())
-        .collect::<Vec<_>>();
+    let removed_paths = remove_ids.into_iter().map(|index| summaries[index].path.clone()).collect::<Vec<_>>();
 
     if !dry_run {
         for path in &removed_paths {
@@ -571,13 +528,7 @@ fn inspect_file(path: &Path) -> io::Result<()> {
 }
 
 fn print_record(record: &OwnedRecord) {
-    println!(
-        "type={:?} seq={} ts={} payload_len={}",
-        record.record_type,
-        record.seq,
-        record.ts_unix_ns,
-        record.payload.len()
-    );
+    println!("type={:?} seq={} ts={} payload_len={}", record.record_type, record.seq, record.ts_unix_ns, record.payload.len());
 }
 
 fn list_segments(dir: &Path, base_stem: &str) -> io::Result<Vec<SegmentInfo>> {
@@ -609,10 +560,7 @@ pub fn list_named_segments(dir: &Path, file_name: &str) -> io::Result<Vec<Segmen
 }
 
 fn derive_base_stem(file_name: &str) -> String {
-    file_name
-        .strip_suffix(".logjet")
-        .unwrap_or(file_name)
-        .to_string()
+    file_name.strip_suffix(".logjet").unwrap_or(file_name).to_string()
 }
 
 fn parse_segment_id(name: &str, base_stem: &str) -> Option<u64> {
@@ -629,19 +577,11 @@ fn parse_segment_id(name: &str, base_stem: &str) -> Option<u64> {
 }
 
 fn segment_path(dir: &Path, base_stem: &str, id: u64) -> PathBuf {
-    if id == 0 {
-        dir.join(format!("{base_stem}.logjet"))
-    } else {
-        dir.join(format!("{base_stem}-{id}.logjet"))
-    }
+    if id == 0 { dir.join(format!("{base_stem}.logjet")) } else { dir.join(format!("{base_stem}-{id}.logjet")) }
 }
 
 fn record_size(record: &WireRecord) -> usize {
-    1usize
-        .saturating_add(8)
-        .saturating_add(8)
-        .saturating_add(4)
-        .saturating_add(record.payload.len())
+    1usize.saturating_add(8).saturating_add(8).saturating_add(4).saturating_add(record.payload.len())
 }
 
 fn to_io_error(err: logjet::Error) -> io::Error {
@@ -654,10 +594,7 @@ fn read_consumed_state(path: &Path) -> io::Result<u64> {
     }
 
     let text = fs::read_to_string(path)?;
-    let seq = text
-        .trim()
-        .parse::<u64>()
-        .map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("invalid consumed state: {err}")))?;
+    let seq = text.trim().parse::<u64>().map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("invalid consumed state: {err}")))?;
     Ok(seq)
 }
 
@@ -668,10 +605,7 @@ fn write_consumed_state(path: &Path, seq: u64) -> io::Result<()> {
 fn read_or_create_stream_id(path: &Path) -> io::Result<u64> {
     if path.exists() {
         let text = fs::read_to_string(path)?;
-        let stream_id = text
-            .trim()
-            .parse::<u64>()
-            .map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("invalid stream id: {err}")))?;
+        let stream_id = text.trim().parse::<u64>().map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("invalid stream id: {err}")))?;
         return Ok(stream_id);
     }
 
@@ -681,10 +615,7 @@ fn read_or_create_stream_id(path: &Path) -> io::Result<u64> {
 }
 
 fn generate_stream_id() -> u64 {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
     nanos ^ ((std::process::id() as u64) << 32)
 }
 

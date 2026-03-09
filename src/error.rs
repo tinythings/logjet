@@ -10,11 +10,7 @@ pub enum Error {
     HeaderTooShort(u16),
     HeaderCrcMismatch { expected: u32, actual: u32 },
     BlockCrcMismatch { expected: u32, actual: u32 },
-    LengthTooLarge {
-        field: &'static str,
-        value: u64,
-        limit: usize,
-    },
+    LengthTooLarge { field: &'static str, value: u64, limit: usize },
     InvalidHeader(&'static str),
     Truncated(&'static str),
     VarintTooLong,
@@ -46,13 +42,9 @@ impl Display for Error {
             Self::Truncated(msg) => write!(f, "truncated data: {msg}"),
             Self::VarintTooLong => write!(f, "varint too long"),
             Self::NumericOverflow(field) => write!(f, "numeric overflow: {field}"),
-            Self::RecordTooLarge {
-                encoded_len,
-                block_target_size,
-            } => write!(
-                f,
-                "record too large for block target: {encoded_len} > {block_target_size}"
-            ),
+            Self::RecordTooLarge { encoded_len, block_target_size } => {
+                write!(f, "record too large for block target: {encoded_len} > {block_target_size}")
+            }
             Self::Codec(msg) => write!(f, "codec error: {msg}"),
         }
     }

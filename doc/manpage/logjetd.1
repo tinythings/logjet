@@ -81,6 +81,12 @@ OTLP/gRPC ingest is supported with \f[C]ingest.protocol: otlp-grpc\f[R]
 .IP \[bu] 2
 a replay listener socket is exposed for downstream clients
 .IP \[bu] 2
+replay sends retained backlog first, then hands the same client
+directly into live wakeups from ingest
+.IP \[bu] 2
+replay keeps an explicit cursor per client across buffer eviction,
+drain cleanup, and file rotation
+.IP \[bu] 2
 replay listener traffic currently uses the internal framed protocol, not
 OTLP egress
 .SS bridge
@@ -119,7 +125,7 @@ Example:
 .IP
 .nf
 \f[C]
-logjetd segments --path /var/lib/logjet --name bofh.logjet
+logjetd segments --path /var/lib/logjet --name app.logjet
 \f[R]
 .fi
 .SS replay
@@ -131,17 +137,17 @@ Example:
 .IP
 .nf
 \f[C]
-logjetd replay --path /var/logs --name bofh.logjet --dest http://127.0.0.1:4318/v1/logs
+logjetd replay --path /var/logs --name app.logjet --dest http://127.0.0.1:4318/v1/logs
 \f[R]
 .fi
 .PP
 Replay order is:
 .IP \[bu] 2
-\f[C]bofh.logjet\f[R]
+\f[C]app.logjet\f[R]
 .IP \[bu] 2
-\f[C]bofh-1.logjet\f[R]
+\f[C]app-1.logjet\f[R]
 .IP \[bu] 2
-\f[C]bofh-2.logjet\f[R]
+\f[C]app-2.logjet\f[R]
 .IP \[bu] 2
 and so on
 .PP
@@ -156,8 +162,8 @@ Examples:
 .IP
 .nf
 \f[C]
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-files 2
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-bytes 1048576 --dry-run
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-files 2
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-run
 \f[R]
 .fi
 .SH OPTIONS
@@ -180,11 +186,11 @@ Base file name used to locate replay segments.
 .PP
 Example:
 .IP \[bu] 2
-\f[C]bofh.logjet\f[R]
+\f[C]app.logjet\f[R]
 .IP \[bu] 2
-\f[C]bofh-1.logjet\f[R]
+\f[C]app-1.logjet\f[R]
 .IP \[bu] 2
-\f[C]bofh-2.logjet\f[R]
+\f[C]app-2.logjet\f[R]
 .PP
 Used only with the \f[C]replay\f[R] command.
 .SS \f[C]--keep-files\f[R] \f[I]n\f[R]
@@ -395,6 +401,8 @@ protocol
 .IP \[bu] 2
 independent replay cursor per connected client
 .IP \[bu] 2
+backlog-to-live replay handoff through direct ingest wakeups
+.IP \[bu] 2
 basic replay-client caps through \f[C]replay.max-clients\f[R]
 .IP \[bu] 2
 basic replay-client timeout through \f[C]replay.client-timeout-ms\f[R]
@@ -432,8 +440,8 @@ upstream storage reset and rollover handling is still basic
 ingest overload handling is limited to payload-size caps and
 concurrent-client caps
 .IP \[bu] 2
-multi-client replay isolation is still basic beyond per-client cursors
-and replay-client caps
+multi-client replay isolation is still basic beyond per-client cursors,
+wakeups, and replay-client caps
 .IP \[bu] 2
 file mode does not delete old rotated files
 .IP \[bu] 2
@@ -460,7 +468,7 @@ Replay files to a local collector:
 .IP
 .nf
 \f[C]
-logjetd --config ./logjetd.conf replay --path ./logs --name bofh.logjet
+logjetd --config ./logjetd.conf replay --path ./logs --name app.logjet
 \f[R]
 .fi
 .PP

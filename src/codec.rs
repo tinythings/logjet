@@ -35,8 +35,7 @@ impl Codec {
                 output.extend_from_slice(input);
             }
             Self::Lz4 => {
-                let decoded = lz4_flex::block::decompress(input, expected_len)
-                    .map_err(|err| Error::Codec(err.to_string()))?;
+                let decoded = lz4_flex::block::decompress(input, expected_len).map_err(|err| Error::Codec(err.to_string()))?;
                 output.extend_from_slice(&decoded);
             }
         }

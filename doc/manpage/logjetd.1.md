@@ -56,6 +56,8 @@ Current serve behaviour:
 - OTLP/HTTP ingest is supported with `ingest.protocol: otlp-http`
 - OTLP/gRPC ingest is supported with `ingest.protocol: otlp-grpc`
 - a replay listener socket is exposed for downstream clients
+- replay sends retained backlog first, then hands the same client directly into live wakeups from ingest
+- replay keeps an explicit cursor per client across buffer eviction, drain cleanup, and file rotation
 - replay listener traffic currently uses the internal framed protocol, not OTLP egress
 
 ## bridge
@@ -89,7 +91,7 @@ List ordered rotated segments for one spool.
 Example:
 
 ```text
-logjetd segments --path /var/lib/logjet --name bofh.logjet
+logjetd segments --path /var/lib/logjet --name app.logjet
 ```
 
 ## replay
@@ -100,14 +102,14 @@ payloads into an OTLP/HTTP collector.
 Example:
 
 ```text
-logjetd replay --path /var/logs --name bofh.logjet --dest http://127.0.0.1:4318/v1/logs
+logjetd replay --path /var/logs --name app.logjet --dest http://127.0.0.1:4318/v1/logs
 ```
 
 Replay order is:
 
-- `bofh.logjet`
-- `bofh-1.logjet`
-- `bofh-2.logjet`
+- `app.logjet`
+- `app-1.logjet`
+- `app-2.logjet`
 - and so on
 
 Replay is immediate and does not preserve original timing.
@@ -120,8 +122,8 @@ Remove oldest rotated file segments deliberately.
 Examples:
 
 ```text
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-files 2
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-bytes 1048576 --dry-run
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-files 2
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-run
 ```
 
 # OPTIONS
@@ -146,9 +148,9 @@ Base file name used to locate replay segments.
 
 Example:
 
-- `bofh.logjet`
-- `bofh-1.logjet`
-- `bofh-2.logjet`
+- `app.logjet`
+- `app-1.logjet`
+- `app-2.logjet`
 
 Used only with the `replay` command.
 
@@ -298,6 +300,7 @@ Append-only file behaviour:
 - in-memory ring buffering with `buffer.keep`
 - replay listener for downstream consumers using the internal framed protocol
 - independent replay cursor per connected client
+- backlog-to-live replay handoff through direct ingest wakeups
 - basic replay-client caps through `replay.max-clients`
 - basic replay-client timeout through `replay.client-timeout-ms`
 - continuous bridge mode from replay listener to OTLP/HTTP collectors
@@ -317,7 +320,7 @@ Append-only file behaviour:
 - replay listener traffic is not OTLP
 - upstream storage reset and rollover handling is still basic
 - ingest overload handling is limited to payload-size caps and concurrent-client caps
-- multi-client replay isolation is still basic beyond per-client cursors and replay-client caps
+- multi-client replay isolation is still basic beyond per-client cursors, wakeups, and replay-client caps
 - file mode does not delete old rotated files
 - certificate management and deployment policy are still operator-managed
 
@@ -338,7 +341,7 @@ logjetd inspect ./logs
 Replay files to a local collector:
 
 ```text
-logjetd --config ./logjetd.conf replay --path ./logs --name bofh.logjet
+logjetd --config ./logjetd.conf replay --path ./logs --name app.logjet
 ```
 
 Bridge from a remote replay listener into a collector:
