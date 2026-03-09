@@ -1,5 +1,6 @@
 use super::{
-    authority_host, load_client_config, load_ingest_server_config, load_server_config, parse_server_name,
+    authority_host, load_client_config, load_ingest_server_config, load_server_config,
+    parse_server_name,
 };
 use crate::config::{IngestTlsConfig, TlsConfig};
 use std::path::PathBuf;

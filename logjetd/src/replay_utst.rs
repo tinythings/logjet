@@ -1,6 +1,7 @@
 use super::{
-    BridgeState, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask, enqueue_export_task,
-    parse_bridge_state, read_bridge_state, reconcile_bridge_state, write_bridge_state,
+    BridgeState, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask,
+    enqueue_export_task, parse_bridge_state, read_bridge_state, reconcile_bridge_state,
+    write_bridge_state,
 };
 use crate::config::{BackpressureMode, CollectorConfig, UpstreamMode};
 use crate::protocol::ReplayHello;
@@ -191,7 +192,10 @@ fn drop_newest_mode_reports_drop_when_export_queue_is_full() {
     assert_eq!(outcome, EnqueueOutcome::DroppedNewest);
 }
 
-fn test_collector_transport(mode: BackpressureMode, max_buffered_records: usize) -> CollectorTransport {
+fn test_collector_transport(
+    mode: BackpressureMode,
+    max_buffered_records: usize,
+) -> CollectorTransport {
     CollectorTransport {
         endpoint: CollectorEndpoint {
             authority: "127.0.0.1:4318".to_string(),
@@ -220,5 +224,8 @@ fn unique_temp_path(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("logjetd-{label}-{nanos}-{}.state", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "logjetd-{label}-{nanos}-{}.state",
+        std::process::id()
+    ))
 }

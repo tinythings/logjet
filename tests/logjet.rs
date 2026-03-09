@@ -32,7 +32,12 @@ fn read_all(bytes: Vec<u8>, config: ReaderConfig) -> ReadAllOutput {
     let mut reader = LogjetReader::with_config(Cursor::new(bytes), config);
     let mut out = Vec::new();
     while let Some(record) = reader.next_record().unwrap() {
-        out.push((record.record_type, record.seq, record.ts_unix_ns, record.payload));
+        out.push((
+            record.record_type,
+            record.seq,
+            record.ts_unix_ns,
+            record.payload,
+        ));
     }
     (out, reader.stats())
 }

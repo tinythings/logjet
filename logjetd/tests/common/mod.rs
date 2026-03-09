@@ -27,10 +27,8 @@ impl TestDir {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "logjetd-it-{label}-{nanos}-{}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("logjetd-it-{label}-{nanos}-{}", std::process::id()));
         fs::create_dir_all(&path)?;
         Ok(Self { path })
     }
@@ -116,7 +114,10 @@ where
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "timed out waiting for condition"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out waiting for condition",
+            ));
         }
         thread::sleep(Duration::from_millis(25));
     }
@@ -200,7 +201,10 @@ fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
             break;
         }
         if header.len() > 16 * 1024 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "header too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "header too large",
+            ));
         }
     }
 
@@ -277,15 +281,11 @@ pub fn post_otlp_http(addr: &str, service_name: &str, message: &str) -> io::Resu
 }
 
 pub fn replay_messages(addr: &str, from_seq: u64, limit: usize) -> io::Result<Vec<String>> {
-    let mut stream = TcpStream::connect(addr)?;
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    read_replay_hello(&mut stream)?;
-    write_replay_request(&mut stream, from_seq, false)?;
-    stream.flush()?;
+    let mut stream = connect_replay_client(addr, from_seq, false)?;
 
     let mut messages = Vec::new();
     for _ in 0..limit {
-        match read_wire_record(&mut stream)? {
+        match read_replay_payload(&mut stream)? {
             Some(record) => {
                 let batch = ExportLogsServiceRequest::decode(record.as_slice())
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
@@ -297,11 +297,36 @@ pub fn replay_messages(addr: &str, from_seq: u64, limit: usize) -> io::Result<Ve
     Ok(messages)
 }
 
+pub fn connect_replay_client(addr: &str, from_seq: u64, consume: bool) -> io::Result<TcpStream> {
+    let mut stream = TcpStream::connect(addr)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    read_replay_hello(&mut stream)?;
+    write_replay_request(&mut stream, from_seq, consume)?;
+    stream.flush()?;
+    Ok(stream)
+}
+
+pub fn read_replay_payload(stream: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
+    read_wire_record(stream)
+}
+
+pub fn read_replay_message(stream: &mut TcpStream) -> io::Result<Option<String>> {
+    let Some(payload) = read_replay_payload(stream)? else {
+        return Ok(None);
+    };
+    let batch = ExportLogsServiceRequest::decode(payload.as_slice())
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    Ok(extract_messages(&batch).into_iter().next())
+}
+
 fn read_replay_hello(stream: &mut TcpStream) -> io::Result<()> {
     let mut magic = [0u8; 8];
     stream.read_exact(&mut magic)?;
     if magic != REPLAY_HELLO_MAGIC {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid replay hello magic"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid replay hello magic",
+        ));
     }
     let mut header = [0u8; 32];
     stream.read_exact(&mut header)?;
@@ -331,7 +356,10 @@ fn read_wire_record(stream: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
         Err(err) => return Err(err),
     }
     if magic != WIRE_MAGIC {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid wire magic"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid wire magic",
+        ));
     }
     let mut header = [0u8; 24];
     stream.read_exact(&mut header)?;
@@ -396,7 +424,9 @@ fn extract_messages(batch: &ExportLogsServiceRequest) -> Vec<String> {
             for record in &scope_logs.log_records {
                 if let Some(body) = &record.body
                     && let Some(
-                        opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(value),
+                        opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                            value,
+                        ),
                     ) = &body.value
                 {
                     messages.push(value.clone());
