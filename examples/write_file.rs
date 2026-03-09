@@ -8,7 +8,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let writer = BufWriter::new(file);
     let mut log_writer = LogjetWriter::new(writer);
 
-    log_writer.push(RecordType::Logs, 1, 1_700_000_000_000_000_000, b"fake-otlp-logs")?;
+    log_writer.push(
+        RecordType::Logs,
+        1,
+        1_700_000_000_000_000_000,
+        b"fake-otlp-logs",
+    )?;
     log_writer.push(
         RecordType::Metrics,
         2,

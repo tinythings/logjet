@@ -297,7 +297,9 @@ impl Config {
         let ingest_overload = IngestOverloadConfig {
             max_batches_per_second: raw.ingest_max_batches_per_second.unwrap_or(0),
             priority_severity_floor: parse_severity_floor(
-                raw.ingest_priority_severity_floor.as_deref().unwrap_or("error"),
+                raw.ingest_priority_severity_floor
+                    .as_deref()
+                    .unwrap_or("error"),
             )?,
             report_every_ms: raw.ingest_overload_report_ms.unwrap_or(5_000),
         };
@@ -368,13 +370,13 @@ impl Config {
                 keep_messages,
             }),
             "file" => {
-                let name = raw
-                    .file_name
-                    .unwrap_or_else(|| "bar.logjet".to_string());
+                let name = raw.file_name.unwrap_or_else(|| "bar.logjet".to_string());
                 StorageConfig::File(FileConfig {
                     dir: raw.file_path.unwrap_or_else(|| PathBuf::from(".")),
                     name,
-                    segment_size_bytes: u64::try_from(kib_to_bytes(raw.file_size_kb.unwrap_or(100))?)?,
+                    segment_size_bytes: u64::try_from(kib_to_bytes(
+                        raw.file_size_kb.unwrap_or(100),
+                    )?)?,
                 })
             }
             other => return Err(format!("invalid output mode: {other}").into()),

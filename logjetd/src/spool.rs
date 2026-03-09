@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, ReaderConfig};
 
 use crate::config::{BufferConfig, BufferLimit, FileConfig, StorageConfig};
-use crate::protocol::{WireRecord, write_record};
+use crate::protocol::WireRecord;
 
 #[derive(Debug)]
 pub enum Spool {
@@ -53,6 +53,24 @@ pub struct SegmentSummary {
     pub last_seq: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+pub enum ReplayCursor {
+    Buffer(BufferReplayCursor),
+    File(FileReplayCursor),
+}
+
+#[derive(Debug, Clone)]
+pub struct BufferReplayCursor {
+    next_index: usize,
+    last_seq: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileReplayCursor {
+    next_segment_id_hint: u64,
+    last_seq: u64,
+}
+
 impl Spool {
     pub fn open(config: StorageConfig) -> io::Result<Self> {
         match config {
@@ -71,17 +89,25 @@ impl Spool {
         }
     }
 
-    pub fn replay_since<W: io::Write>(&self, writer: &mut W, last_seq: &mut u64) -> io::Result<bool> {
+    pub fn replay_cursor_after(&self, last_seq: u64) -> io::Result<ReplayCursor> {
         match self {
-            Self::Buffer(spool) => spool.replay_since(writer, last_seq),
-            Self::File(spool) => spool.replay_since(writer, last_seq),
+            Self::Buffer(spool) => Ok(ReplayCursor::Buffer(spool.replay_cursor_after(last_seq))),
+            Self::File(spool) => Ok(ReplayCursor::File(spool.replay_cursor_after(last_seq))),
         }
     }
 
-    pub fn next_after(&self, last_seq: u64) -> io::Result<Option<WireRecord>> {
-        match self {
-            Self::Buffer(spool) => Ok(spool.next_after(last_seq)),
-            Self::File(spool) => spool.next_after(last_seq),
+    pub fn next_for_cursor(&self, cursor: &mut ReplayCursor) -> io::Result<Option<WireRecord>> {
+        match (self, cursor) {
+            (Self::Buffer(spool), ReplayCursor::Buffer(cursor)) => {
+                Ok(spool.next_for_cursor(cursor))
+            }
+            (Self::File(spool), ReplayCursor::File(cursor)) => spool.next_for_cursor(cursor),
+            (Self::Buffer(_), ReplayCursor::File(_)) | (Self::File(_), ReplayCursor::Buffer(_)) => {
+                Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "replay cursor type does not match spool type",
+                ))
+            }
         }
     }
 
@@ -141,27 +167,45 @@ impl BufferSpool {
         self.enforce_limits();
     }
 
-    fn replay_since<W: io::Write>(&self, writer: &mut W, last_seq: &mut u64) -> io::Result<bool> {
-        let mut sent_any = false;
-
-        for record in &self.records {
-            if record.seq <= *last_seq {
-                continue;
-            }
-
-            write_record(writer, record)?;
-            *last_seq = record.seq;
-            sent_any = true;
+    fn replay_cursor_after(&self, last_seq: u64) -> BufferReplayCursor {
+        let next_index = self
+            .records
+            .iter()
+            .position(|record| record.seq > last_seq)
+            .unwrap_or(self.records.len());
+        BufferReplayCursor {
+            next_index,
+            last_seq,
         }
-
-        Ok(sent_any)
     }
 
-    fn next_after(&self, last_seq: u64) -> Option<WireRecord> {
-        self.records
+    fn next_for_cursor(&self, cursor: &mut BufferReplayCursor) -> Option<WireRecord> {
+        let index_still_aligned = match cursor.next_index {
+            0 => true,
+            value => self
+                .records
+                .get(value.saturating_sub(1))
+                .map(|record| record.seq <= cursor.last_seq)
+                .unwrap_or(false),
+        };
+
+        if index_still_aligned
+            && let Some(record) = self.records.get(cursor.next_index)
+            && record.seq > cursor.last_seq
+        {
+            cursor.next_index += 1;
+            cursor.last_seq = record.seq;
+            return Some(record.clone());
+        }
+
+        let next_index = self
+            .records
             .iter()
-            .find(|record| record.seq > last_seq)
-            .cloned()
+            .position(|record| record.seq > cursor.last_seq)?;
+        let record = self.records.get(next_index)?.clone();
+        cursor.next_index = next_index + 1;
+        cursor.last_seq = record.seq;
+        Some(record)
     }
 
     fn consume_through(&mut self, seq: u64) {
@@ -225,10 +269,9 @@ impl FileSpool {
                 if size < config.segment_size_bytes {
                     (segment.id, segment.path.clone(), size)
                 } else {
-                    let next_id = segment
-                        .id
-                        .checked_add(1)
-                        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
+                    let next_id = segment.id.checked_add(1).ok_or_else(|| {
+                        io::Error::new(ErrorKind::InvalidData, "segment id overflow")
+                    })?;
                     (next_id, segment_path(&config.dir, &base_stem, next_id), 0)
                 }
             }
@@ -262,7 +305,12 @@ impl FileSpool {
         }
 
         self.active_writer
-            .push(record.record_type, record.seq, record.ts_unix_ns, &record.payload)
+            .push(
+                record.record_type,
+                record.seq,
+                record.ts_unix_ns,
+                &record.payload,
+            )
             .map_err(to_io_error)?;
         self.active_writer.flush_block().map_err(to_io_error)?;
         self.refresh_active_size()?;
@@ -274,48 +322,32 @@ impl FileSpool {
         Ok(())
     }
 
-    fn replay_since<W: io::Write>(&self, writer: &mut W, last_seq: &mut u64) -> io::Result<bool> {
-        let mut sent_any = false;
-        let floor_seq = (*last_seq).max(self.consumed_through_seq);
-
-        for segment in list_segments(&self.dir, &self.base_stem)? {
-            let file = File::open(&segment.path)?;
-            let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
-
-            while let Some(record) = reader.next_record().map_err(to_io_error)? {
-                if record.seq <= floor_seq || record.seq <= *last_seq {
-                    continue;
-                }
-
-                write_record(
-                    writer,
-                    &WireRecord {
-                        record_type: record.record_type,
-                        seq: record.seq,
-                        ts_unix_ns: record.ts_unix_ns,
-                        payload: record.payload,
-                    },
-                )?;
-                *last_seq = record.seq;
-                sent_any = true;
-            }
+    fn replay_cursor_after(&self, last_seq: u64) -> FileReplayCursor {
+        FileReplayCursor {
+            next_segment_id_hint: 0,
+            last_seq,
         }
-
-        Ok(sent_any)
     }
 
-    fn next_after(&self, last_seq: u64) -> io::Result<Option<WireRecord>> {
-        let floor_seq = last_seq.max(self.consumed_through_seq);
+    fn next_for_cursor(&self, cursor: &mut FileReplayCursor) -> io::Result<Option<WireRecord>> {
+        let floor_seq = cursor.last_seq.max(self.consumed_through_seq);
 
         for segment in list_segments(&self.dir, &self.base_stem)? {
+            if segment.id < cursor.next_segment_id_hint {
+                continue;
+            }
+
             let file = File::open(&segment.path)?;
-            let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
+            let mut reader =
+                LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
 
             while let Some(record) = reader.next_record().map_err(to_io_error)? {
                 if record.seq <= floor_seq {
                     continue;
                 }
 
+                cursor.last_seq = record.seq;
+                cursor.next_segment_id_hint = segment.id;
                 return Ok(Some(WireRecord {
                     record_type: record.record_type,
                     seq: record.seq,
@@ -323,6 +355,8 @@ impl FileSpool {
                     payload: record.payload,
                 }));
             }
+
+            cursor.next_segment_id_hint = segment.id;
         }
 
         Ok(None)
@@ -407,7 +441,8 @@ impl FileSpool {
 
         for segment in list_segments(&self.dir, &self.base_stem)? {
             let file = File::open(&segment.path)?;
-            let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
+            let mut reader =
+                LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
 
             while let Some(record) = reader.next_record().map_err(to_io_error)? {
                 if record.seq <= self.consumed_through_seq {
@@ -431,7 +466,9 @@ pub fn inspect_path(path: &Path) -> io::Result<()> {
     if path.is_dir() {
         for entry in fs::read_dir(path)? {
             let entry = entry?;
-            if entry.file_type()?.is_file() && entry.path().extension().and_then(|ext| ext.to_str()) == Some("logjet") {
+            if entry.file_type()?.is_file()
+                && entry.path().extension().and_then(|ext| ext.to_str()) == Some("logjet")
+            {
                 inspect_file(&entry.path())?;
             }
         }
@@ -597,7 +634,10 @@ fn list_segments(dir: &Path, base_stem: &str) -> io::Result<Vec<SegmentInfo>> {
             continue;
         };
 
-        segments.push(SegmentInfo { id, path: entry.path() });
+        segments.push(SegmentInfo {
+            id,
+            path: entry.path(),
+        });
     }
 
     segments.sort_by_key(|segment| segment.id);
@@ -654,10 +694,12 @@ fn read_consumed_state(path: &Path) -> io::Result<u64> {
     }
 
     let text = fs::read_to_string(path)?;
-    let seq = text
-        .trim()
-        .parse::<u64>()
-        .map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("invalid consumed state: {err}")))?;
+    let seq = text.trim().parse::<u64>().map_err(|err| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid consumed state: {err}"),
+        )
+    })?;
     Ok(seq)
 }
 
@@ -668,10 +710,9 @@ fn write_consumed_state(path: &Path, seq: u64) -> io::Result<()> {
 fn read_or_create_stream_id(path: &Path) -> io::Result<u64> {
     if path.exists() {
         let text = fs::read_to_string(path)?;
-        let stream_id = text
-            .trim()
-            .parse::<u64>()
-            .map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("invalid stream id: {err}")))?;
+        let stream_id = text.trim().parse::<u64>().map_err(|err| {
+            io::Error::new(ErrorKind::InvalidData, format!("invalid stream id: {err}"))
+        })?;
         return Ok(stream_id);
     }
 

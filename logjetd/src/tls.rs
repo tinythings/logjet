@@ -52,7 +52,10 @@ pub fn parse_server_name(tls: &TlsConfig, authority: &str) -> io::Result<ServerN
     parse_server_name_override(tls.server_name.as_deref(), authority)
 }
 
-pub fn parse_collector_server_name(collector: &CollectorConfig, authority: &str) -> io::Result<ServerName<'static>> {
+pub fn parse_collector_server_name(
+    collector: &CollectorConfig,
+    authority: &str,
+) -> io::Result<ServerName<'static>> {
     parse_server_name_override(collector.server_name.as_deref(), authority)
 }
 
@@ -60,10 +63,16 @@ pub fn authority_host(authority: &str) -> &str {
     if let Some(rest) = authority.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(authority);
     }
-    authority.rsplit_once(':').map(|(host, _)| host).unwrap_or(authority)
+    authority
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(authority)
 }
 
-fn parse_server_name_override(override_name: Option<&str>, authority: &str) -> io::Result<ServerName<'static>> {
+fn parse_server_name_override(
+    override_name: Option<&str>,
+    authority: &str,
+) -> io::Result<ServerName<'static>> {
     let name = override_name.unwrap_or_else(|| authority_host(authority));
     if let Ok(ip) = name.parse::<IpAddr>() {
         return Ok(ServerName::IpAddress(ip.into()));
@@ -144,7 +153,9 @@ fn load_client_config_from_parts(
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("{namespace}.cert-file and {namespace}.key-file must either both be set or both be unset"),
+                format!(
+                    "{namespace}.cert-file and {namespace}.key-file must either both be set or both be unset"
+                ),
             ));
         }
     };
@@ -159,7 +170,10 @@ fn load_root_store(path: &Path) -> io::Result<RootCertStore> {
     if ignored > 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("failed to parse {ignored} CA certificate(s) from {}", path.display()),
+            format!(
+                "failed to parse {ignored} CA certificate(s) from {}",
+                path.display()
+            ),
         ));
     }
     Ok(roots)
@@ -176,7 +190,12 @@ fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
     let mut reader = BufReader::new(File::open(path)?);
     rustls_pemfile::private_key(&mut reader)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("no private key found in {}", path.display())))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("no private key found in {}", path.display()),
+            )
+        })
 }
 
 #[cfg(test)]

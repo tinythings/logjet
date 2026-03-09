@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{self, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::net::SocketAddr;
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -9,23 +9,25 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use opentelemetry_proto::tonic::collector::logs::v1::{
-    logs_service_server::{LogsService, LogsServiceServer},
     ExportLogsServiceRequest, ExportLogsServiceResponse,
+    logs_service_server::{LogsService, LogsServiceServer},
 };
 use prost::Message;
+use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use tiny_http::{Method, Response, Server, StatusCode};
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response as GrpcResponse, Status};
-use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
-use crate::config::{Config, IngestLimits, IngestOverloadConfig, IngestProtocol, IngestTlsConfig, SeverityFloor};
+use crate::config::{
+    Config, IngestLimits, IngestOverloadConfig, IngestProtocol, IngestTlsConfig, SeverityFloor,
+};
+use crate::protocol::WireRecord;
 use crate::protocol::{
     ReplayHello, read_record_with_limit, read_replay_ack, read_replay_request, write_record,
     write_replay_hello,
 };
 use crate::spool::Spool;
 use crate::tls::{load_ingest_server_config, load_server_config};
-use crate::{protocol::WireRecord};
 
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
@@ -159,7 +161,10 @@ impl SharedIngestPolicy {
             IngestDecision::RejectRateLimited
         };
 
-        if matches!(decision, IngestDecision::AcceptPriorityBypass | IngestDecision::RejectRateLimited) {
+        if matches!(
+            decision,
+            IngestDecision::AcceptPriorityBypass | IngestDecision::RejectRateLimited
+        ) {
             maybe_report_overload(&self.config, &mut state);
         }
 
@@ -272,8 +277,7 @@ fn ingest_loop(
             let listener = TcpListener::bind(&bind_addr)?;
             eprintln!(
                 "logjetd ingest listening on {bind_addr} using wire protocol max-batch-bytes={} max-clients={}",
-                ingest_limits.max_batch_bytes,
-                ingest_limits.max_clients
+                ingest_limits.max_batch_bytes, ingest_limits.max_clients
             );
 
             for stream in listener.incoming() {
@@ -285,7 +289,13 @@ fn ingest_loop(
                 thread::Builder::new()
                     .name("logjetd-ingest-client".to_string())
                     .spawn(move || {
-                        if let Err(err) = handle_ingest_client(stream, spool, ingest_policy, limiter, max_batch_bytes) {
+                        if let Err(err) = handle_ingest_client(
+                            stream,
+                            spool,
+                            ingest_policy,
+                            limiter,
+                            max_batch_bytes,
+                        ) {
                             eprintln!("logjetd ingest client error: {err}");
                         }
                     })?;
@@ -293,10 +303,18 @@ fn ingest_loop(
         }
         IngestProtocol::OtlpHttp => {
             if ingest_tls.enable {
-                return otlp_http_tls_loop(bind_addr, ingest_tls, ingest_limits, ingest_policy, spool, next_seq, limiter);
+                return otlp_http_tls_loop(
+                    bind_addr,
+                    ingest_tls,
+                    ingest_limits,
+                    ingest_policy,
+                    spool,
+                    next_seq,
+                    limiter,
+                );
             }
-            let server = Server::http(&bind_addr)
-                .map_err(|err| io::Error::other(err.to_string()))?;
+            let server =
+                Server::http(&bind_addr).map_err(|err| io::Error::other(err.to_string()))?;
             eprintln!(
                 "logjetd ingest listening on http://{bind_addr}/v1/logs using otlp-http max-batch-bytes={}",
                 ingest_limits.max_batch_bytes
@@ -304,8 +322,8 @@ fn ingest_loop(
 
             for mut request in server.incoming_requests() {
                 if request.method() != &Method::Post || request.url() != "/v1/logs" {
-                    let response = Response::from_string("not found")
-                        .with_status_code(StatusCode(404));
+                    let response =
+                        Response::from_string("not found").with_status_code(StatusCode(404));
                     let _ = request.respond(response);
                     continue;
                 }
@@ -326,7 +344,8 @@ fn ingest_loop(
                 }
                 match ExportLogsServiceRequest::decode(body.as_slice()) {
                     Ok(batch) => {
-                        let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
+                        let decision =
+                            ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
                         if matches!(decision, IngestDecision::RejectRateLimited) {
                             let response = Response::from_string("rate limit exceeded")
                                 .with_status_code(StatusCode(429));
@@ -338,7 +357,8 @@ fn ingest_loop(
                         let record = WireRecord {
                             record_type: logjet::RecordType::Logs,
                             seq: next_seq.fetch_add(1, Ordering::Relaxed),
-                            ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
+                            ts_unix_ns: extract_batch_timestamp(&batch)
+                                .unwrap_or_else(unix_time_nanos),
                             payload: body,
                         };
                         append_batch_record(&spool, record)?;
@@ -360,12 +380,14 @@ fn ingest_loop(
         }
         IngestProtocol::OtlpGrpc => {
             let addr: SocketAddr = bind_addr.parse().map_err(|err| {
-                io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC bind addr: {err}"))
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid gRPC bind addr: {err}"),
+                )
             })?;
             eprintln!(
                 "logjetd ingest listening on {}://{bind_addr} using otlp-grpc max-batch-bytes={} max-clients={}",
-                if ingest_tls.enable { "grpcs" } else { "grpc" }
-                ,
+                if ingest_tls.enable { "grpcs" } else { "grpc" },
                 ingest_limits.max_batch_bytes,
                 ingest_limits.max_clients
             );
@@ -424,8 +446,7 @@ fn otlp_http_tls_loop(
     let tls_server = load_ingest_server_config(&ingest_tls)?;
     eprintln!(
         "logjetd ingest listening on https://{bind_addr}/v1/logs using otlp-http max-batch-bytes={} max-clients={}",
-        ingest_limits.max_batch_bytes,
-        ingest_limits.max_clients
+        ingest_limits.max_batch_bytes, ingest_limits.max_clients
     );
 
     for stream in listener.incoming() {
@@ -473,7 +494,13 @@ fn handle_otlp_http_tls_client(
     let conn = ServerConnection::new(tls_server)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     let mut transport = StreamOwned::new(conn, stream);
-    let result = handle_otlp_http_transport(&mut transport, spool, ingest_policy, next_seq, max_batch_bytes);
+    let result = handle_otlp_http_transport(
+        &mut transport,
+        spool,
+        ingest_policy,
+        next_seq,
+        max_batch_bytes,
+    );
     transport.conn.send_close_notify();
     let _ = transport.flush();
     result
@@ -488,7 +515,10 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
 ) -> io::Result<()> {
     let request = match read_http_request(transport, max_batch_bytes) {
         Ok(request) => request,
-        Err(err) if err.kind() == io::ErrorKind::InvalidData && err.to_string() == "payload too large" => {
+        Err(err)
+            if err.kind() == io::ErrorKind::InvalidData
+                && err.to_string() == "payload too large" =>
+        {
             ingest_policy.note_oversize()?;
             write_http_response(transport, 413, "payload too large")?;
             return Ok(());
@@ -541,7 +571,10 @@ struct ParsedHttpRequest {
     body: Vec<u8>,
 }
 
-fn read_http_request<T: Read>(transport: &mut T, max_batch_bytes: usize) -> io::Result<ParsedHttpRequest> {
+fn read_http_request<T: Read>(
+    transport: &mut T,
+    max_batch_bytes: usize,
+) -> io::Result<ParsedHttpRequest> {
     const MAX_HEADER_BYTES: usize = 16 * 1024;
     let mut buffer = Vec::new();
     let mut byte = [0u8; 1];
@@ -550,7 +583,10 @@ fn read_http_request<T: Read>(transport: &mut T, max_batch_bytes: usize) -> io::
         transport.read_exact(&mut byte)?;
         buffer.push(byte[0]);
         if buffer.len() > MAX_HEADER_BYTES {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "http header too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "http header too large",
+            ));
         }
         if buffer.ends_with(b"\r\n\r\n") {
             break;
@@ -558,8 +594,9 @@ fn read_http_request<T: Read>(transport: &mut T, max_batch_bytes: usize) -> io::
     }
 
     let header_end = buffer.len();
-    let header_text = std::str::from_utf8(&buffer[..header_end - 4])
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "http header is not valid utf-8"))?;
+    let header_text = std::str::from_utf8(&buffer[..header_end - 4]).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidData, "http header is not valid utf-8")
+    })?;
     let mut lines = header_text.lines();
     let request_line = lines
         .next()
@@ -588,14 +625,20 @@ fn read_http_request<T: Read>(transport: &mut T, max_batch_bytes: usize) -> io::
     let content_length = content_length
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content-length"))?;
     if content_length > max_batch_bytes {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "payload too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "payload too large",
+        ));
     }
     let mut body = Vec::with_capacity(content_length);
     transport
         .take(content_length as u64)
         .read_to_end(&mut body)?;
     if body.len() != content_length {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short http body"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "short http body",
+        ));
     }
 
     Ok(ParsedHttpRequest { method, path, body })
@@ -709,8 +752,14 @@ fn handle_ingest_client(
     let mut reader = BufReader::new(stream);
 
     while let Some(record) = read_record_with_limit(&mut reader, max_batch_bytes)? {
-        if matches!(ingest_policy.decide(BatchPriority::Unknown)?, IngestDecision::RejectRateLimited) {
-            eprintln!("logjetd ingest dropped wire record seq={} because ingest rate limit was exceeded", record.seq);
+        if matches!(
+            ingest_policy.decide(BatchPriority::Unknown)?,
+            IngestDecision::RejectRateLimited
+        ) {
+            eprintln!(
+                "logjetd ingest dropped wire record seq={} because ingest rate limit was exceeded",
+                record.seq
+            );
             continue;
         }
         append_batch_record(&spool, record)?;
@@ -805,8 +854,16 @@ fn handle_replay_transport<T: io::Read + io::Write>(
     transport.flush()?;
 
     let request = read_replay_request(transport)?;
-    let mut last_seq = request.from_seq;
-    let mut seen_generation = spool.current_generation()?;
+    let (mut cursor, mut seen_generation) = {
+        let spool_guard = spool
+            .spool
+            .lock()
+            .map_err(|_| io::Error::other("spool mutex poisoned"))?;
+        (
+            spool_guard.replay_cursor_after(request.from_seq)?,
+            spool.current_generation()?,
+        )
+    };
 
     eprintln!(
         "logjetd replay client requested records after seq={} mode={}",
@@ -815,29 +872,41 @@ fn handle_replay_transport<T: io::Read + io::Write>(
     );
 
     if request.consume {
-        return handle_replay_transport_drain(transport, spool, &mut last_seq, &mut seen_generation);
+        return handle_replay_transport_drain(transport, spool, &mut cursor, &mut seen_generation);
     }
 
     loop {
-        let sent_any = {
-            let spool = spool
-                .spool
-                .lock()
-                .map_err(|_| io::Error::other("spool mutex poisoned"))?;
-            spool.replay_since(transport, &mut last_seq)?
-        };
+        let mut sent_any = false;
+        loop {
+            let next_record = {
+                let spool = spool
+                    .spool
+                    .lock()
+                    .map_err(|_| io::Error::other("spool mutex poisoned"))?;
+                spool.next_for_cursor(&mut cursor)?
+            };
 
-        transport.flush()?;
-        if !sent_any {
-            spool.wait_for_change(&mut seen_generation)?;
+            let Some(record) = next_record else {
+                break;
+            };
+
+            write_record(transport, &record)?;
+            sent_any = true;
         }
+
+        if sent_any {
+            transport.flush()?;
+            continue;
+        }
+
+        spool.wait_for_change(&mut seen_generation)?;
     }
 }
 
 fn handle_replay_transport_drain<T: io::Read + io::Write>(
     transport: &mut T,
     spool: Arc<SharedSpool>,
-    last_seq: &mut u64,
+    cursor: &mut crate::spool::ReplayCursor,
     seen_generation: &mut u64,
 ) -> io::Result<()> {
     loop {
@@ -846,7 +915,7 @@ fn handle_replay_transport_drain<T: io::Read + io::Write>(
                 .spool
                 .lock()
                 .map_err(|_| io::Error::other("spool mutex poisoned"))?;
-            spool.next_after(*last_seq)?
+            spool.next_for_cursor(cursor)?
         };
 
         let Some(record) = next_record else {
@@ -861,7 +930,10 @@ fn handle_replay_transport_drain<T: io::Read + io::Write>(
         if ack.ack_seq != record.seq {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("replay ack out of order: expected {} got {}", record.seq, ack.ack_seq),
+                format!(
+                    "replay ack out of order: expected {} got {}",
+                    record.seq, ack.ack_seq
+                ),
             ));
         }
 
@@ -872,7 +944,6 @@ fn handle_replay_transport_drain<T: io::Read + io::Write>(
                 .map_err(|_| io::Error::other("spool mutex poisoned"))?;
             spool.consume_through(ack.ack_seq)?;
         }
-        *last_seq = ack.ack_seq;
     }
 }
 

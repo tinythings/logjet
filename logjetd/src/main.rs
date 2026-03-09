@@ -64,9 +64,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 command = Some("replay");
                 while let Some(flag) = args.next() {
                     match flag.as_str() {
-                        "--path" => replay_path = Some(PathBuf::from(args.next().ok_or("missing value for --path")?)),
-                        "--name" => replay_name = Some(args.next().ok_or("missing value for --name")?),
-                        "--dest" => replay_dest = Some(args.next().ok_or("missing value for --dest")?),
+                        "--path" => {
+                            replay_path = Some(PathBuf::from(
+                                args.next().ok_or("missing value for --path")?,
+                            ))
+                        }
+                        "--name" => {
+                            replay_name = Some(args.next().ok_or("missing value for --name")?)
+                        }
+                        "--dest" => {
+                            replay_dest = Some(args.next().ok_or("missing value for --dest")?)
+                        }
                         _ => return Err(format!("unknown replay argument: {flag}").into()),
                     }
                 }
@@ -76,8 +84,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 command = Some("segments");
                 while let Some(flag) = args.next() {
                     match flag.as_str() {
-                        "--path" => segment_path = Some(PathBuf::from(args.next().ok_or("missing value for --path")?)),
-                        "--name" => segment_name = Some(args.next().ok_or("missing value for --name")?),
+                        "--path" => {
+                            segment_path = Some(PathBuf::from(
+                                args.next().ok_or("missing value for --path")?,
+                            ))
+                        }
+                        "--name" => {
+                            segment_name = Some(args.next().ok_or("missing value for --name")?)
+                        }
                         _ => return Err(format!("unknown segments argument: {flag}").into()),
                     }
                 }
@@ -87,8 +101,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 command = Some("prune");
                 while let Some(flag) = args.next() {
                     match flag.as_str() {
-                        "--path" => prune_path = Some(PathBuf::from(args.next().ok_or("missing value for --path")?)),
-                        "--name" => prune_name = Some(args.next().ok_or("missing value for --name")?),
+                        "--path" => {
+                            prune_path = Some(PathBuf::from(
+                                args.next().ok_or("missing value for --path")?,
+                            ))
+                        }
+                        "--name" => {
+                            prune_name = Some(args.next().ok_or("missing value for --name")?)
+                        }
                         "--keep-files" => {
                             prune_keep_files = Some(
                                 args.next()
@@ -113,7 +133,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 command = Some("bridge");
                 while let Some(flag) = args.next() {
                     match flag.as_str() {
-                        "--source" => bridge_source = Some(args.next().ok_or("missing value for --source")?),
+                        "--source" => {
+                            bridge_source = Some(args.next().ok_or("missing value for --source")?)
+                        }
                         _ => return Err(format!("unknown bridge argument: {flag}").into()),
                     }
                 }
@@ -174,12 +196,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 None => return Err("missing bridge source; set --source or upstream.replay".into()),
             };
 
-            eprintln!(
-                "bridging from {} to {}",
-                source,
-                config.collector.url
-            );
-            bridge_wire_to_otlp_http(&source, &config.collector, &config.backpressure, &config.upstream, &config.tls)?;
+            eprintln!("bridging from {} to {}", source, config.collector.url);
+            bridge_wire_to_otlp_http(
+                &source,
+                &config.collector,
+                &config.backpressure,
+                &config.upstream,
+                &config.tls,
+            )?;
         }
         Some("prune") => {
             let path = prune_path.ok_or("missing --path")?;
@@ -213,17 +237,25 @@ fn print_usage() {
     println!("  logjetd [serve] [-c|--config <path>]");
     println!("  logjetd inspect <path>");
     println!("  logjetd segments --path <dir> --name <base.logjet>");
-    println!("  logjetd replay [-c|--config <path>] --path <dir> --name <base.logjet> [--dest <url-or-host:port>]");
-    println!("  logjetd prune --path <dir> --name <base.logjet> [--keep-files <n> | --keep-bytes <bytes>] [--dry-run]");
+    println!(
+        "  logjetd replay [-c|--config <path>] --path <dir> --name <base.logjet> [--dest <url-or-host:port>]"
+    );
+    println!(
+        "  logjetd prune --path <dir> --name <base.logjet> [--keep-files <n> | --keep-bytes <bytes>] [--dry-run]"
+    );
     println!("  logjetd bridge [-c|--config <path>] [--source <host:port>]");
     println!();
     println!("Commands:");
     println!("  serve    Run ingest and replay listeners using YAML configuration");
     println!("  inspect  Print stored record metadata from a .logjet file or spool directory");
     println!("  segments Print ordered file-segment metadata for one rotated .logjet spool");
-    println!("  replay   Read ordered .logjet files and blast OTLP log batches to an OTLP/HTTP collector");
+    println!(
+        "  replay   Read ordered .logjet files and blast OTLP log batches to an OTLP/HTTP collector"
+    );
     println!("  prune    Remove oldest rotated file segments by count or total bytes");
-    println!("  bridge   Connect to a replay listener, drain backlog, stay attached, and forward OTLP logs to the configured collector");
+    println!(
+        "  bridge   Connect to a replay listener, drain backlog, stay attached, and forward OTLP logs to the configured collector"
+    );
     println!();
     println!("Config path defaults to /etc/logjet.conf.");
 }
