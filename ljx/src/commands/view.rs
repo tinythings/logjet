@@ -173,7 +173,7 @@ impl ViewApp {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
-        if !matches!(self.focus, Focus::Modal | Focus::SavePrompt | Focus::SaveError)
+        if self.focus == Focus::List
             && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
         {
             self.cancel_scan();
@@ -661,7 +661,7 @@ impl ViewApp {
             for index in self.list_offset..end {
                 let style = if index == self.selected {
                     Style::default()
-                        .fg(Color::Black)
+                        .fg(Color::White)
                         .bg(Color::Indexed(28))
                         .add_modifier(Modifier::BOLD)
                 } else {
@@ -1452,18 +1452,18 @@ fn pane_block<'a>(title: &'a str, active: bool) -> Block<'a> {
     let title_style = if active {
         Style::default().fg(Color::Black).bg(Color::LightGreen)
     } else {
-        Style::default().fg(Color::Indexed(28))
+        Style::default().fg(Color::Gray)
     };
     let border_style = if active {
         Style::default().fg(Color::LightGreen)
     } else {
-        Style::default().fg(Color::Indexed(28))
+        Style::default().fg(Color::Gray)
     };
 
     Block::default()
         .title(Span::styled(title, title_style))
         .borders(Borders::ALL)
-        .border_type(if active { BorderType::Double } else { BorderType::Plain })
+        .border_type(BorderType::Plain)
         .border_style(border_style)
         .style(Style::default().fg(Color::White))
 }
@@ -1471,8 +1471,6 @@ fn pane_block<'a>(title: &'a str, active: bool) -> Block<'a> {
 fn status_help_spans(focus: Focus) -> Vec<Span<'static>> {
     match focus {
         Focus::Search => vec![
-            status_key("Q"),
-            status_text(" quit  "),
             status_key("TAB"),
             status_text(" switch  "),
             status_key("ENTER"),
