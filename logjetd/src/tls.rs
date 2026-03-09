@@ -11,41 +11,19 @@ use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use crate::config::{CollectorConfig, IngestTlsConfig, TlsConfig};
 
 pub fn load_server_config(tls: &TlsConfig) -> io::Result<Arc<ServerConfig>> {
-    load_server_config_from_parts(
-        tls.cert_file.as_deref(),
-        tls.key_file.as_deref(),
-        tls.ca_file.as_deref(),
-        tls.require_client_cert,
-        "tls",
-    )
+    load_server_config_from_parts(tls.cert_file.as_deref(), tls.key_file.as_deref(), tls.ca_file.as_deref(), tls.require_client_cert, "tls")
 }
 
 pub fn load_ingest_server_config(tls: &IngestTlsConfig) -> io::Result<Arc<ServerConfig>> {
-    load_server_config_from_parts(
-        tls.cert_file.as_deref(),
-        tls.key_file.as_deref(),
-        tls.ca_file.as_deref(),
-        tls.require_client_cert,
-        "ingest",
-    )
+    load_server_config_from_parts(tls.cert_file.as_deref(), tls.key_file.as_deref(), tls.ca_file.as_deref(), tls.require_client_cert, "ingest")
 }
 
 pub fn load_client_config(tls: &TlsConfig) -> io::Result<Arc<ClientConfig>> {
-    load_client_config_from_parts(
-        tls.ca_file.as_deref(),
-        tls.cert_file.as_deref(),
-        tls.key_file.as_deref(),
-        "tls",
-    )
+    load_client_config_from_parts(tls.ca_file.as_deref(), tls.cert_file.as_deref(), tls.key_file.as_deref(), "tls")
 }
 
 pub fn load_collector_client_config(collector: &CollectorConfig) -> io::Result<Arc<ClientConfig>> {
-    load_client_config_from_parts(
-        collector.ca_file.as_deref(),
-        collector.cert_file.as_deref(),
-        collector.key_file.as_deref(),
-        "collector",
-    )
+    load_client_config_from_parts(collector.ca_file.as_deref(), collector.cert_file.as_deref(), collector.key_file.as_deref(), "collector")
 }
 
 pub fn parse_server_name(tls: &TlsConfig, authority: &str) -> io::Result<ServerName<'static>> {
@@ -69,16 +47,11 @@ fn parse_server_name_override(override_name: Option<&str>, authority: &str) -> i
         return Ok(ServerName::IpAddress(ip.into()));
     }
 
-    ServerName::try_from(name.to_string())
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
+    ServerName::try_from(name.to_string()).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
 }
 
 fn load_server_config_from_parts(
-    cert_file: Option<&Path>,
-    key_file: Option<&Path>,
-    ca_file: Option<&Path>,
-    require_client_cert: bool,
-    namespace: &str,
+    cert_file: Option<&Path>, key_file: Option<&Path>, ca_file: Option<&Path>, require_client_cert: bool, namespace: &str,
 ) -> io::Result<Arc<ServerConfig>> {
     let cert_file = cert_file.ok_or_else(|| {
         io::Error::new(
@@ -98,41 +71,27 @@ fn load_server_config_from_parts(
     let builder = ServerConfig::builder();
     let server_config = if require_client_cert {
         let ca_file = ca_file.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{namespace}.ca-file is required when client certificates are required"),
-            )
+            io::Error::new(io::ErrorKind::InvalidInput, format!("{namespace}.ca-file is required when client certificates are required"))
         })?;
         let roots = load_root_store(ca_file)?;
-        let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
-            .build()
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+        let verifier =
+            WebPkiClientVerifier::builder(Arc::new(roots)).build().map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         builder
             .with_client_cert_verifier(verifier)
             .with_single_cert(certs, key)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?
     } else {
-        builder
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?
+        builder.with_no_client_auth().with_single_cert(certs, key).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?
     };
 
     Ok(Arc::new(server_config))
 }
 
 fn load_client_config_from_parts(
-    ca_file: Option<&Path>,
-    cert_file: Option<&Path>,
-    key_file: Option<&Path>,
-    namespace: &str,
+    ca_file: Option<&Path>, cert_file: Option<&Path>, key_file: Option<&Path>, namespace: &str,
 ) -> io::Result<Arc<ClientConfig>> {
-    let ca_file = ca_file.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{namespace}.ca-file is required for TLS client mode"),
-        )
-    })?;
+    let ca_file =
+        ca_file.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{namespace}.ca-file is required for TLS client mode")))?;
     let roots = load_root_store(ca_file)?;
     let builder = ClientConfig::builder().with_root_certificates(roots);
 
@@ -157,19 +116,14 @@ fn load_root_store(path: &Path) -> io::Result<RootCertStore> {
     let mut roots = RootCertStore::empty();
     let (_added, ignored) = roots.add_parsable_certificates(certs);
     if ignored > 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("failed to parse {ignored} CA certificate(s) from {}", path.display()),
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("failed to parse {ignored} CA certificate(s) from {}", path.display())));
     }
     Ok(roots)
 }
 
 fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
     let mut reader = BufReader::new(File::open(path)?);
-    rustls_pemfile::certs(&mut reader)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
+    rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>().map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
 }
 
 fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {

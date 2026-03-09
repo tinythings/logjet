@@ -1,18 +1,12 @@
 use super::{
-    ReplayAck, ReplayHello, ReplayRequest, WireRecord, read_record, read_record_with_limit,
-    read_replay_ack, read_replay_hello, read_replay_request, write_record, write_replay_ack,
-    write_replay_hello, write_replay_request,
+    ReplayAck, ReplayHello, ReplayRequest, WireRecord, read_record, read_record_with_limit, read_replay_ack, read_replay_hello, read_replay_request,
+    write_record, write_replay_ack, write_replay_hello, write_replay_request,
 };
 use logjet::RecordType;
 
 #[test]
 fn round_trip_record() {
-    let record = WireRecord {
-        record_type: RecordType::Logs,
-        seq: 42,
-        ts_unix_ns: 77,
-        payload: b"abc".to_vec(),
-    };
+    let record = WireRecord { record_type: RecordType::Logs, seq: 42, ts_unix_ns: 77, payload: b"abc".to_vec() };
     let mut bytes = Vec::new();
     write_record(&mut bytes, &record).unwrap();
     let decoded = read_record(&mut bytes.as_slice()).unwrap().unwrap();
@@ -21,10 +15,7 @@ fn round_trip_record() {
 
 #[test]
 fn replay_request_round_trip() {
-    let request = ReplayRequest {
-        from_seq: 1234,
-        consume: true,
-    };
+    let request = ReplayRequest { from_seq: 1234, consume: true };
     let mut bytes = Vec::new();
     write_replay_request(&mut bytes, &request).unwrap();
     let decoded = read_replay_request(&mut bytes.as_slice()).unwrap();
@@ -42,11 +33,7 @@ fn replay_ack_round_trip() {
 
 #[test]
 fn replay_hello_round_trip() {
-    let hello = ReplayHello {
-        stream_id: 77,
-        first_seq: 10,
-        last_seq: 99,
-    };
+    let hello = ReplayHello { stream_id: 77, first_seq: 10, last_seq: 99 };
     let mut bytes = Vec::new();
     write_replay_hello(&mut bytes, &hello).unwrap();
     let decoded = read_replay_hello(&mut bytes.as_slice()).unwrap();
@@ -79,12 +66,7 @@ fn unsupported_record_version_is_rejected() {
 
 #[test]
 fn record_payload_over_limit_is_rejected() {
-    let record = WireRecord {
-        record_type: RecordType::Logs,
-        seq: 42,
-        ts_unix_ns: 77,
-        payload: b"abcdef".to_vec(),
-    };
+    let record = WireRecord { record_type: RecordType::Logs, seq: 42, ts_unix_ns: 77, payload: b"abcdef".to_vec() };
     let mut bytes = Vec::new();
     write_record(&mut bytes, &record).unwrap();
     let err = read_record_with_limit(&mut bytes.as_slice(), 5).unwrap_err();

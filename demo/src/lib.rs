@@ -34,26 +34,16 @@ pub fn build_excuse_request(sequence: u64) -> ExportLogsServiceRequest {
     build_excuse_request_for_service_with_severity(sequence, "bofh-emitter", "warn")
 }
 
-pub fn build_excuse_request_for_service(
-    sequence: u64,
-    service_name: &str,
-) -> ExportLogsServiceRequest {
+pub fn build_excuse_request_for_service(sequence: u64, service_name: &str) -> ExportLogsServiceRequest {
     build_excuse_request_for_service_with_severity(sequence, service_name, "warn")
 }
 
-pub fn build_excuse_request_for_service_with_severity(
-    sequence: u64,
-    service_name: &str,
-    severity: &str,
-) -> ExportLogsServiceRequest {
+pub fn build_excuse_request_for_service_with_severity(sequence: u64, service_name: &str, severity: &str) -> ExportLogsServiceRequest {
     build_message_request_for_service(
         sequence,
         service_name,
         severity,
-        format!(
-            "BOFH excuse #{sequence}: {}",
-            BOFH_EXCUSES[(sequence as usize) % BOFH_EXCUSES.len()]
-        ),
+        format!("BOFH excuse #{sequence}: {}", BOFH_EXCUSES[(sequence as usize) % BOFH_EXCUSES.len()]),
     )
 }
 
@@ -61,12 +51,7 @@ pub fn build_message_request(sequence: u64, body: String) -> ExportLogsServiceRe
     build_message_request_for_service(sequence, "bofh-emitter", "warn", body)
 }
 
-pub fn build_message_request_for_service(
-    sequence: u64,
-    service_name: &str,
-    severity: &str,
-    body: String,
-) -> ExportLogsServiceRequest {
+pub fn build_message_request_for_service(sequence: u64, service_name: &str, severity: &str, body: String) -> ExportLogsServiceRequest {
     let nanos = unix_time_nanos();
     let (severity_text, severity_number) = parse_demo_severity(severity);
 
@@ -92,11 +77,7 @@ pub fn build_message_request_for_service(
                     observed_time_unix_nano: nanos,
                     severity_number,
                     severity_text,
-                    body: Some(AnyValue {
-                        value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                            body,
-                        )),
-                    }),
+                    body: Some(AnyValue { value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(body)) }),
                     attributes: vec![
                         string_attr("demo.kind", "bofh"),
                         string_attr("demo.component", "emitter"),
@@ -132,28 +113,18 @@ pub fn post_otlp_http(addr: &str, request: &ExportLogsServiceRequest) -> io::Res
     post_raw_otlp_http(addr, &request.encode_to_vec(), None, None)
 }
 
-pub fn post_raw_otlp_http(
-    addr: &str,
-    body: &[u8],
-    ca_file: Option<&Path>,
-    server_name: Option<&str>,
-) -> io::Result<()> {
+pub fn post_raw_otlp_http(addr: &str, body: &[u8], ca_file: Option<&Path>, server_name: Option<&str>) -> io::Result<()> {
     let endpoint = DemoEndpoint::parse(addr);
     let mut stream = TcpStream::connect(&endpoint.authority)?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
 
     if endpoint.tls {
-        let ca_file = ca_file.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "https demo posting requires --ca-file or explicit CA path",
-            )
-        })?;
+        let ca_file =
+            ca_file.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "https demo posting requires --ca-file or explicit CA path"))?;
         let client_config = load_demo_client_config(ca_file)?;
         let server_name = demo_server_name(&endpoint, server_name)?;
-        let conn = ClientConnection::new(client_config, server_name)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+        let conn = ClientConnection::new(client_config, server_name).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         let mut transport = StreamOwned::new(conn, stream);
         return post_raw_otlp_http_transport(&endpoint, body, &mut transport);
     }
@@ -171,11 +142,7 @@ pub fn load_demo_server_config(cert_path: &Path, key_path: &Path) -> io::Result<
     Ok(Arc::new(config))
 }
 
-pub fn load_demo_mtls_server_config(
-    ca_path: &Path,
-    cert_path: &Path,
-    key_path: &Path,
-) -> io::Result<Arc<ServerConfig>> {
+pub fn load_demo_mtls_server_config(ca_path: &Path, cert_path: &Path, key_path: &Path) -> io::Result<Arc<ServerConfig>> {
     let certs = load_certs(cert_path)?;
     let key = load_private_key(key_path)?;
     let roots = load_root_store(ca_path)?;
@@ -189,11 +156,7 @@ pub fn load_demo_mtls_server_config(
     Ok(Arc::new(config))
 }
 
-fn post_raw_otlp_http_transport<T: io::Read + io::Write>(
-    endpoint: &DemoEndpoint,
-    body: &[u8],
-    transport: &mut T,
-) -> io::Result<()> {
+fn post_raw_otlp_http_transport<T: io::Read + io::Write>(endpoint: &DemoEndpoint, body: &[u8], transport: &mut T) -> io::Result<()> {
     write!(
         transport,
         "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -207,10 +170,7 @@ fn post_raw_otlp_http_transport<T: io::Read + io::Write>(
     let mut response = String::new();
     std::io::Read::read_to_string(transport, &mut response)?;
     if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
-        return Err(io::Error::other(format!(
-            "collector returned non-200 response: {}",
-            response.lines().next().unwrap_or("unknown response")
-        )));
+        return Err(io::Error::other(format!("collector returned non-200 response: {}", response.lines().next().unwrap_or("unknown response"))));
     }
 
     Ok(())
@@ -218,15 +178,12 @@ fn post_raw_otlp_http_transport<T: io::Read + io::Write>(
 
 fn load_demo_client_config(ca_path: &Path) -> io::Result<Arc<ClientConfig>> {
     let roots = load_root_store(ca_path)?;
-    Ok(Arc::new(
-        ClientConfig::builder().with_root_certificates(roots).with_no_client_auth(),
-    ))
+    Ok(Arc::new(ClientConfig::builder().with_root_certificates(roots).with_no_client_auth()))
 }
 
 fn demo_server_name(endpoint: &DemoEndpoint, override_name: Option<&str>) -> io::Result<ServerName<'static>> {
     let name = override_name.unwrap_or_else(|| endpoint.server_name());
-    ServerName::try_from(name.to_string())
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
+    ServerName::try_from(name.to_string()).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
 }
 
 fn load_root_store(path: &Path) -> io::Result<RootCertStore> {
@@ -238,9 +195,7 @@ fn load_root_store(path: &Path) -> io::Result<RootCertStore> {
 
 fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
     let mut reader = std::io::BufReader::new(fs::File::open(path)?);
-    rustls_pemfile::certs(&mut reader)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
+    rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>().map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
 }
 
 fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
@@ -260,27 +215,15 @@ impl DemoEndpoint {
     fn parse(input: &str) -> Self {
         if let Some(rest) = input.strip_prefix("https://") {
             let (authority, path) = split_authority_and_path(rest);
-            return Self {
-                authority: authority.to_string(),
-                path: normalise_path(path),
-                tls: true,
-            };
+            return Self { authority: authority.to_string(), path: normalise_path(path), tls: true };
         }
 
         if let Some(rest) = input.strip_prefix("http://") {
             let (authority, path) = split_authority_and_path(rest);
-            return Self {
-                authority: authority.to_string(),
-                path: normalise_path(path),
-                tls: false,
-            };
+            return Self { authority: authority.to_string(), path: normalise_path(path), tls: false };
         }
 
-        Self {
-            authority: input.to_string(),
-            path: "/v1/logs".to_string(),
-            tls: false,
-        }
+        Self { authority: input.to_string(), path: "/v1/logs".to_string(), tls: false }
     }
 
     fn server_name(&self) -> &str {
@@ -321,21 +264,12 @@ fn format_batch(batch: &ExportLogsServiceRequest, coloured: bool) -> String {
             .resource
             .as_ref()
             .and_then(|resource| {
-                resource
-                    .attributes
-                    .iter()
-                    .find(|attr| attr.key == "service.name")
-                    .and_then(|attr| attr.value.as_ref())
-                    .and_then(any_value_to_string)
+                resource.attributes.iter().find(|attr| attr.key == "service.name").and_then(|attr| attr.value.as_ref()).and_then(any_value_to_string)
             })
             .unwrap_or("unknown-service");
 
         for scope_logs in &resource_logs.scope_logs {
-            let scope_name = scope_logs
-                .scope
-                .as_ref()
-                .map(|scope| scope.name.as_str())
-                .unwrap_or("unknown-scope");
+            let scope_name = scope_logs.scope.as_ref().map(|scope| scope.name.as_str()).unwrap_or("unknown-scope");
 
             for log in &scope_logs.log_records {
                 if coloured {
@@ -353,11 +287,7 @@ fn format_batch(batch: &ExportLogsServiceRequest, coloured: bool) -> String {
 fn write_plain_record(out: &mut String, service_name: &str, scope_name: &str, log: &LogRecord) {
     let sev = severity_text(log);
     let body = log_body(log);
-    let _ = writeln!(
-        out,
-        "service={} scope={} severity={} ts={}",
-        service_name, scope_name, sev, log.time_unix_nano
-    );
+    let _ = writeln!(out, "service={} scope={} severity={} ts={}", service_name, scope_name, sev, log.time_unix_nano);
     let _ = writeln!(out, "message: {body}");
     let _ = writeln!(out);
 }
@@ -382,37 +312,24 @@ fn write_coloured_record(out: &mut String, service_name: &str, scope_name: &str,
 }
 
 fn severity_text(log: &LogRecord) -> &str {
-    if log.severity_text.is_empty() {
-        "UNSPECIFIED"
-    } else {
-        log.severity_text.as_str()
-    }
+    if log.severity_text.is_empty() { "UNSPECIFIED" } else { log.severity_text.as_str() }
 }
 
 fn log_body(log: &LogRecord) -> &str {
-    log.body
-        .as_ref()
-        .and_then(any_value_to_string)
-        .unwrap_or("<no body>")
+    log.body.as_ref().and_then(any_value_to_string).unwrap_or("<no body>")
 }
 
 fn string_attr(key: &str, value: &str) -> KeyValue {
     KeyValue {
         key: key.to_string(),
-        value: Some(AnyValue {
-            value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
-                value.to_string(),
-            )),
-        }),
+        value: Some(AnyValue { value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(value.to_string())) }),
     }
 }
 
 fn int_attr(key: &str, value: i64) -> KeyValue {
     KeyValue {
         key: key.to_string(),
-        value: Some(AnyValue {
-            value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::IntValue(value)),
-        }),
+        value: Some(AnyValue { value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::IntValue(value)) }),
     }
 }
 
@@ -424,8 +341,5 @@ fn any_value_to_string(value: &AnyValue) -> Option<&str> {
 }
 
 fn unix_time_nanos() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
 }

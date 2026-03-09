@@ -4,8 +4,8 @@ use crate::codec::Codec;
 use crate::crc::crc32c;
 use crate::error::{Error, Result};
 use crate::format::{
-    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, DEFAULT_BLOCK_TARGET_SIZE,
-    DEFAULT_SYNC_MARKER, FORMAT_VERSION, BlockHeader, BlockHeaderExt,
+    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, BlockHeader, BlockHeaderExt, DEFAULT_BLOCK_TARGET_SIZE,
+    DEFAULT_SYNC_MARKER, FORMAT_VERSION,
 };
 use crate::record::RecordType;
 
@@ -18,11 +18,7 @@ pub struct WriterConfig {
 
 impl Default for WriterConfig {
     fn default() -> Self {
-        Self {
-            block_target_size: DEFAULT_BLOCK_TARGET_SIZE,
-            codec: Codec::Lz4,
-            sync_marker: DEFAULT_SYNC_MARKER,
-        }
+        Self { block_target_size: DEFAULT_BLOCK_TARGET_SIZE, codec: Codec::Lz4, sync_marker: DEFAULT_SYNC_MARKER }
     }
 }
 
@@ -58,13 +54,7 @@ impl<W: Write> LogjetWriter<W> {
         }
     }
 
-    pub fn push(
-        &mut self,
-        record_type: RecordType,
-        seq: u64,
-        ts_unix_ns: u64,
-        payload: &[u8],
-    ) -> Result<()> {
+    pub fn push(&mut self, record_type: RecordType, seq: u64, ts_unix_ns: u64, payload: &[u8]) -> Result<()> {
         self.encoded_record_buf.clear();
 
         let (base_seq, base_ts) = match (self.block_base_seq, self.block_base_ts_unix_ns) {
@@ -76,27 +66,16 @@ impl<W: Write> LogjetWriter<W> {
             }
         };
 
-        let seq_delta = seq
-            .checked_sub(base_seq)
-            .ok_or(Error::InvalidHeader("sequence must be monotonic within block"))?;
-        let ts_delta = ts_unix_ns
-            .checked_sub(base_ts)
-            .ok_or(Error::InvalidHeader("timestamp must be monotonic within block"))?;
+        let seq_delta = seq.checked_sub(base_seq).ok_or(Error::InvalidHeader("sequence must be monotonic within block"))?;
+        let ts_delta = ts_unix_ns.checked_sub(base_ts).ok_or(Error::InvalidHeader("timestamp must be monotonic within block"))?;
 
         self.encoded_record_buf.push(record_type as u8);
         encode_varint(seq_delta, &mut self.encoded_record_buf)?;
         encode_varint(ts_delta, &mut self.encoded_record_buf)?;
-        encode_varint(
-            u64::try_from(payload.len()).map_err(|_| Error::NumericOverflow("payload len"))?,
-            &mut self.encoded_record_buf,
-        )?;
+        encode_varint(u64::try_from(payload.len()).map_err(|_| Error::NumericOverflow("payload len"))?, &mut self.encoded_record_buf)?;
         self.encoded_record_buf.extend_from_slice(payload);
 
-        let projected = self
-            .payload_buf
-            .len()
-            .checked_add(self.encoded_record_buf.len())
-            .ok_or(Error::NumericOverflow("payload buf growth"))?;
+        let projected = self.payload_buf.len().checked_add(self.encoded_record_buf.len()).ok_or(Error::NumericOverflow("payload buf growth"))?;
         if !self.payload_buf.is_empty() && projected > self.config.block_target_size {
             self.flush_block()?;
             self.block_base_seq = Some(seq);
@@ -105,18 +84,12 @@ impl<W: Write> LogjetWriter<W> {
             self.encoded_record_buf.push(record_type as u8);
             encode_varint(0, &mut self.encoded_record_buf)?;
             encode_varint(0, &mut self.encoded_record_buf)?;
-            encode_varint(
-                u64::try_from(payload.len()).map_err(|_| Error::NumericOverflow("payload len"))?,
-                &mut self.encoded_record_buf,
-            )?;
+            encode_varint(u64::try_from(payload.len()).map_err(|_| Error::NumericOverflow("payload len"))?, &mut self.encoded_record_buf)?;
             self.encoded_record_buf.extend_from_slice(payload);
         }
 
         self.payload_buf.extend_from_slice(&self.encoded_record_buf);
-        self.record_count = self
-            .record_count
-            .checked_add(1)
-            .ok_or(Error::NumericOverflow("record_count"))?;
+        self.record_count = self.record_count.checked_add(1).ok_or(Error::NumericOverflow("record_count"))?;
 
         if self.payload_buf.len() >= self.config.block_target_size {
             self.flush_block()?;
@@ -130,34 +103,23 @@ impl<W: Write> LogjetWriter<W> {
             return Ok(());
         }
 
-        let base_seq = self
-            .block_base_seq
-            .ok_or(Error::InvalidHeader("missing block base seq"))?;
-        let base_ts = self
-            .block_base_ts_unix_ns
-            .ok_or(Error::InvalidHeader("missing block base ts"))?;
+        let base_seq = self.block_base_seq.ok_or(Error::InvalidHeader("missing block base seq"))?;
+        let base_ts = self.block_base_ts_unix_ns.ok_or(Error::InvalidHeader("missing block base ts"))?;
 
-        self.config
-            .codec
-            .compress(&self.payload_buf, &mut self.compressed_buf)?;
+        self.config.codec.compress(&self.payload_buf, &mut self.compressed_buf)?;
 
-        let uncompressed_len = u32::try_from(self.payload_buf.len())
-            .map_err(|_| Error::LengthTooLarge {
-                field: "uncompressed_len",
-                value: self.payload_buf.len() as u64,
-                limit: u32::MAX as usize,
-            })?;
-        let compressed_len = u32::try_from(self.compressed_buf.len())
-            .map_err(|_| Error::LengthTooLarge {
-                field: "compressed_len",
-                value: self.compressed_buf.len() as u64,
-                limit: u32::MAX as usize,
-            })?;
+        let uncompressed_len = u32::try_from(self.payload_buf.len()).map_err(|_| Error::LengthTooLarge {
+            field: "uncompressed_len",
+            value: self.payload_buf.len() as u64,
+            limit: u32::MAX as usize,
+        })?;
+        let compressed_len = u32::try_from(self.compressed_buf.len()).map_err(|_| Error::LengthTooLarge {
+            field: "compressed_len",
+            value: self.compressed_buf.len() as u64,
+            limit: u32::MAX as usize,
+        })?;
 
-        let header_ext = BlockHeaderExt {
-            base_seq,
-            base_ts_unix_ns: base_ts,
-        };
+        let header_ext = BlockHeaderExt { base_seq, base_ts_unix_ns: base_ts };
         let mut ext_bytes = Vec::with_capacity(BLOCK_HEADER_EXT_LEN);
         header_ext.encode(&mut ext_bytes);
 
@@ -165,8 +127,7 @@ impl<W: Write> LogjetWriter<W> {
             version: FORMAT_VERSION,
             codec: self.config.codec,
             flags: 0,
-            header_len: u16::try_from(BLOCK_HEADER_TOTAL_LEN)
-                .map_err(|_| Error::NumericOverflow("header_len"))?,
+            header_len: u16::try_from(BLOCK_HEADER_TOTAL_LEN).map_err(|_| Error::NumericOverflow("header_len"))?,
             reserved: 0,
             uncompressed_len,
             compressed_len,

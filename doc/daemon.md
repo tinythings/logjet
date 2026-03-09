@@ -41,19 +41,19 @@ logjetd inspect /var/lib/logjet
 List rotated file segments for one spool:
 
 ```bash
-logjetd segments --path /var/lib/logjet --name bofh.logjet
+logjetd segments --path /var/lib/logjet --name app.logjet
 ```
 
 Prune oldest rotated file segments and keep only the newest two files:
 
 ```bash
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-files 2
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-files 2
 ```
 
 Preview byte-budget pruning without deleting anything:
 
 ```bash
-logjetd prune --path /var/lib/logjet --name bofh.logjet --keep-bytes 1048576 --dry-run
+logjetd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-run
 ```
 
 Continuously bridge from another `logjetd` replay listener into an OTLP
@@ -87,7 +87,7 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - expects a small replay request carrying `from_seq`
 - replay requests can ask to `keep` or `drain`
 - replays retained records in sequence order
-- switches from retained backlog to live records through direct wakeups from ingest
+- uses a per-client replay cursor so retained backlog can hand off directly into live wakeups from ingest
 - can optionally wrap the replay transport in TLS
 
 Replay is strictly sequential today. Resume exists per connection via `from_seq`.

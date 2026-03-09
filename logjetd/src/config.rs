@@ -274,9 +274,7 @@ impl Config {
         };
 
         let output = raw.output.unwrap_or_else(|| "buffer".to_string());
-        let ingest_addr = raw
-            .ingest_addr
-            .unwrap_or_else(|| "127.0.0.1:7001".to_string());
+        let ingest_addr = raw.ingest_addr.unwrap_or_else(|| "127.0.0.1:7001".to_string());
         let ingest_protocol = match raw.ingest_protocol.as_deref().unwrap_or("wire") {
             "wire" => IngestProtocol::Wire,
             "otlp-http" => IngestProtocol::OtlpHttp,
@@ -290,15 +288,11 @@ impl Config {
             key_file: raw.ingest_key_file,
             require_client_cert: raw.ingest_require_client_cert.unwrap_or(false),
         };
-        let ingest_limits = IngestLimits {
-            max_batch_bytes: raw.ingest_max_batch_bytes.unwrap_or(1024 * 1024),
-            max_clients: raw.ingest_max_clients.unwrap_or(32),
-        };
+        let ingest_limits =
+            IngestLimits { max_batch_bytes: raw.ingest_max_batch_bytes.unwrap_or(1024 * 1024), max_clients: raw.ingest_max_clients.unwrap_or(32) };
         let ingest_overload = IngestOverloadConfig {
             max_batches_per_second: raw.ingest_max_batches_per_second.unwrap_or(0),
-            priority_severity_floor: parse_severity_floor(
-                raw.ingest_priority_severity_floor.as_deref().unwrap_or("error"),
-            )?,
+            priority_severity_floor: parse_severity_floor(raw.ingest_priority_severity_floor.as_deref().unwrap_or("error"))?,
             report_every_ms: raw.ingest_overload_report_ms.unwrap_or(5_000),
         };
         if ingest_limits.max_batch_bytes == 0 {
@@ -307,9 +301,7 @@ impl Config {
         if ingest_limits.max_clients == 0 {
             return Err("ingest.max-clients must be greater than zero".into());
         }
-        let replay_addr = raw
-            .replay_addr
-            .unwrap_or_else(|| "0.0.0.0:7002".to_string());
+        let replay_addr = raw.replay_addr.unwrap_or_else(|| "0.0.0.0:7002".to_string());
         let replay_max_clients = raw.replay_max_clients.unwrap_or(32);
         if replay_max_clients == 0 {
             return Err("replay.max-clients must be greater than zero".into());
@@ -319,9 +311,7 @@ impl Config {
             return Err("replay.client-timeout-ms must be greater than zero".into());
         }
         let collector = CollectorConfig {
-            url: raw
-                .collector_url
-                .unwrap_or_else(|| "http://127.0.0.1:4318/v1/logs".to_string()),
+            url: raw.collector_url.unwrap_or_else(|| "http://127.0.0.1:4318/v1/logs".to_string()),
             timeout_ms: raw.collector_timeout_ms.unwrap_or(10_000),
             ca_file: raw.collector_ca_file,
             cert_file: raw.collector_cert_file,
@@ -363,14 +353,9 @@ impl Config {
         let keep_messages = raw.buffer_keep.unwrap_or(0);
 
         let storage = match output.as_str() {
-            "buffer" => StorageConfig::Buffer(BufferConfig {
-                limit: parse_buffer_limit(raw.buffer_size_kb, raw.buffer_messages)?,
-                keep_messages,
-            }),
+            "buffer" => StorageConfig::Buffer(BufferConfig { limit: parse_buffer_limit(raw.buffer_size_kb, raw.buffer_messages)?, keep_messages }),
             "file" => {
-                let name = raw
-                    .file_name
-                    .unwrap_or_else(|| "bar.logjet".to_string());
+                let name = raw.file_name.unwrap_or_else(|| "bar.logjet".to_string());
                 StorageConfig::File(FileConfig {
                     dir: raw.file_path.unwrap_or_else(|| PathBuf::from(".")),
                     name,
@@ -411,16 +396,11 @@ fn parse_severity_floor(value: &str) -> Result<SeverityFloor, Box<dyn std::error
 }
 
 fn kib_to_bytes(value: u64) -> Result<usize, Box<dyn std::error::Error>> {
-    let bytes = value
-        .checked_mul(1024)
-        .ok_or("size overflow while converting KiB to bytes")?;
+    let bytes = value.checked_mul(1024).ok_or("size overflow while converting KiB to bytes")?;
     Ok(usize::try_from(bytes)?)
 }
 
-fn parse_buffer_limit(
-    size_kib: Option<u64>,
-    messages: Option<usize>,
-) -> Result<BufferLimit, Box<dyn std::error::Error>> {
+fn parse_buffer_limit(size_kib: Option<u64>, messages: Option<usize>) -> Result<BufferLimit, Box<dyn std::error::Error>> {
     match (size_kib, messages) {
         (Some(_), Some(_)) => Err("buffer.size and buffer.messages conflict; set only one".into()),
         (Some(size_kib), None) => Ok(BufferLimit::Bytes(kib_to_bytes(size_kib)?)),

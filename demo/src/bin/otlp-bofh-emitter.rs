@@ -5,10 +5,7 @@ use std::time::Duration;
 
 use prost::Message;
 
-use otlp_demo::{
-    build_excuse_request, build_excuse_request_for_service_with_severity,
-    build_message_request_for_service, format_batch_plain,
-};
+use otlp_demo::{build_excuse_request, build_excuse_request_for_service_with_severity, build_message_request_for_service, format_batch_plain};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
@@ -24,17 +21,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--count" => {
-                count = Some(
-                    args.next()
-                        .ok_or("missing value for --count")?
-                        .parse::<u64>()?,
-                );
+                count = Some(args.next().ok_or("missing value for --count")?.parse::<u64>()?);
             }
             "--interval-ms" => {
-                interval_ms = args
-                    .next()
-                    .ok_or("missing value for --interval-ms")?
-                    .parse::<u64>()?;
+                interval_ms = args.next().ok_or("missing value for --interval-ms")?.parse::<u64>()?;
             }
             "--once" => {
                 count = Some(1);
@@ -54,7 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--server-name" => {
                 server_name = Some(args.next().ok_or("missing value for --server-name")?);
             }
-            value if value.starts_with("--") => return Err(format!("unknown argument: {value}").into()),
+            value if value.starts_with("--") => {
+                return Err(format!("unknown argument: {value}").into());
+            }
             value => addr = value.to_string(),
         }
     }
@@ -74,12 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None => build_excuse_request_for_service_with_severity(sequence, &service_name, &severity),
         };
         print!("{}", format_batch_plain(&request));
-        match otlp_demo::post_raw_otlp_http(
-            &addr,
-            &request.encode_to_vec(),
-            ca_file.as_deref(),
-            server_name.as_deref(),
-        ) {
+        match otlp_demo::post_raw_otlp_http(&addr, &request.encode_to_vec(), ca_file.as_deref(), server_name.as_deref()) {
             Ok(()) => eprintln!("sent OTLP log batch #{sequence} to {display_target}"),
             Err(err) => eprintln!("send failed for batch #{sequence}: {err}"),
         }

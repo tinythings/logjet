@@ -90,18 +90,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "--path" => prune_path = Some(PathBuf::from(args.next().ok_or("missing value for --path")?)),
                         "--name" => prune_name = Some(args.next().ok_or("missing value for --name")?),
                         "--keep-files" => {
-                            prune_keep_files = Some(
-                                args.next()
-                                    .ok_or("missing value for --keep-files")?
-                                    .parse::<usize>()?,
-                            );
+                            prune_keep_files = Some(args.next().ok_or("missing value for --keep-files")?.parse::<usize>()?);
                         }
                         "--keep-bytes" => {
-                            prune_keep_bytes = Some(
-                                args.next()
-                                    .ok_or("missing value for --keep-bytes")?
-                                    .parse::<u64>()?,
-                            );
+                            prune_keep_bytes = Some(args.next().ok_or("missing value for --keep-bytes")?.parse::<u64>()?);
                         }
                         "--dry-run" => prune_dry_run = true,
                         _ => return Err(format!("unknown prune argument: {flag}").into()),
@@ -126,10 +118,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Some("serve") | None => {
             let config = Config::load(&config_path)?;
-            serve(DaemonConfig {
-                config,
-                config_path,
-            })?;
+            serve(DaemonConfig { config, config_path })?;
         }
         Some("inspect") => {
             let path = PathBuf::from(command_arg.ok_or("missing path")?);
@@ -150,20 +139,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             let files = validate_replay_path(&path, &name)?;
             if files.is_empty() {
-                return Err(format!(
-                    "no replay files found for name '{}' in {}",
-                    name,
-                    path.display()
-                )
-                .into());
+                return Err(format!("no replay files found for name '{}' in {}", name, path.display()).into());
             }
 
-            eprintln!(
-                "replaying {} file(s) from {} to {}",
-                files.len(),
-                path.display(),
-                collector.url
-            );
+            eprintln!("replaying {} file(s) from {} to {}", files.len(), path.display(), collector.url);
             let sent = replay_path_to_otlp_http(&path, &name, &collector)?;
             eprintln!("replayed {sent} OTLP log batch record(s)");
         }
@@ -174,23 +153,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 None => return Err("missing bridge source; set --source or upstream.replay".into()),
             };
 
-            eprintln!(
-                "bridging from {} to {}",
-                source,
-                config.collector.url
-            );
+            eprintln!("bridging from {} to {}", source, config.collector.url);
             bridge_wire_to_otlp_http(&source, &config.collector, &config.backpressure, &config.upstream, &config.tls)?;
         }
         Some("prune") => {
             let path = prune_path.ok_or("missing --path")?;
             let name = prune_name.ok_or("missing --name")?;
-            let removed = prune_named_segments(
-                &path,
-                &name,
-                prune_keep_files,
-                prune_keep_bytes,
-                prune_dry_run,
-            )?;
+            let removed = prune_named_segments(&path, &name, prune_keep_files, prune_keep_bytes, prune_dry_run)?;
             for entry in &removed {
                 if prune_dry_run {
                     println!("would_remove={}", entry.display());

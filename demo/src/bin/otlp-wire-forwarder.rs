@@ -7,12 +7,8 @@ use otlp_demo::post_raw_otlp_http;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
-    let source = args
-        .next()
-        .unwrap_or_else(|| "127.0.0.1:7002".to_string());
-    let dest = args
-        .next()
-        .unwrap_or_else(|| "127.0.0.1:4320".to_string());
+    let source = args.next().unwrap_or_else(|| "127.0.0.1:7002".to_string());
+    let dest = args.next().unwrap_or_else(|| "127.0.0.1:4320".to_string());
     let max_records = match args.next() {
         Some(value) => Some(value.parse::<u64>()?),
         None => None,
@@ -59,10 +55,7 @@ fn read_replay_hello(stream: &mut TcpStream) -> io::Result<()> {
     let mut header = [0u8; 32];
     stream.read_exact(&mut header)?;
     if header[0] != 1 {
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!("unsupported replay hello version: {}", header[0]),
-        ));
+        return Err(io::Error::new(ErrorKind::InvalidData, format!("unsupported replay hello version: {}", header[0])));
     }
 
     Ok(())
@@ -88,18 +81,14 @@ fn read_wire_record<R: Read>(reader: &mut R) -> io::Result<Option<WireRecord>> {
 
     let mut header = [0u8; 24];
     reader.read_exact(&mut header)?;
-    let record_type = RecordType::from_u8(header[1])
-        .map_err(|err| io::Error::new(ErrorKind::InvalidData, err.to_string()))?;
-    let payload_len =
-        u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
+    let record_type = RecordType::from_u8(header[1]).map_err(|err| io::Error::new(ErrorKind::InvalidData, err.to_string()))?;
+    let payload_len = u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
     let mut payload = vec![0u8; payload_len];
     reader.read_exact(&mut payload)?;
 
     Ok(Some(WireRecord {
         record_type,
-        seq: u64::from_le_bytes([
-            header[4], header[5], header[6], header[7], header[8], header[9], header[10], header[11],
-        ]),
+        seq: u64::from_le_bytes([header[4], header[5], header[6], header[7], header[8], header[9], header[10], header[11]]),
         payload,
     }))
 }

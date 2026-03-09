@@ -1,8 +1,14 @@
-use clap::{ArgGroup, Args, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, FromArgMatches, Parser, ValueEnum};
 use logjet::{OwnedRecord, RecordType};
 use regex::bytes::{Regex, RegexBuilder};
 
 use crate::error::{Error, Result};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterMode {
+    Strings,
+    Regex,
+}
 
 #[derive(Debug, Clone, Args, Default)]
 #[command(group(
@@ -75,6 +81,49 @@ impl PredicateArgs {
     }
 }
 
+#[derive(Debug, Parser)]
+struct PredicateCli {
+    #[command(flatten)]
+    predicate: PredicateArgs,
+}
+
+pub fn parse_filter_query(query: &str, mode: FilterMode) -> Result<RecordPredicate> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return PredicateArgs::default().build();
+    }
+
+    // Bare text in the TUI stays ergonomic and depends on the active filter mode.
+    if !trimmed.starts_with('-') {
+        return match mode {
+            FilterMode::Strings => PredicateArgs {
+                fixed_string: Some(trimmed.to_string()),
+                ..PredicateArgs::default()
+            }
+            .build(),
+            FilterMode::Regex => PredicateArgs {
+                grep: Some(trimmed.to_string()),
+                ..PredicateArgs::default()
+            }
+            .build(),
+        };
+    }
+
+    let argv = shlex::split(trimmed)
+        .ok_or_else(|| Error::Usage("invalid filter expression: unterminated quotes".to_string()))?;
+    let mut full_argv = Vec::with_capacity(argv.len() + 1);
+    full_argv.push("view-filter".to_string());
+    full_argv.extend(argv);
+
+    let mut command = PredicateCli::command();
+    let mut matches = command
+        .try_get_matches_from_mut(full_argv)
+        .map_err(|err| Error::Usage(err.to_string()))?;
+    let parsed =
+        PredicateCli::from_arg_matches_mut(&mut matches).map_err(|err| Error::Usage(err.to_string()))?;
+    parsed.predicate.build()
+}
+
 impl RecordPredicate {
     pub fn matches(&self, record: &OwnedRecord) -> bool {
         if let Some(expected) = self.record_type && record.record_type != expected {
@@ -138,7 +187,7 @@ impl From<RecordKind> for RecordType {
 
 #[cfg(test)]
 mod tests {
-    use super::{PredicateArgs, RecordKind};
+    use super::{FilterMode, PredicateArgs, RecordKind, parse_filter_query};
     use logjet::{OwnedRecord, RecordType};
 
     fn sample_record(payload: &[u8]) -> OwnedRecord {
@@ -226,5 +275,31 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("invalid payload matcher"));
+    }
+
+    #[test]
+    fn parse_filter_query_treats_bare_text_as_fixed_string() {
+        let predicate = parse_filter_query("hello world", FilterMode::Strings).unwrap();
+        assert!(predicate.matches(&sample_record(b"say hello world now")));
+        assert!(!predicate.matches(&sample_record(b"say hello now")));
+    }
+
+    #[test]
+    fn parse_filter_query_supports_cli_style_flags() {
+        let predicate = parse_filter_query(r#"--type logs -e "error|panic" -i"#, FilterMode::Strings).unwrap();
+        assert!(predicate.matches(&sample_record(b"PANIC happened")));
+        assert!(!predicate.matches(&OwnedRecord {
+            record_type: RecordType::Metrics,
+            seq: 42,
+            ts_unix_ns: 1_700_000_000,
+            payload: b"panic".to_vec(),
+        }));
+    }
+
+    #[test]
+    fn parse_filter_query_uses_regex_mode_for_bare_text() {
+        let predicate = parse_filter_query("reb.*", FilterMode::Regex).unwrap();
+        assert!(predicate.matches(&sample_record(b"rebooted node")));
+        assert!(!predicate.matches(&sample_record(b"stopped node")));
     }
 }

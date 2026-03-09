@@ -14,8 +14,8 @@ pub mod writer;
 pub use codec::Codec;
 pub use error::{Error, Result};
 pub use format::{
-    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, DEFAULT_BLOCK_TARGET_SIZE,
-    DEFAULT_MAX_BLOCK_SIZE, DEFAULT_SYNC_MARKER, FORMAT_VERSION, BlockHeader, BlockHeaderExt,
+    BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BLOCK_HEADER_TOTAL_LEN, BlockHeader, BlockHeaderExt, DEFAULT_BLOCK_TARGET_SIZE,
+    DEFAULT_MAX_BLOCK_SIZE, DEFAULT_SYNC_MARKER, FORMAT_VERSION,
 };
 pub use reader::{LogjetReader, ReaderConfig, ReaderStats};
 pub use record::{OwnedRecord, Record, RecordType};

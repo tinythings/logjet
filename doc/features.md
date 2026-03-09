@@ -79,7 +79,7 @@ Current behaviour:
 - clients can request `keep` or `drain`
 - each client keeps its own replay cursor
 - replays retained data in sequence order
-- switches from retained backlog to live records through direct wakeups from ingest
+- hands off from retained backlog to live records through direct ingest wakeups without returning to storage polling
 - supports multiple clients in a basic way
 - can cap concurrent replay clients through `replay.max-clients`
 - can cap blocked replay socket I/O through `replay.client-timeout-ms`

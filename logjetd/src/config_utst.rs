@@ -54,10 +54,7 @@ fn empty_config_file_uses_defaults() {
 
 #[test]
 fn buffer_size_and_messages_conflict() {
-    let path = write_temp_config(
-        "buffer-conflict",
-        "output: buffer\nbuffer.size: 10\nbuffer.messages: 5\n",
-    );
+    let path = write_temp_config("buffer-conflict", "output: buffer\nbuffer.size: 10\nbuffer.messages: 5\n");
     let err = Config::load(&path).unwrap_err().to_string();
     assert!(err.contains("buffer.size and buffer.messages conflict"));
     fs::remove_file(path).unwrap();
@@ -127,10 +124,7 @@ fn invalid_ingest_protocol_is_rejected() {
 
 #[test]
 fn invalid_ingest_priority_floor_is_rejected() {
-    let path = write_temp_config(
-        "bad-ingest-priority-floor",
-        "ingest.priority-severity-at-least: nope\n",
-    );
+    let path = write_temp_config("bad-ingest-priority-floor", "ingest.priority-severity-at-least: nope\n");
     let err = Config::load(&path).unwrap_err().to_string();
     assert!(err.contains("invalid ingest.priority-severity-at-least"));
     fs::remove_file(path).unwrap();
@@ -151,10 +145,7 @@ fn https_collector_fields_parse_without_file_mode() {
 
 #[test]
 fn upstream_mode_drain_parses() {
-    let path = write_temp_config(
-        "upstream-drain",
-        "upstream.mode: drain\nupstream.replay: 127.0.0.1:7002\nupstream.state-file: ./bridge.state\n",
-    );
+    let path = write_temp_config("upstream-drain", "upstream.mode: drain\nupstream.replay: 127.0.0.1:7002\nupstream.state-file: ./bridge.state\n");
     let config = Config::load(&path).unwrap();
     assert_eq!(config.upstream.mode, UpstreamMode::Drain);
     assert_eq!(config.upstream.state_file.as_deref(), Some(Path::new("./bridge.state")));
@@ -221,10 +212,7 @@ fn invalid_ingest_limit_values_are_rejected() {
     assert!(replay_timeout_err.contains("replay.client-timeout-ms"));
     fs::remove_file(replay_timeout_path).unwrap();
 
-    let backpressure_buffer_path = write_temp_config(
-        "bad-backpressure-buffer",
-        "backpressure.max-buffered-records: 0\n",
-    );
+    let backpressure_buffer_path = write_temp_config("bad-backpressure-buffer", "backpressure.max-buffered-records: 0\n");
     let backpressure_buffer_err = Config::load(&backpressure_buffer_path).unwrap_err().to_string();
     assert!(backpressure_buffer_err.contains("backpressure.max-buffered-records"));
     fs::remove_file(backpressure_buffer_path).unwrap();
@@ -237,9 +225,6 @@ fn write_temp_config(label: &str, body: &str) -> PathBuf {
 }
 
 fn unique_temp_path(label: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     std::env::temp_dir().join(format!("logjetd-{label}-{nanos}-{}.yaml", std::process::id()))
 }

@@ -34,7 +34,7 @@ Documented command set:
 - `count`
 - `filter`
 - `stats`
-- `cat`
+- `view`
 - `split`
 - `join`
 
@@ -42,7 +42,7 @@ Current implementation status for release `0.1`:
 
 - implemented first: `count`
 - implemented first: `filter`
-- planned after that: `stats`, `cat`, `split`, `join`
+- planned after that: `stats`, `split`, `join`
 
 The CLI may already expose planned command names, but release `0.1` should only
 promise the commands that are actually complete and tested.
@@ -124,14 +124,17 @@ Intended summary fields:
 - timestamp range
 - optional per-type or per-field summaries
 
-## `ljx cat`
+## `ljx view`
 
-Render records in a human-readable form suitable for terminal inspection.
+Browse filtered records in an interactive terminal UI.
 
-Open questions:
+Current shape:
 
-- whether payload bytes should default to hex, escaped text, or a compact mixed format
-- how much payload to print before truncating
+- search field at the top, applied with `Enter`
+- matching records on the left in a one-line-per-record list
+- dynamic details for the selected record on the right
+- `Enter` opens a full-record popup, `Esc` closes it
+- bounded-memory scan that spools matched records to a temp file instead of loading the whole input
 
 ## `ljx split`
 

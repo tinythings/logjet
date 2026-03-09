@@ -33,10 +33,14 @@ It also contains scenario demos under subdirectories:
   - five emitters running continuously into one `logjetd` and one live collector
 - [`multi-client-behaviour`](./multi-client-behaviour)
   - one replay client stalls while another keeps flowing
+- [`replay-handoff`](./replay-handoff)
+  - a late replay client drains retained backlog and then continues live on the same connection
 - [`file-replay`](./file-replay)
   - replay stored `.logjet` files into a collector
 - [`file-tooling`](./file-tooling)
   - inspect rotated file segments and prune archived files deliberately
+- [`tui-view`](./tui-view)
+  - generate 1000 randomized log entries and open `ljx view` on the result
 - [`bridge-resume`](./bridge-resume)
   - consumer restart resumes from persisted sequence state without replaying from zero
 - [`upstream-reset-resume`](./upstream-reset-resume)

@@ -6,9 +6,7 @@ use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
-    let source = args
-        .next()
-        .unwrap_or_else(|| "127.0.0.1:7002".to_string());
+    let source = args.next().unwrap_or_else(|| "127.0.0.1:7002".to_string());
     let stall_ms = match args.next() {
         Some(value) => value.parse::<u64>()?,
         None => 10_000,
@@ -16,10 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut stream = TcpStream::connect(&source)?;
     let hello = read_replay_hello(&mut stream)?;
-    eprintln!(
-        "stall client connected to {source}; stream_id={} first_seq={} last_seq={}",
-        hello.stream_id, hello.first_seq, hello.last_seq
-    );
+    eprintln!("stall client connected to {source}; stream_id={} first_seq={} last_seq={}", hello.stream_id, hello.first_seq, hello.last_seq);
     write_replay_request(&mut stream, 0, true)?;
 
     let Some(record) = read_wire_record(&mut stream)? else {
@@ -27,10 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
 
-    eprintln!(
-        "stall client received seq={} and will now stop acknowledging for {} ms",
-        record.seq, stall_ms
-    );
+    eprintln!("stall client received seq={} and will now stop acknowledging for {} ms", record.seq, stall_ms);
     thread::sleep(Duration::from_millis(stall_ms));
 
     let mut extra = [0u8; 1];
@@ -68,22 +60,13 @@ fn read_replay_hello(stream: &mut TcpStream) -> io::Result<ReplayHello> {
     let mut header = [0u8; 32];
     stream.read_exact(&mut header)?;
     if header[0] != 1 {
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!("unsupported replay hello version: {}", header[0]),
-        ));
+        return Err(io::Error::new(ErrorKind::InvalidData, format!("unsupported replay hello version: {}", header[0])));
     }
 
     Ok(ReplayHello {
-        stream_id: u64::from_le_bytes([
-            header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15],
-        ]),
-        first_seq: u64::from_le_bytes([
-            header[16], header[17], header[18], header[19], header[20], header[21], header[22], header[23],
-        ]),
-        last_seq: u64::from_le_bytes([
-            header[24], header[25], header[26], header[27], header[28], header[29], header[30], header[31],
-        ]),
+        stream_id: u64::from_le_bytes([header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15]]),
+        first_seq: u64::from_le_bytes([header[16], header[17], header[18], header[19], header[20], header[21], header[22], header[23]]),
+        last_seq: u64::from_le_bytes([header[24], header[25], header[26], header[27], header[28], header[29], header[30], header[31]]),
     })
 }
 
@@ -105,14 +88,9 @@ fn read_wire_record<R: Read>(reader: &mut R) -> io::Result<Option<WireRecord>> {
 
     let mut header = [0u8; 24];
     reader.read_exact(&mut header)?;
-    let payload_len =
-        u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
+    let payload_len = u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
     let mut payload = vec![0u8; payload_len];
     reader.read_exact(&mut payload)?;
 
-    Ok(Some(WireRecord {
-        seq: u64::from_le_bytes([
-            header[4], header[5], header[6], header[7], header[8], header[9], header[10], header[11],
-        ]),
-    }))
+    Ok(Some(WireRecord { seq: u64::from_le_bytes([header[4], header[5], header[6], header[7], header[8], header[9], header[10], header[11]]) }))
 }
