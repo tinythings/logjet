@@ -87,7 +87,7 @@ logjetd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - expects a small replay request carrying `from_seq`
 - replay requests can ask to `keep` or `drain`
 - replays retained records in sequence order
-- switches from retained backlog to live records through direct wakeups from ingest
+- uses a per-client replay cursor so retained backlog can hand off directly into live wakeups from ingest
 - can optionally wrap the replay transport in TLS
 
 Replay is strictly sequential today. Resume exists per connection via `from_seq`.
