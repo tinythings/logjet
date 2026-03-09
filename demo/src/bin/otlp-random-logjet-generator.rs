@@ -15,16 +15,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(2);
         }
     };
-    let count = args
-        .next()
-        .map(|value| value.parse::<u64>())
-        .transpose()?
-        .unwrap_or(1000);
-    let seed = args
-        .next()
-        .map(|value| value.parse::<u64>())
-        .transpose()?
-        .unwrap_or(0x5eed_1234_u64);
+    let count = args.next().map(|value| value.parse::<u64>()).transpose()?.unwrap_or(1000);
+    let seed = args.next().map(|value| value.parse::<u64>()).transpose()?.unwrap_or(0x5eed_1234_u64);
 
     let file = File::create(&output)?;
     let writer = BufWriter::new(file);
@@ -45,14 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-const SERVICES: &[&str] = &[
-    "bofh-emitter",
-    "kill-bill",
-    "garage-rig",
-    "bridge-alpha",
-    "night-shift",
-    "coffee-daemon",
-];
+const SERVICES: &[&str] = &["bofh-emitter", "kill-bill", "garage-rig", "bridge-alpha", "night-shift", "coffee-daemon"];
 
 const LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
@@ -111,10 +96,7 @@ impl Lcg {
     }
 
     fn next(&mut self) -> u64 {
-        self.state = self
-            .state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
+        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
         self.state
     }
 

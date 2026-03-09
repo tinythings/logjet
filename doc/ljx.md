@@ -2,10 +2,10 @@
 
 `ljx` is the offline command-line toolbox for `.logjet` files.
 
-It is separate from `logjetd` and must stay separate in purpose:
+It is separate from `ljd` and must stay separate in purpose:
 
 - `logjet` is the Rust library and file format
-- `logjetd` is the daemon for ingest, transport, replay, and spool management
+- `ljd` is the daemon for ingest, transport, replay, and spool management
 - `ljx` is the standalone file tool for inspection and transformation
 
 `ljx` does not control the daemon and does not depend on daemon runtime state.

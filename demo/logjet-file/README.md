@@ -1,6 +1,6 @@
 # logjet File Demo
 
-This demo wires the OTLP emitter into `logjetd`, with `logjetd` storing
+This demo wires the OTLP emitter into `ljd`, with `ljd` storing
 raw OTLP protobuf batches into `.logjet` files in this directory.
 
 Emitter emits classic BOFH excuses as log messages. :-)
@@ -15,7 +15,7 @@ make demo
 
 That gives you:
 
-- `target/debug/logjetd`
+- `target/debug/ljd`
 - `target/debug/otlp-bofh-emitter`
 
 ## Run
@@ -28,7 +28,7 @@ From this directory:
 
 The script:
 
-1. starts `logjetd` with the local config file
+1. starts `ljd` with the local config file
 2. points it at this directory for append-only `.logjet` output
 3. starts `otlp-bofh-emitter`
 4. keeps the emitter in the foreground
@@ -45,7 +45,7 @@ etc.
 While the demo is running or after stopping it:
 
 ```bash
-../../target/debug/logjetd inspect .
+../../target/debug/ljd inspect .
 ```
 
 ## Notes

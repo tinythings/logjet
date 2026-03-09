@@ -1,6 +1,6 @@
 # logjet gRPC File Demo
 
-This demo wires the OTLP gRPC emitter into `logjetd`, with `logjetd` storing
+This demo wires the OTLP gRPC emitter into `ljd`, with `ljd` storing
 raw OTLP protobuf batches into `.logjet` files in this directory.
 
 Emitter emits classic BOFH excuses as log messages over OTLP/gRPC.
@@ -15,7 +15,7 @@ make demo
 
 That gives you:
 
-- `target/debug/logjetd`
+- `target/debug/ljd`
 - `target/debug/otlp-bofh-grpc-emitter`
 
 ## Run
@@ -28,7 +28,7 @@ From this directory:
 
 The script:
 
-1. starts `logjetd` with the local config file
+1. starts `ljd` with the local config file
 2. points it at `./logs` for append-only `.logjet` output
 3. starts `otlp-bofh-grpc-emitter`
 4. keeps the emitter in the foreground
@@ -43,7 +43,7 @@ Generated files appear under `./logs`, for example:
 While the demo is running or after stopping it:
 
 ```bash
-../../target/debug/logjetd inspect ./logs
+../../target/debug/ljd inspect ./logs
 ```
 
 ## Notes

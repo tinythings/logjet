@@ -6,9 +6,9 @@ the same time.
 It uses:
 
 - five OTLP/HTTP emitters running continuously
-- one `logjetd`
+- one `ljd`
 - one OTLP collector mockup
-- one wire forwarder from the `logjetd` replay listener into the collector
+- one wire forwarder from the `ljd` replay listener into the collector
 
 Each emitter identifies itself through `service.name`:
 
@@ -38,7 +38,7 @@ Terminal 1, from this directory:
 
 This starts:
 
-1. starts `logjetd`
+1. starts `ljd`
 2. starts five continuous emitters with different service names
 
 Terminal 2, from this directory:
@@ -68,6 +68,6 @@ Stop it with `Ctrl+C`.
 
 This demonstrates:
 
-- several emitters can connect to one `logjetd` at the same time
-- `logjetd` merges their records into one retained stream
+- several emitters can connect to one `ljd` at the same time
+- `ljd` merges their records into one retained stream
 - one downstream consumer can watch that mixed stream live

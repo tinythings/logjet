@@ -35,7 +35,7 @@ From this directory:
 
 This starts:
 
-1. appliance-side `logjetd`
+1. appliance-side `ljd`
 2. a fast continuous emitter
 
 The emitter sends every 200 ms.
@@ -118,7 +118,7 @@ Expected result:
 - the collector still prints slowly
 - the bridge keeps forwarding whatever fits into the three-record queue
 - newer records are dropped once the queue is full
-- terminal output from `logjetd` shows dropped sequence numbers
+- terminal output from `ljd` shows dropped sequence numbers
 
 ## Point of the Demo
 

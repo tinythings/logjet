@@ -18,7 +18,7 @@ make demo
 
 That gives you:
 
-- `target/debug/logjetd`
+- `target/debug/ljd`
 - `target/debug/otlp-bofh-emitter`
 - `target/debug/otlp-demo-collector`
 - `target/debug/otlp-wire-forwarder`
@@ -33,7 +33,7 @@ From this directory:
 
 The script:
 
-1. starts `logjetd` in memory mode with:
+1. starts `ljd` in memory mode with:
    - `buffer.keep: 3`
    - `buffer.messages: 10`
 2. emits 10 startup messages:
@@ -42,7 +42,7 @@ The script:
    - `this message #10 must be kept`
 3. emits 100 BOFH flood messages with no delay
 4. starts the OTLP collector mockup
-5. connects a wire forwarder to `logjetd` replay
+5. connects a wire forwarder to `ljd` replay
 6. forwards exactly 13 messages to the collector
 
 Expected result:
@@ -96,6 +96,6 @@ Total retained and forwarded:
 
 Why the config says `buffer.messages: 12`:
 
-- in `logjetd`, `buffer.messages` applies only to the rotating tail
+- in `ljd`, `buffer.messages` applies only to the rotating tail
 - the first 3 kept messages are outside that limit
 - so `3 kept + 12 tail = 15 total visible messages`

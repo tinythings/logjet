@@ -3,7 +3,7 @@
 This demo shows secure OTLP features in one path:
 
 ```text
-OA -- HTTPS OTLP --> logjetd -- HTTPS OTLP --> collector
+OA -- HTTPS OTLP --> ljd -- HTTPS OTLP --> collector
 ```
 
 It demonstrates:
@@ -35,17 +35,17 @@ From this directory:
 The script starts:
 
 1. a demo HTTPS collector on `127.0.0.1:4321`
-2. `logjetd` with:
+2. `ljd` with:
    - HTTPS OTLP ingest on `127.0.0.1:4319`
    - HTTPS collector export to the collector
 3. removes old generated `secure*.logjet` demo files from `./logs`
-4. the BOFH emitter, sending OTLP/HTTP over HTTPS into `logjetd`
-5. `logjetd replay` blasting the stored `.logjet` file into the HTTPS collector
+4. the BOFH emitter, sending OTLP/HTTP over HTTPS into `ljd`
+5. `ljd replay` blasting the stored `.logjet` file into the HTTPS collector
 
 Expected result:
 
 - the emitter prints plain BOFH log batches it sends over HTTPS
-- `logjetd` stores them in `./logs`
+- `ljd` stores them in `./logs`
 - the collector prints the same 5 records after replay
 
 ## Certificates

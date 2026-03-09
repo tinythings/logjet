@@ -1,6 +1,6 @@
 # Ingest Guardrails Demo
 
-This demo shows the two ingest guardrails that protect `logjetd` on weak
+This demo shows the two ingest guardrails that protect `ljd` on weak
 appliances:
 
 - `ingest.max-batch-bytes`
@@ -36,7 +36,7 @@ ingest.max-batch-bytes: 300
 
 What happens:
 
-1. `logjetd` starts with a tiny OTLP batch limit.
+1. `ljd` starts with a tiny OTLP batch limit.
 2. A small OTLP batch is sent and accepted.
 3. A large OTLP batch is sent and rejected.
 
@@ -76,14 +76,14 @@ Expected result:
 
 ## Point of the Demo
 
-This shows that `logjetd` can now reject bad overload patterns early:
+This shows that `ljd` can now reject bad overload patterns early:
 
 - too large
 - too many at once
 
 The concurrent-client part uses plain TCP. That means the refused client can
 still complete `connect()` and may even get its first write into the local
-socket buffer before `logjetd` closes the connection. The important signal is
+socket buffer before `ljd` closes the connection. The important signal is
 that the connection does not stay alive for the second record.
 
 That is only the first overload-control layer. It does not yet rate-limit,

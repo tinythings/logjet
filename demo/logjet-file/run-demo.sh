@@ -3,12 +3,12 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET_DIR="$SCRIPT_DIR/../../target/debug"
-LOGJETD="$TARGET_DIR/logjetd"
+LJD="$TARGET_DIR/ljd"
 EMITTER="$TARGET_DIR/otlp-bofh-emitter"
 CONFIG="$SCRIPT_DIR/logjetd.conf"
 
-if [ ! -x "$LOGJETD" ]; then
-    echo "missing $LOGJETD"
+if [ ! -x "$LJD" ]; then
+    echo "missing $LJD"
     echo "build it first with: make demo"
     exit 1
 fi
@@ -21,12 +21,12 @@ fi
 
 cd "$SCRIPT_DIR"
 
-echo "starting logjetd with config $CONFIG"
-"$LOGJETD" --config "$CONFIG" &
-LOGJETD_PID=$!
+echo "starting ljd with config $CONFIG"
+"$LJD" --config "$CONFIG" &
+LJD_PID=$!
 
 cleanup() {
-    kill "$LOGJETD_PID" 2>/dev/null || true
+    kill "$LJD_PID" 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM
