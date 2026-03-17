@@ -35,6 +35,8 @@ It also contains scenario demos under subdirectories:
   - one replay client stalls while another keeps flowing
 - [`replay-handoff`](./replay-handoff)
   - a late replay client drains retained backlog and then continues live on the same connection
+- [`cpp-shared-lib`](./cpp-shared-lib)
+  - a C++ process loads `liblogjet.so`, sends OTLP logs into `ljd`, and opens the result in `ljx view`
 - [`file-replay`](./file-replay)
   - replay stored `.logjet` files into a collector
 - [`file-tooling`](./file-tooling)
