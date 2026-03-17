@@ -33,6 +33,7 @@ const SUMMARY_CACHE_LIMIT: usize = 256;
 const DETAIL_PREVIEW_BYTES: usize = 1024;
 const SCAN_BATCH_SIZE: usize = 128;
 const TICK_RATE: Duration = Duration::from_millis(100);
+const MODAL_ATTR_ENTRY_LIMIT_PER_KIND: usize = 32;
 
 pub fn run(args: ViewArgs) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -1028,6 +1029,8 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     let mut span_ids = 0usize;
     let mut resource_attr_entries = Vec::new();
     let mut record_attr_entries = Vec::new();
+    let mut resource_attr_omitted = 0usize;
+    let mut record_attr_omitted = 0usize;
 
     for resource_logs in &batch.resource_logs {
         if let Some(resource) = &resource_logs.resource {
@@ -1040,7 +1043,13 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                 {
                     service_names.push(service.clone());
                 }
-                resource_attr_entries.push(("resource".to_string(), attr.key.clone(), format_any_value(attr.value.as_ref())));
+                push_modal_attribute_entry(
+                    &mut resource_attr_entries,
+                    &mut resource_attr_omitted,
+                    "resource",
+                    &attr.key,
+                    format_any_value(attr.value.as_ref()),
+                );
             }
         }
 
@@ -1066,7 +1075,13 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                     span_ids += 1;
                 }
                 for attr in &record.attributes {
-                    record_attr_entries.push(("record".to_string(), attr.key.clone(), format_any_value(attr.value.as_ref())));
+                    push_modal_attribute_entry(
+                        &mut record_attr_entries,
+                        &mut record_attr_omitted,
+                        "record",
+                        &attr.key,
+                        format_any_value(attr.value.as_ref()),
+                    );
                 }
             }
         }
@@ -1091,8 +1106,14 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     for (kind, key, value) in resource_attr_entries {
         lines.push((format!("{kind}.{key}"), value));
     }
+    if resource_attr_omitted > 0 {
+        lines.push(("resource.attrs.more".to_string(), format!("{resource_attr_omitted} not shown")));
+    }
     for (kind, key, value) in record_attr_entries {
         lines.push((format!("{kind}.{key}"), value));
+    }
+    if record_attr_omitted > 0 {
+        lines.push(("record.attrs.more".to_string(), format!("{record_attr_omitted} not shown")));
     }
     if trace_ids > 0 {
         lines.push(("trace_id".to_string(), format!("{trace_ids} present")));
@@ -1102,6 +1123,14 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     }
 
     lines
+}
+
+fn push_modal_attribute_entry(entries: &mut Vec<(String, String, String)>, omitted: &mut usize, kind: &str, key: &str, value: String) {
+    if entries.len() < MODAL_ATTR_ENTRY_LIMIT_PER_KIND {
+        entries.push((kind.to_string(), key.to_string(), value));
+    } else {
+        *omitted += 1;
+    }
 }
 
 fn modal_info_line(key: &str, value: String, key_width: usize, value_width: usize) -> Line<'static> {
@@ -1404,128 +1433,5 @@ fn create_temp_path() -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{DetailRecord, EntryMeta, extract_otlp_log_message, format_summary, render_modal_info_entries, render_modal_message, text_preview};
-    use logjet::RecordType;
-    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
-    use opentelemetry_proto::tonic::common::v1::any_value::Value;
-    use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
-    use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
-    use opentelemetry_proto::tonic::resource::v1::Resource;
-    use prost::Message;
-
-    #[test]
-    fn text_preview_flattens_newlines() {
-        assert_eq!(text_preview(b"hello\nworld", 32), "hello world");
-    }
-
-    #[test]
-    fn summary_uses_trimmed_single_line_preview() {
-        let detail = DetailRecord {
-            meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 7, ts_unix_ns: 9, payload_len: 13 },
-            payload: b"line one\nline two".to_vec(),
-        };
-        let summary = format_summary(&detail, false);
-        assert_eq!(summary, "line one line two");
-    }
-
-    #[test]
-    fn summary_prefers_decoded_otlp_log_message() {
-        let batch = ExportLogsServiceRequest {
-            resource_logs: vec![ResourceLogs {
-                resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0 }),
-                scope_logs: vec![ScopeLogs {
-                    scope: Some(InstrumentationScope {
-                        name: "test".to_string(),
-                        version: String::new(),
-                        attributes: Vec::new(),
-                        dropped_attributes_count: 0,
-                    }),
-                    log_records: vec![LogRecord {
-                        time_unix_nano: 0,
-                        observed_time_unix_nano: 0,
-                        severity_number: 0,
-                        severity_text: String::new(),
-                        body: Some(AnyValue { value: Some(Value::StringValue("hello from body".to_string())) }),
-                        attributes: Vec::new(),
-                        dropped_attributes_count: 0,
-                        flags: 0,
-                        trace_id: Vec::new(),
-                        span_id: Vec::new(),
-                        event_name: String::new(),
-                    }],
-                    schema_url: String::new(),
-                }],
-                schema_url: String::new(),
-            }],
-        };
-        let payload = batch.encode_to_vec();
-        let detail = DetailRecord {
-            meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64 },
-            payload,
-        };
-
-        assert_eq!(extract_otlp_log_message(&detail.payload).as_deref(), Some("hello from body"));
-        assert_eq!(format_summary(&detail, false), "hello from body");
-    }
-
-    #[test]
-    fn modal_falls_back_to_raw_payload() {
-        let detail = DetailRecord {
-            meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: 5 },
-            payload: b"hello".to_vec(),
-        };
-        let body = render_modal_message(&detail, false);
-        assert_eq!(body, "hello");
-    }
-
-    #[test]
-    fn modal_info_lists_otlp_attributes() {
-        let batch = ExportLogsServiceRequest {
-            resource_logs: vec![ResourceLogs {
-                resource: Some(Resource {
-                    attributes: vec![KeyValue {
-                        key: "service.name".to_string(),
-                        value: Some(AnyValue { value: Some(Value::StringValue("cpp-appliance".to_string())) }),
-                    }],
-                    dropped_attributes_count: 0,
-                }),
-                scope_logs: vec![ScopeLogs {
-                    scope: Some(InstrumentationScope {
-                        name: "liblogjet".to_string(),
-                        version: String::new(),
-                        attributes: Vec::new(),
-                        dropped_attributes_count: 0,
-                    }),
-                    log_records: vec![LogRecord {
-                        time_unix_nano: 0,
-                        observed_time_unix_nano: 0,
-                        severity_number: 0,
-                        severity_text: "INFO".to_string(),
-                        body: Some(AnyValue { value: Some(Value::StringValue("hello from cpp".to_string())) }),
-                        attributes: vec![KeyValue {
-                            key: "character".to_string(),
-                            value: Some(AnyValue { value: Some(Value::StringValue("Bender".to_string())) }),
-                        }],
-                        dropped_attributes_count: 0,
-                        flags: 0,
-                        trace_id: Vec::new(),
-                        span_id: Vec::new(),
-                        event_name: String::new(),
-                    }],
-                    schema_url: String::new(),
-                }],
-                schema_url: String::new(),
-            }],
-        };
-        let payload = batch.encode_to_vec();
-        let detail = DetailRecord {
-            meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64 },
-            payload,
-        };
-
-        let entries = render_modal_info_entries(&detail);
-        assert!(entries.iter().any(|(key, value)| key == "resource.service.name" && value == "cpp-appliance"));
-        assert!(entries.iter().any(|(key, value)| key == "record.character" && value == "Bender"));
-    }
-}
+#[path = "view_ut.rs"]
+mod view_ut;
