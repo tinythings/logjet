@@ -33,7 +33,7 @@ The script:
 1. builds the example C++ logger
 2. starts file-backed `ljd` on `127.0.0.1:4317`
 3. loads `liblogjet.so` through `dlopen`
-4. sends five OTLP log records from C++
+4. sends 25 OTLP log records from C++ by default
 5. opens `ljx view` on the resulting `./logs/cpp-demo.logjet`
 
 ## Notes
