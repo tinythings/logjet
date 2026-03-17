@@ -1,6 +1,7 @@
 # Documentation
 
 - [overview.md](./overview.md): project overview
+- [c-cpp-integration.md](./c-cpp-integration.md): minimal `liblogjet` usage from C and C++
 - [ljx.md](./ljx.md): `ljx` offline CLI scope and command plan
 - [daemon.md](./daemon.md): `ljd` behaviour and current limits
 - [configuration.md](./configuration.md): YAML keys and defaults
