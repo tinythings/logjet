@@ -14,6 +14,7 @@ use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, RecordType, WriterConfig};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::common::v1::AnyValue;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use prost::Message;
 use ratatui::backend::CrosstermBackend;
@@ -1025,6 +1026,8 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     let mut record_attr_count = 0usize;
     let mut trace_ids = 0usize;
     let mut span_ids = 0usize;
+    let mut resource_attr_entries = Vec::new();
+    let mut record_attr_entries = Vec::new();
 
     for resource_logs in &batch.resource_logs {
         if let Some(resource) = &resource_logs.resource {
@@ -1037,6 +1040,7 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                 {
                     service_names.push(service.clone());
                 }
+                resource_attr_entries.push(("resource".to_string(), attr.key.clone(), format_any_value(attr.value.as_ref())));
             }
         }
 
@@ -1061,6 +1065,9 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                 if !record.span_id.is_empty() {
                     span_ids += 1;
                 }
+                for attr in &record.attributes {
+                    record_attr_entries.push(("record".to_string(), attr.key.clone(), format_any_value(attr.value.as_ref())));
+                }
             }
         }
     }
@@ -1081,6 +1088,12 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     }
     lines.push(("resource.attrs".to_string(), resource_attr_count.to_string()));
     lines.push(("record.attrs".to_string(), record_attr_count.to_string()));
+    for (kind, key, value) in resource_attr_entries {
+        lines.push((format!("{kind}.{key}"), value));
+    }
+    for (kind, key, value) in record_attr_entries {
+        lines.push((format!("{kind}.{key}"), value));
+    }
     if trace_ids > 0 {
         lines.push(("trace_id".to_string(), format!("{trace_ids} present")));
     }
@@ -1093,10 +1106,78 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
 
 fn modal_info_line(key: &str, value: String, key_width: usize, value_width: usize) -> Line<'static> {
     let value = trim_single_line(&value, value_width);
-    Line::from(vec![
-        Span::styled(format!("{key:<width$}: ", width = key_width), Style::default().fg(Color::Indexed(136))),
-        Span::styled(value, Style::default().fg(Color::Black)),
-    ])
+    let (key_style, value_style) = if is_otlp_attribute_entry(key) {
+        if is_standard_otlp_attribute_entry(key) {
+            (Style::default().fg(Color::Indexed(136)), Style::default().fg(Color::Black))
+        } else {
+            (Style::default().fg(Color::Blue), Style::default().fg(Color::LightBlue))
+        }
+    } else {
+        (Style::default().fg(Color::Indexed(136)), Style::default().fg(Color::Black))
+    };
+    Line::from(vec![Span::styled(format!("{key:<width$}: ", width = key_width), key_style), Span::styled(value, value_style)])
+}
+
+fn format_any_value(value: Option<&AnyValue>) -> String {
+    let Some(value) = value else {
+        return "null".to_string();
+    };
+    match &value.value {
+        Some(Value::StringValue(text)) => text.clone(),
+        Some(Value::BoolValue(flag)) => flag.to_string(),
+        Some(Value::IntValue(number)) => number.to_string(),
+        Some(Value::DoubleValue(number)) => number.to_string(),
+        Some(Value::BytesValue(bytes)) => format!("<{} bytes>", bytes.len()),
+        Some(Value::ArrayValue(array)) => format!("<array:{}>", array.values.len()),
+        Some(Value::KvlistValue(map)) => format!("<map:{}>", map.values.len()),
+        None => "null".to_string(),
+    }
+}
+
+fn is_otlp_attribute_entry(key: &str) -> bool {
+    (key.starts_with("resource.") && key != "resource.attrs") || (key.starts_with("record.") && key != "record.attrs")
+}
+
+fn is_standard_otlp_attribute_entry(key: &str) -> bool {
+    let Some((_, attr_key)) = key.split_once('.') else {
+        return false;
+    };
+
+    const STANDARD_PREFIXES: &[&str] = &[
+        "service.",
+        "telemetry.",
+        "host.",
+        "os.",
+        "process.",
+        "container.",
+        "k8s.",
+        "cloud.",
+        "deployment.",
+        "device.",
+        "faas.",
+        "enduser.",
+        "server.",
+        "client.",
+        "http.",
+        "url.",
+        "network.",
+        "net.",
+        "rpc.",
+        "db.",
+        "messaging.",
+        "exception.",
+        "code.",
+        "thread.",
+        "gen_ai.",
+        "browser.",
+        "user_agent.",
+        "aws.",
+        "gcp.",
+        "azure.",
+        "vcs.",
+    ];
+
+    STANDARD_PREFIXES.iter().any(|prefix| attr_key.starts_with(prefix))
 }
 
 fn footer_sep() -> Span<'static> {
@@ -1324,11 +1405,11 @@ fn create_temp_path() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DetailRecord, EntryMeta, extract_otlp_log_message, format_summary, render_modal_message, text_preview};
+    use super::{DetailRecord, EntryMeta, extract_otlp_log_message, format_summary, render_modal_info_entries, render_modal_message, text_preview};
     use logjet::RecordType;
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use opentelemetry_proto::tonic::common::v1::any_value::Value;
-    use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope};
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
     use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
     use opentelemetry_proto::tonic::resource::v1::Resource;
     use prost::Message;
@@ -1396,5 +1477,55 @@ mod tests {
         };
         let body = render_modal_message(&detail, false);
         assert_eq!(body, "hello");
+    }
+
+    #[test]
+    fn modal_info_lists_otlp_attributes() {
+        let batch = ExportLogsServiceRequest {
+            resource_logs: vec![ResourceLogs {
+                resource: Some(Resource {
+                    attributes: vec![KeyValue {
+                        key: "service.name".to_string(),
+                        value: Some(AnyValue { value: Some(Value::StringValue("cpp-appliance".to_string())) }),
+                    }],
+                    dropped_attributes_count: 0,
+                }),
+                scope_logs: vec![ScopeLogs {
+                    scope: Some(InstrumentationScope {
+                        name: "liblogjet".to_string(),
+                        version: String::new(),
+                        attributes: Vec::new(),
+                        dropped_attributes_count: 0,
+                    }),
+                    log_records: vec![LogRecord {
+                        time_unix_nano: 0,
+                        observed_time_unix_nano: 0,
+                        severity_number: 0,
+                        severity_text: "INFO".to_string(),
+                        body: Some(AnyValue { value: Some(Value::StringValue("hello from cpp".to_string())) }),
+                        attributes: vec![KeyValue {
+                            key: "character".to_string(),
+                            value: Some(AnyValue { value: Some(Value::StringValue("Bender".to_string())) }),
+                        }],
+                        dropped_attributes_count: 0,
+                        flags: 0,
+                        trace_id: Vec::new(),
+                        span_id: Vec::new(),
+                        event_name: String::new(),
+                    }],
+                    schema_url: String::new(),
+                }],
+                schema_url: String::new(),
+            }],
+        };
+        let payload = batch.encode_to_vec();
+        let detail = DetailRecord {
+            meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64 },
+            payload,
+        };
+
+        let entries = render_modal_info_entries(&detail);
+        assert!(entries.iter().any(|(key, value)| key == "resource.service.name" && value == "cpp-appliance"));
+        assert!(entries.iter().any(|(key, value)| key == "record.character" && value == "Bender"));
     }
 }
