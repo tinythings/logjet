@@ -9,8 +9,12 @@
 extern "C" {
 #endif
 
+/* Public C ABI for sending OTLP log records through liblogjet. */
+
+/* Opaque logger handle created by lj_logger_new_http/grpc and freed by lj_logger_free. */
 typedef struct lj_logger lj_logger;
 
+/* Selected OTLP severity_number values for common log levels. */
 enum {
     LJ_SEVERITY_TRACE = 1,
     LJ_SEVERITY_DEBUG = 5,
@@ -32,20 +36,41 @@ typedef struct lj_log_record {
     uint64_t timestamp_unix_ns;
     /* OTel severity_number, for example LJ_SEVERITY_INFO */
     int32_t severity_number;
-    /* OTel severity_text, for example "INFO"; may be NULL */
+    /* OTel severity_text, for example "INFO"; UTF-8, NUL-terminated, may be NULL */
     const char *severity_text;
-    /* OTel body string */
+    /* OTel body string; UTF-8, NUL-terminated, must not be NULL */
     const char *body;
-    /* Arbitrary OTLP LogRecord string attributes */
+    /* Arbitrary OTLP LogRecord string attributes; may be NULL only when attributes_len == 0 */
     const struct lj_attribute *attributes;
+    /* Number of entries in attributes */
     size_t attributes_len;
 } lj_log_record;
 
+/* Returns the liblogjet version string as a static NUL-terminated string. */
 const char *lj_version(void);
+
+/* Returns the calling thread's last liblogjet error message as a static string view. */
 const char *lj_error_message(void);
+
+/* Creates an OTLP/HTTP logger.
+ * endpoint must be UTF-8 and NUL-terminated, using http://host:port[/path] or bare host:port[/path].
+ * https:// is rejected for this constructor. Returns NULL on failure.
+ */
 lj_logger *lj_logger_new_http(const char *endpoint, const char *service_name, uint64_t timeout_ms);
+
+/* Creates an OTLP/gRPC logger.
+ * endpoint must be UTF-8 and NUL-terminated, using host:port or an explicit http/https URL.
+ * Returns NULL on failure.
+ */
 lj_logger *lj_logger_new_grpc(const char *endpoint, const char *service_name, uint64_t timeout_ms);
+
+/* Frees a logger created by lj_logger_new_http or lj_logger_new_grpc. Accepts NULL. */
 void lj_logger_free(lj_logger *logger);
+
+/* Sends one OTLP log record through logger.
+ * logger and record must be valid for the duration of the call.
+ * Returns false on failure; inspect lj_error_message() for details.
+ */
 bool lj_logger_log(lj_logger *logger, const lj_log_record *record);
 
 #ifdef __cplusplus
