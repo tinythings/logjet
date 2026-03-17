@@ -154,6 +154,7 @@ fn replay_batches() -> Result<(), Box<dyn std::error::Error>> {
 ## Notes
 
 - Examples for standalone usage live in [examples](./examples).
+- C and C++ shared-library usage lives in [doc/c-cpp-integration.md](./doc/c-cpp-integration.md).
 - The reader is sequential by design.
 - Compression is per block, not per file.
 - The payload bytes are opaque to `logjet`.
