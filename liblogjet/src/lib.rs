@@ -87,21 +87,29 @@ impl HttpEndpoint {
 
 impl LjLogger {
     fn new_http(endpoint: &str, service_name: &str, timeout_ms: u64) -> io::Result<Self> {
-        let timeout = Duration::from_millis(timeout_ms.max(1));
-        Ok(Self { transport: Transport::Http(HttpEndpoint::parse(endpoint)?), service_name: service_name.to_string(), timeout })
+        Ok(Self {
+            transport: Transport::Http(HttpEndpoint::parse(endpoint)?),
+            service_name: service_name.to_string(),
+            timeout: Duration::from_millis(timeout_ms.max(1)),
+        })
     }
 
     fn new_grpc(endpoint: &str, service_name: &str, timeout_ms: u64) -> io::Result<Self> {
-        let timeout = Duration::from_millis(timeout_ms.max(1));
-        let runtime = Runtime::new().map_err(io::Error::other)?;
-        Ok(Self { transport: Transport::Grpc { endpoint: GrpcEndpoint::parse(endpoint)?, runtime }, service_name: service_name.to_string(), timeout })
+        Ok(Self {
+            transport: Transport::Grpc { endpoint: GrpcEndpoint::parse(endpoint)?, runtime: Runtime::new().map_err(io::Error::other)? },
+            service_name: service_name.to_string(),
+            timeout: Duration::from_millis(timeout_ms.max(1)),
+        })
     }
 
     fn log(&self, record: LogRecordInput) -> io::Result<()> {
-        let batch = build_logs_request(&self.service_name, record, self.transport_name());
         match &self.transport {
-            Transport::Http(endpoint) => post_otlp_http(endpoint, self.timeout, &batch.encode_to_vec()),
-            Transport::Grpc { endpoint, runtime } => runtime.block_on(post_otlp_grpc(endpoint, self.timeout, batch)),
+            Transport::Http(endpoint) => {
+                post_otlp_http(endpoint, self.timeout, &build_logs_request(&self.service_name, record, self.transport_name()).encode_to_vec())
+            }
+            Transport::Grpc { endpoint, runtime } => {
+                runtime.block_on(post_otlp_grpc(endpoint, self.timeout, build_logs_request(&self.service_name, record, self.transport_name())))
+            }
         }
     }
 
@@ -126,25 +134,32 @@ pub extern "C" fn lj_error_message() -> *const c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn lj_logger_new_http(endpoint: *const c_char, service_name: *const c_char, timeout_ms: u64) -> *mut LjLogger {
     ffi_new(|| {
-        let endpoint = required_cstr(endpoint, "endpoint")?;
-        let service_name = required_cstr(service_name, "service_name")?;
-        let logger = LjLogger::new_http(&endpoint, &service_name, timeout_ms)?;
-        Ok(Box::into_raw(Box::new(logger)))
+        Ok(Box::into_raw(Box::new(LjLogger::new_http(
+            &required_cstr(endpoint, "endpoint")?,
+            &required_cstr(service_name, "service_name")?,
+            timeout_ms,
+        )?)))
     })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn lj_logger_new_grpc(endpoint: *const c_char, service_name: *const c_char, timeout_ms: u64) -> *mut LjLogger {
     ffi_new(|| {
-        let endpoint = required_cstr(endpoint, "endpoint")?;
-        let service_name = required_cstr(service_name, "service_name")?;
-        let logger = LjLogger::new_grpc(&endpoint, &service_name, timeout_ms)?;
-        Ok(Box::into_raw(Box::new(logger)))
+        Ok(Box::into_raw(Box::new(LjLogger::new_grpc(
+            &required_cstr(endpoint, "endpoint")?,
+            &required_cstr(service_name, "service_name")?,
+            timeout_ms,
+        )?)))
     })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn lj_logger_free(logger: *mut LjLogger) {
+/// # Safety
+///
+/// `logger` must be either null or a pointer previously returned by
+/// `lj_logger_new_http` or `lj_logger_new_grpc` that has not already been
+/// freed.
+pub unsafe extern "C" fn lj_logger_free(logger: *mut LjLogger) {
     if logger.is_null() {
         return;
     }
@@ -157,7 +172,13 @@ pub extern "C" fn lj_logger_free(logger: *mut LjLogger) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn lj_logger_log(logger: *mut LjLogger, record: *const lj_log_record) -> bool {
+/// # Safety
+///
+/// `logger` must be a valid pointer returned by `lj_logger_new_http` or
+/// `lj_logger_new_grpc`. `record` must be a valid pointer for the duration of
+/// this call, and all nested C strings and attribute pointers referenced by
+/// `record` must also remain valid for the duration of the call.
+pub unsafe extern "C" fn lj_logger_log(logger: *mut LjLogger, record: *const lj_log_record) -> bool {
     ffi_bool(|| {
         if logger.is_null() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "logger must not be null"));
@@ -166,21 +187,13 @@ pub extern "C" fn lj_logger_log(logger: *mut LjLogger, record: *const lj_log_rec
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "record must not be null"));
         }
 
-        // SAFETY: caller guarantees a valid pointer for the duration of this call.
-        let logger = unsafe { &*logger };
-        // SAFETY: caller guarantees a valid pointer for the duration of this call.
-        let record = unsafe { &*record };
-        logger.log(parse_record(record)?)?;
+        // SAFETY: caller guarantees valid pointers for the duration of this call.
+        unsafe { (&*logger).log(parse_record(&*record)?)? };
         Ok(())
     })
 }
 
 fn build_logs_request(service_name: &str, record: LogRecordInput, transport_name: &str) -> ExportLogsServiceRequest {
-    let severity_text = record.severity_text.unwrap_or_else(|| default_severity_text(record.severity_number).to_string());
-
-    let mut attributes = vec![string_attr("liblogjet.transport", transport_name), string_attr("liblogjet.runtime", "cpp-ffi")];
-    attributes.extend(record.attributes.into_iter().map(|(key, value)| string_attr(&key, &value)));
-
     ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
             resource: Some(Resource { attributes: vec![string_attr("service.name", service_name)], dropped_attributes_count: 0 }),
@@ -195,9 +208,12 @@ fn build_logs_request(service_name: &str, record: LogRecordInput, transport_name
                     time_unix_nano: record.timestamp_unix_ns,
                     observed_time_unix_nano: record.timestamp_unix_ns,
                     severity_number: normalized_severity(record.severity_number),
-                    severity_text,
+                    severity_text: record.severity_text.unwrap_or_else(|| default_severity_text(record.severity_number).to_string()),
                     body: Some(AnyValue { value: Some(Value::StringValue(record.body)) }),
-                    attributes,
+                    attributes: std::iter::once(string_attr("liblogjet.transport", transport_name))
+                        .chain(std::iter::once(string_attr("liblogjet.runtime", "cpp-ffi")))
+                        .chain(record.attributes.into_iter().map(|(key, value)| string_attr(&key, &value)))
+                        .collect(),
                     dropped_attributes_count: 0,
                     flags: 0,
                     trace_id: Vec::new(),
@@ -259,23 +275,13 @@ async fn post_otlp_grpc(endpoint: &GrpcEndpoint, timeout: Duration, batch: Expor
 }
 
 fn parse_record(record: &lj_log_record) -> io::Result<LogRecordInput> {
-    let body = required_cstr(record.body, "record.body")?;
-    let severity_text = optional_cstr(record.severity_text, "record.severity_text")?;
-    let mut attributes = Vec::with_capacity(record.attributes_len);
-
-    if record.attributes_len > 0 {
-        if record.attributes.is_null() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "record.attributes is null while attributes_len is non-zero"));
-        }
-
-        // SAFETY: pointer validity is checked above and length is provided by the caller.
-        let slice = unsafe { std::slice::from_raw_parts(record.attributes, record.attributes_len) };
-        for attr in slice {
-            attributes.push((required_cstr(attr.key, "attribute.key")?, required_cstr(attr.value, "attribute.value")?));
-        }
-    }
-
-    Ok(LogRecordInput { timestamp_unix_ns: record.timestamp_unix_ns, severity_number: record.severity_number, severity_text, body, attributes })
+    Ok(LogRecordInput {
+        timestamp_unix_ns: record.timestamp_unix_ns,
+        severity_number: record.severity_number,
+        severity_text: optional_cstr(record.severity_text, "record.severity_text")?,
+        body: required_cstr(record.body, "record.body")?,
+        attributes: parse_attributes(record.attributes, record.attributes_len)?,
+    })
 }
 
 fn required_cstr(ptr: *const c_char, field: &str) -> io::Result<String> {
@@ -293,6 +299,21 @@ fn optional_cstr(ptr: *const c_char, field: &str) -> io::Result<Option<String>> 
         return Ok(None);
     }
     required_cstr(ptr, field).map(Some)
+}
+
+fn parse_attributes(attributes: *const lj_attribute, attributes_len: usize) -> io::Result<Vec<(String, String)>> {
+    if attributes_len == 0 {
+        return Ok(Vec::new());
+    }
+    if attributes.is_null() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "record.attributes is null while attributes_len is non-zero"));
+    }
+
+    // SAFETY: pointer validity is checked above and length is provided by the caller.
+    unsafe { std::slice::from_raw_parts(attributes, attributes_len) }
+        .iter()
+        .map(|attr| Ok((required_cstr(attr.key, "attribute.key")?, required_cstr(attr.value, "attribute.value")?)))
+        .collect()
 }
 
 fn normalized_severity(value: i32) -> i32 {
@@ -430,8 +451,8 @@ mod tests {
             attributes_len: attributes.len(),
         };
 
-        assert!(lj_logger_log(logger, &record));
-        lj_logger_free(logger);
+        assert!(unsafe { lj_logger_log(logger, &record) });
+        unsafe { lj_logger_free(logger) };
 
         let batch = server.join().unwrap();
         let resource = &batch.resource_logs[0].resource.as_ref().unwrap().attributes;
@@ -480,8 +501,8 @@ mod tests {
             attributes_len: attributes.len(),
         };
 
-        assert!(lj_logger_log(logger, &record));
-        lj_logger_free(logger);
+        assert!(unsafe { lj_logger_log(logger, &record) });
+        unsafe { lj_logger_free(logger) };
 
         runtime.block_on(async {
             for _ in 0..50 {
