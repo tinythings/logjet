@@ -1,4 +1,4 @@
-#include "../../liblogjet/include/liblogjet.h"
+#include <liblogjet.h>
 
 #include <chrono>
 #include <cstdint>
