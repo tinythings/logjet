@@ -14,6 +14,7 @@ use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, RecordType, WriterConfig};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::common::v1::AnyValue;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use prost::Message;
 use ratatui::backend::CrosstermBackend;
@@ -32,6 +33,7 @@ const SUMMARY_CACHE_LIMIT: usize = 256;
 const DETAIL_PREVIEW_BYTES: usize = 1024;
 const SCAN_BATCH_SIZE: usize = 128;
 const TICK_RATE: Duration = Duration::from_millis(100);
+const MODAL_ATTR_ENTRY_LIMIT_PER_KIND: usize = 32;
 
 pub fn run(args: ViewArgs) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -1025,6 +1027,10 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     let mut record_attr_count = 0usize;
     let mut trace_ids = 0usize;
     let mut span_ids = 0usize;
+    let mut resource_attr_entries = Vec::new();
+    let mut record_attr_entries = Vec::new();
+    let mut resource_attr_omitted = 0usize;
+    let mut record_attr_omitted = 0usize;
 
     for resource_logs in &batch.resource_logs {
         if let Some(resource) = &resource_logs.resource {
@@ -1037,6 +1043,13 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                 {
                     service_names.push(service.clone());
                 }
+                push_modal_attribute_entry(
+                    &mut resource_attr_entries,
+                    &mut resource_attr_omitted,
+                    "resource",
+                    &attr.key,
+                    format_any_value(attr.value.as_ref()),
+                );
             }
         }
 
@@ -1061,6 +1074,15 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                 if !record.span_id.is_empty() {
                     span_ids += 1;
                 }
+                for attr in &record.attributes {
+                    push_modal_attribute_entry(
+                        &mut record_attr_entries,
+                        &mut record_attr_omitted,
+                        "record",
+                        &attr.key,
+                        format_any_value(attr.value.as_ref()),
+                    );
+                }
             }
         }
     }
@@ -1081,6 +1103,18 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     }
     lines.push(("resource.attrs".to_string(), resource_attr_count.to_string()));
     lines.push(("record.attrs".to_string(), record_attr_count.to_string()));
+    for (kind, key, value) in resource_attr_entries {
+        lines.push((format!("{kind}.{key}"), value));
+    }
+    if resource_attr_omitted > 0 {
+        lines.push(("resource.attrs.more".to_string(), format!("{resource_attr_omitted} not shown")));
+    }
+    for (kind, key, value) in record_attr_entries {
+        lines.push((format!("{kind}.{key}"), value));
+    }
+    if record_attr_omitted > 0 {
+        lines.push(("record.attrs.more".to_string(), format!("{record_attr_omitted} not shown")));
+    }
     if trace_ids > 0 {
         lines.push(("trace_id".to_string(), format!("{trace_ids} present")));
     }
@@ -1091,12 +1125,88 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     lines
 }
 
+fn push_modal_attribute_entry(entries: &mut Vec<(String, String, String)>, omitted: &mut usize, kind: &str, key: &str, value: String) {
+    if entries.len() < MODAL_ATTR_ENTRY_LIMIT_PER_KIND {
+        entries.push((kind.to_string(), key.to_string(), value));
+    } else {
+        *omitted += 1;
+    }
+}
+
 fn modal_info_line(key: &str, value: String, key_width: usize, value_width: usize) -> Line<'static> {
     let value = trim_single_line(&value, value_width);
-    Line::from(vec![
-        Span::styled(format!("{key:<width$}: ", width = key_width), Style::default().fg(Color::Indexed(136))),
-        Span::styled(value, Style::default().fg(Color::Black)),
-    ])
+    let (key_style, value_style) = if is_otlp_attribute_entry(key) {
+        if is_standard_otlp_attribute_entry(key) {
+            (Style::default().fg(Color::Indexed(136)), Style::default().fg(Color::Black))
+        } else {
+            (Style::default().fg(Color::Blue), Style::default().fg(Color::LightBlue))
+        }
+    } else {
+        (Style::default().fg(Color::Indexed(136)), Style::default().fg(Color::Black))
+    };
+    Line::from(vec![Span::styled(format!("{key:<width$}: ", width = key_width), key_style), Span::styled(value, value_style)])
+}
+
+fn format_any_value(value: Option<&AnyValue>) -> String {
+    let Some(value) = value else {
+        return "null".to_string();
+    };
+    match &value.value {
+        Some(Value::StringValue(text)) => text.clone(),
+        Some(Value::BoolValue(flag)) => flag.to_string(),
+        Some(Value::IntValue(number)) => number.to_string(),
+        Some(Value::DoubleValue(number)) => number.to_string(),
+        Some(Value::BytesValue(bytes)) => format!("<{} bytes>", bytes.len()),
+        Some(Value::ArrayValue(array)) => format!("<array:{}>", array.values.len()),
+        Some(Value::KvlistValue(map)) => format!("<map:{}>", map.values.len()),
+        None => "null".to_string(),
+    }
+}
+
+fn is_otlp_attribute_entry(key: &str) -> bool {
+    (key.starts_with("resource.") && key != "resource.attrs") || (key.starts_with("record.") && key != "record.attrs")
+}
+
+fn is_standard_otlp_attribute_entry(key: &str) -> bool {
+    let Some((_, attr_key)) = key.split_once('.') else {
+        return false;
+    };
+
+    const STANDARD_PREFIXES: &[&str] = &[
+        "service.",
+        "telemetry.",
+        "host.",
+        "os.",
+        "process.",
+        "container.",
+        "k8s.",
+        "cloud.",
+        "deployment.",
+        "device.",
+        "faas.",
+        "enduser.",
+        "server.",
+        "client.",
+        "http.",
+        "url.",
+        "network.",
+        "net.",
+        "rpc.",
+        "db.",
+        "messaging.",
+        "exception.",
+        "code.",
+        "thread.",
+        "gen_ai.",
+        "browser.",
+        "user_agent.",
+        "aws.",
+        "gcp.",
+        "azure.",
+        "vcs.",
+    ];
+
+    STANDARD_PREFIXES.iter().any(|prefix| attr_key.starts_with(prefix))
 }
 
 fn footer_sep() -> Span<'static> {
@@ -1323,78 +1433,5 @@ fn create_temp_path() -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{DetailRecord, EntryMeta, extract_otlp_log_message, format_summary, render_modal_message, text_preview};
-    use logjet::RecordType;
-    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
-    use opentelemetry_proto::tonic::common::v1::any_value::Value;
-    use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope};
-    use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
-    use opentelemetry_proto::tonic::resource::v1::Resource;
-    use prost::Message;
-
-    #[test]
-    fn text_preview_flattens_newlines() {
-        assert_eq!(text_preview(b"hello\nworld", 32), "hello world");
-    }
-
-    #[test]
-    fn summary_uses_trimmed_single_line_preview() {
-        let detail = DetailRecord {
-            meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 7, ts_unix_ns: 9, payload_len: 13 },
-            payload: b"line one\nline two".to_vec(),
-        };
-        let summary = format_summary(&detail, false);
-        assert_eq!(summary, "line one line two");
-    }
-
-    #[test]
-    fn summary_prefers_decoded_otlp_log_message() {
-        let batch = ExportLogsServiceRequest {
-            resource_logs: vec![ResourceLogs {
-                resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0 }),
-                scope_logs: vec![ScopeLogs {
-                    scope: Some(InstrumentationScope {
-                        name: "test".to_string(),
-                        version: String::new(),
-                        attributes: Vec::new(),
-                        dropped_attributes_count: 0,
-                    }),
-                    log_records: vec![LogRecord {
-                        time_unix_nano: 0,
-                        observed_time_unix_nano: 0,
-                        severity_number: 0,
-                        severity_text: String::new(),
-                        body: Some(AnyValue { value: Some(Value::StringValue("hello from body".to_string())) }),
-                        attributes: Vec::new(),
-                        dropped_attributes_count: 0,
-                        flags: 0,
-                        trace_id: Vec::new(),
-                        span_id: Vec::new(),
-                        event_name: String::new(),
-                    }],
-                    schema_url: String::new(),
-                }],
-                schema_url: String::new(),
-            }],
-        };
-        let payload = batch.encode_to_vec();
-        let detail = DetailRecord {
-            meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64 },
-            payload,
-        };
-
-        assert_eq!(extract_otlp_log_message(&detail.payload).as_deref(), Some("hello from body"));
-        assert_eq!(format_summary(&detail, false), "hello from body");
-    }
-
-    #[test]
-    fn modal_falls_back_to_raw_payload() {
-        let detail = DetailRecord {
-            meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: 5 },
-            payload: b"hello".to_vec(),
-        };
-        let body = render_modal_message(&detail, false);
-        assert_eq!(body, "hello");
-    }
-}
+#[path = "view_ut.rs"]
+mod view_ut;
