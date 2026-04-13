@@ -51,6 +51,8 @@ pub struct FileConfig {
     pub name: String,
     pub segment_size_bytes: u64,
     pub fsync: FsyncPolicy,
+    /// Maximum total bytes across all segments. 0 = unlimited.
+    pub max_total_bytes: u64,
 }
 
 /// Controls when data is guaranteed durable on disk via fsync().
@@ -162,6 +164,8 @@ struct RawConfig {
     file_name: Option<String>,
     #[serde(rename = "file.fsync")]
     file_fsync: Option<String>,
+    #[serde(rename = "file.max-bytes")]
+    file_max_bytes_kb: Option<u64>,
     #[serde(rename = "ingest.listen")]
     ingest_addr: Option<String>,
     #[serde(rename = "ingest.protocol")]
@@ -248,6 +252,7 @@ impl Config {
                 file_size_kb: None,
                 file_name: None,
                 file_fsync: None,
+                file_max_bytes_kb: None,
                 ingest_addr: None,
                 ingest_protocol: None,
                 ingest_tls_enable: None,
@@ -382,6 +387,7 @@ impl Config {
                     name,
                     segment_size_bytes: u64::try_from(kib_to_bytes(raw.file_size_kb.unwrap_or(100))?)?,
                     fsync,
+                    max_total_bytes: raw.file_max_bytes_kb.map(|kb| kb.saturating_mul(1024)).unwrap_or(0),
                 })
             }
             other => return Err(format!("invalid output mode: {other}").into()),

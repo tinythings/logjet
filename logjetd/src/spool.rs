@@ -35,6 +35,7 @@ pub struct FileSpool {
     active_size_bytes: u64,
     segment_target_bytes: u64,
     fsync: FsyncPolicy,
+    max_total_bytes: u64,
     consumed_through_seq: u64,
 }
 
@@ -274,6 +275,7 @@ impl FileSpool {
             active_size_bytes,
             segment_target_bytes: config.segment_size_bytes,
             fsync: config.fsync,
+            max_total_bytes: config.max_total_bytes,
             consumed_through_seq,
         };
         spool.cleanup_consumed_segments()?;
@@ -367,6 +369,31 @@ impl FileSpool {
         let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
         self.active_writer = LogjetWriter::new(BufWriter::new(file));
         self.active_size_bytes = 0;
+        self.enforce_retention()
+    }
+
+    /// Delete oldest segments until total size is within max_total_bytes.
+    fn enforce_retention(&mut self) -> io::Result<()> {
+        if self.max_total_bytes == 0 {
+            return Ok(());
+        }
+
+        let segments = list_segments(&self.dir, &self.base_stem)?;
+        let total: u64 = segments.iter().filter_map(|s| fs::metadata(&s.path).ok()).map(|m| m.len()).sum();
+        if total <= self.max_total_bytes {
+            return Ok(());
+        }
+
+        let mut excess = total - self.max_total_bytes;
+        for segment in &segments {
+            if excess == 0 || segment.id == self.active_segment_id {
+                break;
+            }
+            let size = fs::metadata(&segment.path).map(|m| m.len()).unwrap_or(0);
+            fs::remove_file(&segment.path)?;
+            excess = excess.saturating_sub(size);
+            eprintln!("ljd retention: removed {} ({size} bytes)", segment.path.display());
+        }
         Ok(())
     }
 
