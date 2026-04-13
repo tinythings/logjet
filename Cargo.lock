@@ -775,6 +775,7 @@ name = "ljd"
 version = "0.1.0"
 dependencies = [
  "logjet",
+ "lz4_flex",
  "opentelemetry-proto",
  "prost",
  "rustls",
