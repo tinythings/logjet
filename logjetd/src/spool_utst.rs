@@ -448,37 +448,29 @@ fn plugin_protobuf_survives_spool_round_trip() {
     let config = file_config_with_codec(&dir, logjet::Codec::Zstd);
     let base_ts = 1_700_000_000_000_000_000u64;
 
-        // Build payloads of various sizes — matching real ingest patterns.
+    // Build payloads of various sizes — matching real ingest patterns.
 
-        let mut expected: Vec<(u64, Vec<u8>)> = Vec::new();
+    let mut expected: Vec<(u64, Vec<u8>)> = Vec::new();
 
-        {
+    {
+        let mut spool = Spool::open(StorageConfig::File(config)).unwrap();
 
-            let mut spool = Spool::open(StorageConfig::File(config)).unwrap();
+        for seq in 1..=200u64 {
+            let body_size = match seq % 10 {
+                0 => 3000, // large JSON-like body
 
-            for seq in 1..=200u64 {
+                1..=3 => 500, // medium
 
-                let body_size = match seq % 10 {
+                _ => 50, // small
+            };
 
-                    0 => 3000,         // large JSON-like body
+            let body: String = (0..body_size).map(|i| (b'A' + (i % 26) as u8) as char).collect();
 
-                    1..=3 => 500,      // medium
-
-                    _ => 50,           // small
-
-                };
-
-                let body: String = (0..body_size).map(|i| (b'A' + (i % 26) as u8) as char).collect();
-
-                let attrs = vec![
-
-                    ("service.name".to_string(), format!("svc-{}", seq % 5)),
-
-                    ("scope.name".to_string(), format!("scope-{}", seq % 3)),
-
-                    ("stress.msg_type".to_string(), "12".to_string()),
-
-                    ("stress.record_nr".to_string(), format!("{}", seq * 1000)),
+            let attrs = vec![
+                ("service.name".to_string(), format!("svc-{}", seq % 5)),
+                ("scope.name".to_string(), format!("scope-{}", seq % 3)),
+                ("stress.msg_type".to_string(), "12".to_string()),
+                ("stress.record_nr".to_string(), format!("{}", seq * 1000)),
             ];
             let payload = crate::plugin::build_otlp_payload(
                 base_ts + seq,
