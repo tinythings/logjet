@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -17,16 +17,8 @@ use crate::tls::{load_client_config, load_collector_client_config, parse_collect
 pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorConfig) -> io::Result<u64> {
     let mut sent = 0u64;
     let endpoint = CollectorEndpoint::parse(&collector.url)?;
-    let transport = CollectorTransport {
-        timeout: Duration::from_millis(collector.timeout_ms),
-        backpressure_enabled: false,
-        backpressure_mode: BackpressureMode::Disconnect,
-        max_buffered_records: 1,
-        tls_client: if endpoint.tls { Some(load_collector_client_config(collector)?) } else { None },
-        endpoint,
-        collector: collector.clone(),
-        upstream_mode: UpstreamMode::Keep,
-    };
+    let tls_client = if endpoint.tls { Some(load_collector_client_config(collector)?) } else { None };
+    let mut conn = CollectorConnection::connect(&endpoint, Duration::from_millis(collector.timeout_ms), tls_client.as_ref(), collector)?;
 
     for segment in list_named_segments(path, name)? {
         let file = File::open(&segment.path)?;
@@ -37,7 +29,7 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
                 continue;
             }
 
-            post_raw_otlp_http(&transport, &record.payload)?;
+            conn.post(&record.payload)?;
             sent = sent.saturating_add(1);
         }
     }
@@ -128,9 +120,10 @@ fn bridge_transport<T: io::Read + io::Write>(
     );
 
     if !collector_transport.backpressure_enabled {
+        let mut conn = collector_transport.open_connection()?;
         while let Some(record) = read_record(transport)? {
             if record.record_type == RecordType::Logs {
-                post_raw_otlp_http(collector_transport, &record.payload)?;
+                conn.post(&record.payload)?;
             }
             commit_record(transport, state, state_file, consume, record.seq)?;
         }
@@ -199,8 +192,9 @@ fn enqueue_export_task(
 fn export_worker(
     collector_transport: CollectorTransport, task_rx: mpsc::Receiver<ExportTask>, result_tx: mpsc::Sender<ExportResult>,
 ) -> io::Result<()> {
+    let mut conn = collector_transport.open_connection()?;
     while let Ok(task) = task_rx.recv() {
-        let outcome = post_raw_otlp_http(&collector_transport, &task.payload).map(|()| ExportOutcome::Delivered);
+        let outcome = conn.post(&task.payload).map(|()| ExportOutcome::Delivered);
         let failed = outcome.is_err();
         if result_tx.send(ExportResult { seq: task.seq, outcome }).is_err() {
             break;
@@ -266,36 +260,6 @@ fn commit_record<T: io::Read + io::Write>(
         transport.flush()?;
     }
     Ok(())
-}
-
-fn post_raw_otlp_http(collector_transport: &CollectorTransport, payload: &[u8]) -> io::Result<()> {
-    let stream = connect_with_timeout(&collector_transport.endpoint.authority, collector_transport.timeout)?;
-    if !collector_transport.backpressure_enabled {
-        stream.set_write_timeout(Some(collector_transport.timeout))?;
-        stream.set_read_timeout(Some(collector_transport.timeout))?;
-    } else {
-        match collector_transport.backpressure_mode {
-            BackpressureMode::Block => {
-                stream.set_write_timeout(None)?;
-                stream.set_read_timeout(None)?;
-            }
-            BackpressureMode::Disconnect | BackpressureMode::DropNewest => {
-                stream.set_write_timeout(Some(collector_transport.timeout))?;
-                stream.set_read_timeout(Some(collector_transport.timeout))?;
-            }
-        }
-    }
-
-    if let Some(client_config) = &collector_transport.tls_client {
-        let server_name = parse_collector_server_name(&collector_transport.collector, &collector_transport.endpoint.authority)?;
-        let conn =
-            ClientConnection::new(client_config.clone(), server_name).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
-        let mut tls_transport = StreamOwned::new(conn, stream);
-        return post_raw_otlp_http_transport(&collector_transport.endpoint, payload, &mut tls_transport);
-    }
-
-    let mut plain_transport = stream;
-    post_raw_otlp_http_transport(&collector_transport.endpoint, payload, &mut plain_transport)
 }
 
 fn connect_with_timeout(authority: &str, timeout: Duration) -> io::Result<TcpStream> {
@@ -442,6 +406,147 @@ impl CollectorTransport {
             self.max_buffered_records
         )
     }
+
+    fn open_connection(&self) -> io::Result<CollectorConnection> {
+        CollectorConnection::connect(&self.endpoint, self.timeout, self.tls_client.as_ref(), &self.collector)
+    }
+}
+
+enum CollectorStream {
+    Plain(TcpStream),
+    Tls(Box<StreamOwned<ClientConnection, TcpStream>>),
+}
+
+impl io::Read for CollectorStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(s) => s.read(buf),
+            Self::Tls(s) => s.read(buf),
+        }
+    }
+}
+
+impl io::Write for CollectorStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(s) => s.write(buf),
+            Self::Tls(s) => s.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Plain(s) => s.flush(),
+            Self::Tls(s) => s.flush(),
+        }
+    }
+}
+
+/// Persistent HTTP/1.1 keep-alive connection to an OTLP collector.
+struct CollectorConnection {
+    stream: CollectorStream,
+    endpoint: CollectorEndpoint,
+    timeout: Duration,
+    tls_client: Option<Arc<ClientConfig>>,
+    collector: CollectorConfig,
+}
+
+impl CollectorConnection {
+    fn connect(
+        endpoint: &CollectorEndpoint, timeout: Duration, tls_client: Option<&Arc<ClientConfig>>, collector: &CollectorConfig,
+    ) -> io::Result<Self> {
+        let tcp = connect_with_timeout(&endpoint.authority, timeout)?;
+        tcp.set_write_timeout(Some(timeout))?;
+        tcp.set_read_timeout(Some(timeout))?;
+        let stream = if let Some(cfg) = tls_client {
+            let server_name = parse_collector_server_name(collector, &endpoint.authority)?;
+            let conn = ClientConnection::new(cfg.clone(), server_name).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+            CollectorStream::Tls(Box::new(StreamOwned::new(conn, tcp)))
+        } else {
+            CollectorStream::Plain(tcp)
+        };
+        Ok(Self { stream, endpoint: endpoint.clone(), timeout, tls_client: tls_client.cloned(), collector: collector.clone() })
+    }
+
+    fn reconnect(&mut self) -> io::Result<()> {
+        *self = Self::connect(&self.endpoint, self.timeout, self.tls_client.as_ref(), &self.collector)?;
+        Ok(())
+    }
+
+    /// POST one OTLP payload, reconnecting once on transport failure.
+    fn post(&mut self, payload: &[u8]) -> io::Result<()> {
+        match self.post_inner(payload) {
+            Ok(()) => Ok(()),
+            Err(_first) => {
+                self.reconnect()?;
+                self.post_inner(payload)
+            }
+        }
+    }
+
+    fn post_inner(&mut self, payload: &[u8]) -> io::Result<()> {
+        write!(
+            self.stream,
+            "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+            self.endpoint.path,
+            self.endpoint.authority,
+            payload.len()
+        )?;
+        self.stream.write_all(payload)?;
+        self.stream.flush()?;
+        read_http_response(&mut self.stream)
+    }
+}
+
+/// Read an HTTP/1.1 response, consuming exactly the headers + body.
+fn read_http_response(stream: &mut impl io::Read) -> io::Result<()> {
+    let mut hdr_buf = Vec::with_capacity(512);
+    let mut b = [0u8; 1];
+    loop {
+        if stream.read(&mut b)? == 0 {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "collector closed connection before response headers"));
+        }
+        hdr_buf.push(b[0]);
+        if hdr_buf.len() >= 4 && &hdr_buf[hdr_buf.len() - 4..] == b"\r\n\r\n" {
+            break;
+        }
+        if hdr_buf.len() > 16_384 {
+            return Err(io::Error::other("collector response headers exceed 16 KiB"));
+        }
+    }
+
+    let hdr_str = String::from_utf8_lossy(&hdr_buf);
+    let status_line = hdr_str.lines().next().unwrap_or("");
+    if !status_line.starts_with("HTTP/1.1 200") && !status_line.starts_with("HTTP/1.0 200") {
+        return Err(io::Error::other(format!("collector returned non-200 response: {status_line}")));
+    }
+
+    let content_len = parse_content_length(&hdr_str);
+    if content_len > 0 {
+        let mut remaining = content_len;
+        let mut discard = [0u8; 4096];
+        while remaining > 0 {
+            let chunk = discard.len().min(remaining);
+            let n = stream.read(&mut discard[..chunk])?;
+            if n == 0 {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "collector closed connection during response body"));
+            }
+            remaining -= n;
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_content_length(headers: &str) -> usize {
+    for line in headers.lines() {
+        if let Some(val) = line.strip_prefix("Content-Length:").or_else(|| line.strip_prefix("content-length:"))
+            && let Ok(n) = val.trim().parse::<usize>()
+        {
+            return n;
+        }
+    }
+    0
 }
 
 #[derive(Debug)]
@@ -493,26 +598,6 @@ impl CollectorEndpoint {
 
         Ok(Self { authority: input.to_string(), path: "/v1/logs".to_string(), tls: false })
     }
-}
-
-fn post_raw_otlp_http_transport<T: io::Read + io::Write>(endpoint: &CollectorEndpoint, payload: &[u8], transport: &mut T) -> io::Result<()> {
-    write!(
-        transport,
-        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        endpoint.path,
-        endpoint.authority,
-        payload.len()
-    )?;
-    transport.write_all(payload)?;
-    transport.flush()?;
-
-    let mut response = String::new();
-    std::io::Read::read_to_string(transport, &mut response)?;
-    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
-        return Err(io::Error::other(format!("collector returned non-200 response: {}", response.lines().next().unwrap_or("unknown response"))));
-    }
-
-    Ok(())
 }
 
 fn split_authority_and_path(input: &str) -> (&str, &str) {
