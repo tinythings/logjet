@@ -340,9 +340,7 @@ impl ViewApp {
         self.focus = Focus::List;
         let predicate = parse_filter_query(&self.applied_query, self.filter_mode)?;
 
-        let spool_path = create_temp_path()?;
-        let spool_reader = OpenOptions::new().read(true).write(true).create_new(true).open(&spool_path)?;
-        let spool_writer = spool_reader.try_clone()?;
+        let (spool_path, spool_reader, spool_writer) = open_temp_spool_pair()?;
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_worker = Arc::clone(&cancel);
         let input = self.input.clone();
@@ -1430,6 +1428,13 @@ fn create_temp_path() -> Result<PathBuf> {
         }
     }
     Err(Error::Usage("unable to allocate a temporary view file".to_string()))
+}
+
+fn open_temp_spool_pair() -> Result<(PathBuf, File, File)> {
+    let spool_path = create_temp_path()?;
+    let spool_reader = OpenOptions::new().read(true).write(true).create_new(true).open(&spool_path)?;
+    let spool_writer = OpenOptions::new().read(true).write(true).open(&spool_path)?;
+    Ok((spool_path, spool_reader, spool_writer))
 }
 
 #[cfg(test)]

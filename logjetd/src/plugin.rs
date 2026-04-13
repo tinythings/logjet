@@ -136,7 +136,7 @@ unsafe extern "C" fn on_record(user: *mut c_void, record: *const LjLogRecord) {
 }
 
 /// Encodes a single log record as an OTLP ExportLogsServiceRequest protobuf.
-fn build_otlp_payload(ts: u64, severity: i32, severity_text: Option<&str>, body: &str, attrs: &[(String, String)]) -> Vec<u8> {
+pub(crate) fn build_otlp_payload(ts: u64, severity: i32, severity_text: Option<&str>, body: &str, attrs: &[(String, String)]) -> Vec<u8> {
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use opentelemetry_proto::tonic::common::v1::any_value::Value;
     use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
@@ -163,7 +163,7 @@ fn build_otlp_payload(ts: u64, severity: i32, severity_text: Option<&str>, body:
 
     let request = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
-            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0 }),
+            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0, entity_refs: Vec::new() }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
                     name: "lj-ingest-plugin".to_string(),
