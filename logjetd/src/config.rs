@@ -13,6 +13,8 @@ pub struct Config {
     pub replay_addr: String,
     pub replay_max_clients: usize,
     pub replay_client_timeout_ms: u64,
+    /// LZ4 compress wire protocol payloads. Disable on low-power CPUs.
+    pub wire_compression: bool,
     pub collector: CollectorConfig,
     pub backpressure: BackpressureConfig,
     pub upstream: UpstreamConfig,
@@ -196,6 +198,8 @@ struct RawConfig {
     replay_max_clients: Option<usize>,
     #[serde(rename = "replay.client-timeout-ms")]
     replay_client_timeout_ms: Option<u64>,
+    #[serde(rename = "wire.compression")]
+    wire_compression: Option<bool>,
     #[serde(rename = "collector.url")]
     collector_url: Option<String>,
     #[serde(rename = "collector.timeout-ms")]
@@ -268,6 +272,7 @@ impl Config {
                 replay_addr: None,
                 replay_max_clients: None,
                 replay_client_timeout_ms: None,
+                wire_compression: None,
                 collector_url: None,
                 collector_timeout_ms: None,
                 collector_ca_file: None,
@@ -402,6 +407,7 @@ impl Config {
             replay_addr,
             replay_max_clients,
             replay_client_timeout_ms,
+            wire_compression: raw.wire_compression.unwrap_or(true),
             collector,
             backpressure,
             upstream,

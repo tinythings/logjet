@@ -63,21 +63,22 @@ pub fn read_record_with_limit<R: Read>(reader: &mut R, max_payload_len: usize) -
 
     let record_type =
         RecordType::from_u8(header[1]).map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("invalid wire record type: {err}")))?;
+    let codec = header[2];
     let payload_len = u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
     if payload_len > max_payload_len {
         return Err(io::Error::new(ErrorKind::InvalidData, format!("wire payload too large: {payload_len} > {max_payload_len}")));
     }
 
-    let mut payload = vec![0u8; payload_len];
-    reader.read_exact(&mut payload)?;
+    let mut wire_payload = vec![0u8; payload_len];
+    reader.read_exact(&mut wire_payload)?;
 
     let mut crc_bytes = [0u8; 4];
     reader.read_exact(&mut crc_bytes)?;
     let expected_crc = u32::from_le_bytes(crc_bytes);
 
-    let mut crc_input = Vec::with_capacity(header.len() + payload.len());
+    let mut crc_input = Vec::with_capacity(header.len() + wire_payload.len());
     crc_input.extend_from_slice(&header);
-    crc_input.extend_from_slice(&payload);
+    crc_input.extend_from_slice(&wire_payload);
     let actual_crc = logjet::crc::crc32c(&crc_input);
 
     if actual_crc != expected_crc {
@@ -87,6 +88,19 @@ pub fn read_record_with_limit<R: Read>(reader: &mut R, max_payload_len: usize) -
         ));
     }
 
+    let payload = match codec {
+        0 => wire_payload,
+        1 => {
+            if wire_payload.len() < 4 {
+                return Err(io::Error::new(ErrorKind::InvalidData, "LZ4 wire payload too short for uncompressed length"));
+            }
+            let uncompressed_len = u32::from_le_bytes([wire_payload[0], wire_payload[1], wire_payload[2], wire_payload[3]]) as usize;
+            lz4_flex::block::decompress(&wire_payload[4..], uncompressed_len)
+                .map_err(|err| io::Error::new(ErrorKind::InvalidData, format!("LZ4 decompress failed: {err}")))?
+        }
+        other => return Err(io::Error::new(ErrorKind::InvalidData, format!("unknown wire codec: {other}"))),
+    };
+
     Ok(Some(WireRecord {
         record_type,
         seq: u64::from_le_bytes([header[4], header[5], header[6], header[7], header[8], header[9], header[10], header[11]]),
@@ -95,19 +109,41 @@ pub fn read_record_with_limit<R: Read>(reader: &mut R, max_payload_len: usize) -
     }))
 }
 
-pub fn write_record<W: Write>(writer: &mut W, record: &WireRecord) -> io::Result<()> {
-    let payload_len =
-        u32::try_from(record.payload.len()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "payload too large for wire protocol"))?;
+pub fn write_record<W: Write>(writer: &mut W, record: &WireRecord, compress: bool) -> io::Result<()> {
+    let (codec, wire_payload) = if compress {
+        let compressed = lz4_flex::block::compress(&record.payload);
 
-    let mut buf = Vec::with_capacity(8 + 24 + record.payload.len() + 4);
+        if compressed.len() < record.payload.len() {
+            let uncompressed_len =
+                u32::try_from(record.payload.len()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "payload too large for wire protocol"))?;
+
+            let mut lz4_payload = Vec::with_capacity(4 + compressed.len());
+
+            lz4_payload.extend_from_slice(&uncompressed_len.to_le_bytes());
+
+            lz4_payload.extend_from_slice(&compressed);
+
+            (1u8, lz4_payload)
+        } else {
+            (0u8, record.payload.clone())
+        }
+    } else {
+        (0u8, record.payload.clone())
+    };
+
+    let payload_len =
+        u32::try_from(wire_payload.len()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "payload too large for wire protocol"))?;
+
+    let mut buf = Vec::with_capacity(8 + 24 + wire_payload.len() + 4);
     buf.extend_from_slice(&WIRE_MAGIC);
     buf.push(WIRE_VERSION);
     buf.push(record.record_type as u8);
-    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf.push(codec);
+    buf.push(0);
     buf.extend_from_slice(&record.seq.to_le_bytes());
     buf.extend_from_slice(&record.ts_unix_ns.to_le_bytes());
     buf.extend_from_slice(&payload_len.to_le_bytes());
-    buf.extend_from_slice(&record.payload);
+    buf.extend_from_slice(&wire_payload);
 
     let crc = logjet::crc::crc32c(&buf[WIRE_MAGIC.len()..]);
     buf.extend_from_slice(&crc.to_le_bytes());
