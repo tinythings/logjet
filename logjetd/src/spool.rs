@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, ReaderConfig};
 
-use crate::config::{BufferConfig, BufferLimit, FileConfig, StorageConfig};
+use crate::config::{BufferConfig, BufferLimit, FileConfig, FsyncPolicy, StorageConfig};
 use crate::protocol::WireRecord;
 
 #[derive(Debug)]
@@ -34,6 +34,7 @@ pub struct FileSpool {
     active_writer: LogjetWriter<File>,
     active_size_bytes: u64,
     segment_target_bytes: u64,
+    fsync: FsyncPolicy,
     consumed_through_seq: u64,
 }
 
@@ -121,6 +122,14 @@ impl Spool {
         match self {
             Self::Buffer(_) => Ok(()),
             Self::File(spool) => spool.flush_pending(),
+        }
+    }
+
+    /// Call fsync if the policy is Interval (used by background flush thread).
+    pub fn fsync_if_interval(&mut self) -> io::Result<()> {
+        match self {
+            Self::Buffer(_) => Ok(()),
+            Self::File(spool) => spool.fsync_if_interval(),
         }
     }
 
@@ -264,6 +273,7 @@ impl FileSpool {
             active_writer: LogjetWriter::new(file),
             active_size_bytes,
             segment_target_bytes: config.segment_size_bytes,
+            fsync: config.fsync,
             consumed_through_seq,
         };
         spool.cleanup_consumed_segments()?;
@@ -288,7 +298,17 @@ impl FileSpool {
 
     fn flush_pending(&mut self) -> io::Result<()> {
         self.active_writer.flush_block().map_err(to_io_error)?;
+        if self.fsync == FsyncPolicy::Block {
+            self.active_writer.inner_mut().sync_all()?;
+        }
         self.refresh_active_size()
+    }
+
+    fn fsync_if_interval(&mut self) -> io::Result<()> {
+        if self.fsync == FsyncPolicy::Interval {
+            self.active_writer.inner_mut().sync_all()?;
+        }
+        Ok(())
     }
 
     fn replay_cursor_after(&self, last_seq: u64) -> FileReplayCursor {
