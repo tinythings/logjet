@@ -57,6 +57,8 @@ pub struct FileConfig {
     pub codec: logjet::Codec,
     /// Maximum total bytes across all segments. 0 = unlimited.
     pub max_total_bytes: u64,
+    /// Pad each block to this alignment (bytes). 0 = no padding.
+    pub block_alignment: usize,
 }
 
 /// Controls when data is guaranteed durable on disk via fsync().
@@ -176,6 +178,8 @@ struct RawConfig {
     file_max_bytes_kb: Option<u64>,
     #[serde(rename = "file.codec")]
     file_codec: Option<String>,
+    #[serde(rename = "file.block-alignment")]
+    file_block_alignment: Option<usize>,
     #[serde(rename = "ingest.listen")]
     ingest_addr: Option<String>,
     #[serde(rename = "ingest.protocol")]
@@ -270,6 +274,7 @@ impl Config {
                 file_fsync: None,
                 file_max_bytes_kb: None,
                 file_codec: None,
+                file_block_alignment: None,
                 ingest_addr: None,
                 ingest_protocol: None,
                 ingest_tls_enable: None,
@@ -417,6 +422,7 @@ impl Config {
                     fsync,
                     codec,
                     max_total_bytes: raw.file_max_bytes_kb.map(|kb| kb.saturating_mul(1024)).unwrap_or(0),
+                    block_alignment: raw.file_block_alignment.unwrap_or(4096),
                 })
             }
             other => return Err(format!("invalid output mode: {other}").into()),

@@ -10,7 +10,7 @@ pub fn run(args: FilterArgs) -> Result<()> {
     let predicate = args.predicate.build()?;
     let input = InputHandle::open(&args.input)?;
     let output = open_output(&args.output)?;
-    let config = WriterConfig { block_target_size: args.block_target_size, codec: args.codec.into(), sync_marker: logjet::DEFAULT_SYNC_MARKER };
+    let config = WriterConfig { block_target_size: args.block_target_size, codec: args.codec.into(), ..Default::default() };
 
     let mut reader = LogjetReader::new(input.into_buf_reader());
     let mut writer = LogjetWriter::with_config(output, config);
