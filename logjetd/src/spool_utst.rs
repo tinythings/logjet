@@ -279,5 +279,26 @@ fn unique_temp_dir(label: &str) -> PathBuf {
 }
 
 fn test_file_config(dir: &Path, segment_size_bytes: u64) -> FileConfig {
-    FileConfig { dir: dir.to_path_buf(), name: "bofh.logjet".to_string(), segment_size_bytes, fsync: FsyncPolicy::None }
+    FileConfig { dir: dir.to_path_buf(), name: "bofh.logjet".to_string(), segment_size_bytes, fsync: FsyncPolicy::None, max_total_bytes: 0 }
+}
+
+#[test]
+fn retention_deletes_oldest_segments_when_over_limit() {
+    let dir = unique_temp_dir("retention");
+    let mut config = test_file_config(&dir, 1);
+    config.max_total_bytes = 300;
+
+    let mut spool = Spool::open(StorageConfig::File(config)).unwrap();
+    for seq in 1..=6 {
+        spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![seq as u8; 32] }).unwrap();
+    }
+    spool.flush_pending().unwrap();
+
+    let segments: Vec<_> =
+        fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("logjet")).collect();
+
+    let total: u64 = segments.iter().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum();
+    assert!(total <= 300, "total {total} should be <= 300");
+    assert!(segments.len() < 6, "some segments should have been pruned");
+    fs::remove_dir_all(dir).unwrap();
 }
