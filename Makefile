@@ -67,6 +67,7 @@ x86: setup setup-x86
 
 demo: devel
 	cargo build -p otlp-demo
+	cargo build -p lj-syslog-ingest
 
 man: $(MANPAGE_OUT)
 
