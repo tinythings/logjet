@@ -8,7 +8,16 @@ use logjet::RecordType;
 fn round_trip_record() {
     let record = WireRecord { record_type: RecordType::Logs, seq: 42, ts_unix_ns: 77, payload: b"abc".to_vec() };
     let mut bytes = Vec::new();
-    write_record(&mut bytes, &record).unwrap();
+    write_record(&mut bytes, &record, true).unwrap();
+    let decoded = read_record(&mut bytes.as_slice()).unwrap().unwrap();
+    assert_eq!(decoded, record);
+}
+
+#[test]
+fn round_trip_record_uncompressed() {
+    let record = WireRecord { record_type: RecordType::Logs, seq: 42, ts_unix_ns: 77, payload: b"abc".to_vec() };
+    let mut bytes = Vec::new();
+    write_record(&mut bytes, &record, false).unwrap();
     let decoded = read_record(&mut bytes.as_slice()).unwrap().unwrap();
     assert_eq!(decoded, record);
 }
@@ -68,7 +77,7 @@ fn unsupported_record_version_is_rejected() {
 fn record_payload_over_limit_is_rejected() {
     let record = WireRecord { record_type: RecordType::Logs, seq: 42, ts_unix_ns: 77, payload: b"abcdef".to_vec() };
     let mut bytes = Vec::new();
-    write_record(&mut bytes, &record).unwrap();
+    write_record(&mut bytes, &record, false).unwrap();
     let err = read_record_with_limit(&mut bytes.as_slice(), 5).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
@@ -130,4 +139,18 @@ fn unsupported_replay_request_version_is_rejected() {
 
     let err = read_replay_request(&mut bytes.as_slice()).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn corrupted_payload_is_rejected_by_crc() {
+    let record = WireRecord { record_type: RecordType::Logs, seq: 1, ts_unix_ns: 1, payload: b"hello".to_vec() };
+    let mut bytes = Vec::new();
+    write_record(&mut bytes, &record, false).unwrap();
+
+    // Flip one bit in the payload region (offset 32 is first payload byte)
+    bytes[32] ^= 0x01;
+
+    let err = read_record(&mut bytes.as_slice()).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("CRC32C mismatch"));
 }

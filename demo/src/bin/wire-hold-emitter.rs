@@ -48,20 +48,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(err) => {
             eprintln!("{service_name}: second record failed; connection was closed: {err}");
-            Err(err.into())
+            Err(err)
         }
     }
 }
 
 fn write_wire_record(writer: &mut TcpStream, seq: u64, payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let payload_len = u32::try_from(payload.len())?;
-    writer.write_all(&WIRE_MAGIC)?;
-    writer.write_all(&[WIRE_VERSION, RecordType::Logs as u8])?;
-    writer.write_all(&0u16.to_le_bytes())?;
-    writer.write_all(&seq.to_le_bytes())?;
-    writer.write_all(&0u64.to_le_bytes())?;
-    writer.write_all(&payload_len.to_le_bytes())?;
-    writer.write_all(payload)?;
+    let mut buf = Vec::with_capacity(8 + 24 + payload.len() + 4);
+    buf.extend_from_slice(&WIRE_MAGIC);
+    buf.push(WIRE_VERSION);
+    buf.push(RecordType::Logs as u8);
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf.extend_from_slice(&seq.to_le_bytes());
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    buf.extend_from_slice(&payload_len.to_le_bytes());
+    buf.extend_from_slice(payload);
+
+    let crc = logjet::crc::crc32c(&buf[WIRE_MAGIC.len()..]);
+    buf.extend_from_slice(&crc.to_le_bytes());
+
+    writer.write_all(&buf)?;
     writer.flush()?;
     Ok(())
 }

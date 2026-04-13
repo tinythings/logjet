@@ -13,6 +13,8 @@ pub struct Config {
     pub replay_addr: String,
     pub replay_max_clients: usize,
     pub replay_client_timeout_ms: u64,
+    /// LZ4 compress wire protocol payloads. Disable on low-power CPUs.
+    pub wire_compression: bool,
     pub collector: CollectorConfig,
     pub backpressure: BackpressureConfig,
     pub upstream: UpstreamConfig,
@@ -50,6 +52,24 @@ pub struct FileConfig {
     pub dir: PathBuf,
     pub name: String,
     pub segment_size_bytes: u64,
+    pub fsync: FsyncPolicy,
+    /// Block compression codec for .logjet files.
+    pub codec: logjet::Codec,
+    /// Maximum total bytes across all segments. 0 = unlimited.
+    pub max_total_bytes: u64,
+    /// Pad each block to this alignment (bytes). 0 = no padding.
+    pub block_alignment: usize,
+}
+
+/// Controls when data is guaranteed durable on disk via fsync().
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsyncPolicy {
+    /// Never fsync — fastest, data may be lost on power cut.
+    None,
+    /// Fsync after every block flush — safest, slowest.
+    Block,
+    /// Fsync periodically in the background flush thread.
+    Interval,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +80,10 @@ pub struct CollectorConfig {
     pub cert_file: Option<PathBuf>,
     pub key_file: Option<PathBuf>,
     pub server_name: Option<String>,
+    /// Merge up to this many stored OTLP requests into one POST. 1 = no re-batching.
+    pub batch_size: usize,
+    /// Flush a partial batch after this many ms. 0 = flush only on batch_size.
+    pub batch_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +172,14 @@ struct RawConfig {
     file_size_kb: Option<u64>,
     #[serde(rename = "file.name")]
     file_name: Option<String>,
+    #[serde(rename = "file.fsync")]
+    file_fsync: Option<String>,
+    #[serde(rename = "file.max-bytes")]
+    file_max_bytes_kb: Option<u64>,
+    #[serde(rename = "file.codec")]
+    file_codec: Option<String>,
+    #[serde(rename = "file.block-alignment")]
+    file_block_alignment: Option<usize>,
     #[serde(rename = "ingest.listen")]
     ingest_addr: Option<String>,
     #[serde(rename = "ingest.protocol")]
@@ -178,6 +210,8 @@ struct RawConfig {
     replay_max_clients: Option<usize>,
     #[serde(rename = "replay.client-timeout-ms")]
     replay_client_timeout_ms: Option<u64>,
+    #[serde(rename = "wire.compression")]
+    wire_compression: Option<bool>,
     #[serde(rename = "collector.url")]
     collector_url: Option<String>,
     #[serde(rename = "collector.timeout-ms")]
@@ -190,6 +224,10 @@ struct RawConfig {
     collector_key_file: Option<PathBuf>,
     #[serde(rename = "collector.server-name")]
     collector_server_name: Option<String>,
+    #[serde(rename = "collector.batch-size")]
+    collector_batch_size: Option<usize>,
+    #[serde(rename = "collector.batch-timeout-ms")]
+    collector_batch_timeout_ms: Option<u64>,
     #[serde(rename = "backpressure.enabled")]
     backpressure_enabled: Option<bool>,
     #[serde(rename = "backpressure.mode")]
@@ -233,6 +271,10 @@ impl Config {
                 file_path: None,
                 file_size_kb: None,
                 file_name: None,
+                file_fsync: None,
+                file_max_bytes_kb: None,
+                file_codec: None,
+                file_block_alignment: None,
                 ingest_addr: None,
                 ingest_protocol: None,
                 ingest_tls_enable: None,
@@ -248,12 +290,15 @@ impl Config {
                 replay_addr: None,
                 replay_max_clients: None,
                 replay_client_timeout_ms: None,
+                wire_compression: None,
                 collector_url: None,
                 collector_timeout_ms: None,
                 collector_ca_file: None,
                 collector_cert_file: None,
                 collector_key_file: None,
                 collector_server_name: None,
+                collector_batch_size: None,
+                collector_batch_timeout_ms: None,
                 backpressure_enabled: None,
                 backpressure_mode: None,
                 backpressure_max_buffered_records: None,
@@ -317,6 +362,8 @@ impl Config {
             cert_file: raw.collector_cert_file,
             key_file: raw.collector_key_file,
             server_name: raw.collector_server_name,
+            batch_size: raw.collector_batch_size.unwrap_or(50).max(1),
+            batch_timeout_ms: raw.collector_batch_timeout_ms.unwrap_or(200),
         };
         let backpressure = BackpressureConfig {
             enabled: raw.backpressure_enabled.unwrap_or(false),
@@ -356,10 +403,26 @@ impl Config {
             "buffer" => StorageConfig::Buffer(BufferConfig { limit: parse_buffer_limit(raw.buffer_size_kb, raw.buffer_messages)?, keep_messages }),
             "file" => {
                 let name = raw.file_name.unwrap_or_else(|| "bar.logjet".to_string());
+                let fsync = match raw.file_fsync.as_deref().unwrap_or("interval") {
+                    "none" => FsyncPolicy::None,
+                    "block" => FsyncPolicy::Block,
+                    "interval" => FsyncPolicy::Interval,
+                    other => return Err(format!("invalid file.fsync policy: {other}").into()),
+                };
+                let codec = match raw.file_codec.as_deref().unwrap_or("lz4") {
+                    "none" => logjet::Codec::None,
+                    "lz4" => logjet::Codec::Lz4,
+                    "zstd" => logjet::Codec::Zstd,
+                    other => return Err(format!("invalid file.codec: {other}").into()),
+                };
                 StorageConfig::File(FileConfig {
                     dir: raw.file_path.unwrap_or_else(|| PathBuf::from(".")),
                     name,
                     segment_size_bytes: u64::try_from(kib_to_bytes(raw.file_size_kb.unwrap_or(100))?)?,
+                    fsync,
+                    codec,
+                    max_total_bytes: raw.file_max_bytes_kb.map(|kb| kb.saturating_mul(1024)).unwrap_or(0),
+                    block_alignment: raw.file_block_alignment.unwrap_or(4096),
                 })
             }
             other => return Err(format!("invalid output mode: {other}").into()),
@@ -374,6 +437,7 @@ impl Config {
             replay_addr,
             replay_max_clients,
             replay_client_timeout_ms,
+            wire_compression: raw.wire_compression.unwrap_or(true),
             collector,
             backpressure,
             upstream,
