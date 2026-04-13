@@ -16,10 +16,10 @@ dev: setup
 devel: dev
 
 check: setup
-	cargo clippy $(CORE_WORKSPACE) --all-targets --all-features -- -D warnings
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 fix: setup
-	cargo clippy $(CORE_WORKSPACE) --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --workspace --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
 
 test: setup
 	cargo build -p ljd -p ljx
