@@ -5,8 +5,8 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace]
-members = [".", "logjetd", "demo", "ljx", "liblogjet", "plugins/syslog-ingest", "plugins/logcat-ingest"]
-default-members = [".", "logjetd", "demo", "ljx", "liblogjet", "plugins/syslog-ingest", "plugins/logcat-ingest"]
+members = [".", "logjetd", "demo", "ljx", "liblogjet", "plugins/syslog-ingest", "plugins/logcat-ingest", "plugins/stress-ingest"]
+default-members = [".", "logjetd", "demo", "ljx", "liblogjet", "plugins/syslog-ingest", "plugins/logcat-ingest", "plugins/stress-ingest"]
 
 [profile.release]
 lto = true
