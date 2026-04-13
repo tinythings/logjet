@@ -155,6 +155,11 @@ impl<W: Write> LogjetWriter<W> {
         Ok(self.inner)
     }
 
+    /// Bytes buffered in the current unflushed block.
+    pub fn pending_bytes(&self) -> usize {
+        self.payload_buf.len()
+    }
+
     fn reset_block_state(&mut self) {
         self.payload_buf.clear();
         self.encoded_record_buf.clear();
