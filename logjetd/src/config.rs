@@ -53,6 +53,8 @@ pub struct FileConfig {
     pub name: String,
     pub segment_size_bytes: u64,
     pub fsync: FsyncPolicy,
+    /// Block compression codec for .logjet files.
+    pub codec: logjet::Codec,
     /// Maximum total bytes across all segments. 0 = unlimited.
     pub max_total_bytes: u64,
 }
@@ -168,6 +170,8 @@ struct RawConfig {
     file_fsync: Option<String>,
     #[serde(rename = "file.max-bytes")]
     file_max_bytes_kb: Option<u64>,
+    #[serde(rename = "file.codec")]
+    file_codec: Option<String>,
     #[serde(rename = "ingest.listen")]
     ingest_addr: Option<String>,
     #[serde(rename = "ingest.protocol")]
@@ -257,6 +261,7 @@ impl Config {
                 file_name: None,
                 file_fsync: None,
                 file_max_bytes_kb: None,
+                file_codec: None,
                 ingest_addr: None,
                 ingest_protocol: None,
                 ingest_tls_enable: None,
@@ -387,11 +392,18 @@ impl Config {
                     "interval" => FsyncPolicy::Interval,
                     other => return Err(format!("invalid file.fsync policy: {other}").into()),
                 };
+                let codec = match raw.file_codec.as_deref().unwrap_or("lz4") {
+                    "none" => logjet::Codec::None,
+                    "lz4" => logjet::Codec::Lz4,
+                    "zstd" => logjet::Codec::Zstd,
+                    other => return Err(format!("invalid file.codec: {other}").into()),
+                };
                 StorageConfig::File(FileConfig {
                     dir: raw.file_path.unwrap_or_else(|| PathBuf::from(".")),
                     name,
                     segment_size_bytes: u64::try_from(kib_to_bytes(raw.file_size_kb.unwrap_or(100))?)?,
                     fsync,
+                    codec,
                     max_total_bytes: raw.file_max_bytes_kb.map(|kb| kb.saturating_mul(1024)).unwrap_or(0),
                 })
             }

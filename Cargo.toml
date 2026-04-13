@@ -19,6 +19,7 @@ incremental = false
 [dependencies]
 crc32c = "0.6"
 lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 opentelemetry-proto = { version = "0.28", features = ["gen-tonic", "logs"] }
