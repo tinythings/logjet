@@ -87,6 +87,9 @@ fn read_wire_record<R: Read>(reader: &mut R) -> io::Result<Option<WireRecord>> {
     let mut payload = vec![0u8; payload_len];
     reader.read_exact(&mut payload)?;
 
+    let mut _crc = [0u8; 4];
+    reader.read_exact(&mut _crc)?;
+
     Ok(Some(WireRecord {
         record_type,
         seq: u64::from_le_bytes([header[4], header[5], header[6], header[7], header[8], header[9], header[10], header[11]]),
