@@ -71,6 +71,22 @@ pub fn read_record_with_limit<R: Read>(reader: &mut R, max_payload_len: usize) -
     let mut payload = vec![0u8; payload_len];
     reader.read_exact(&mut payload)?;
 
+    let mut crc_bytes = [0u8; 4];
+    reader.read_exact(&mut crc_bytes)?;
+    let expected_crc = u32::from_le_bytes(crc_bytes);
+
+    let mut crc_input = Vec::with_capacity(header.len() + payload.len());
+    crc_input.extend_from_slice(&header);
+    crc_input.extend_from_slice(&payload);
+    let actual_crc = logjet::crc::crc32c(&crc_input);
+
+    if actual_crc != expected_crc {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!("wire record CRC32C mismatch: expected {expected_crc:#010x}, got {actual_crc:#010x}"),
+        ));
+    }
+
     Ok(Some(WireRecord {
         record_type,
         seq: u64::from_le_bytes([header[4], header[5], header[6], header[7], header[8], header[9], header[10], header[11]]),
@@ -83,14 +99,20 @@ pub fn write_record<W: Write>(writer: &mut W, record: &WireRecord) -> io::Result
     let payload_len =
         u32::try_from(record.payload.len()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "payload too large for wire protocol"))?;
 
-    writer.write_all(&WIRE_MAGIC)?;
-    writer.write_all(&[WIRE_VERSION, record.record_type as u8])?;
-    writer.write_all(&0u16.to_le_bytes())?;
-    writer.write_all(&record.seq.to_le_bytes())?;
-    writer.write_all(&record.ts_unix_ns.to_le_bytes())?;
-    writer.write_all(&payload_len.to_le_bytes())?;
-    writer.write_all(&record.payload)?;
-    Ok(())
+    let mut buf = Vec::with_capacity(8 + 24 + record.payload.len() + 4);
+    buf.extend_from_slice(&WIRE_MAGIC);
+    buf.push(WIRE_VERSION);
+    buf.push(record.record_type as u8);
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf.extend_from_slice(&record.seq.to_le_bytes());
+    buf.extend_from_slice(&record.ts_unix_ns.to_le_bytes());
+    buf.extend_from_slice(&payload_len.to_le_bytes());
+    buf.extend_from_slice(&record.payload);
+
+    let crc = logjet::crc::crc32c(&buf[WIRE_MAGIC.len()..]);
+    buf.extend_from_slice(&crc.to_le_bytes());
+
+    writer.write_all(&buf)
 }
 
 pub fn read_replay_request<R: Read>(reader: &mut R) -> io::Result<ReplayRequest> {
