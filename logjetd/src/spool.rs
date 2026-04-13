@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, ErrorKind};
+use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, ReaderConfig};
@@ -31,7 +31,7 @@ pub struct FileSpool {
     stream_id: u64,
     active_segment_id: u64,
     active_segment_path: PathBuf,
-    active_writer: LogjetWriter<File>,
+    active_writer: LogjetWriter<BufWriter<File>>,
     active_size_bytes: u64,
     segment_target_bytes: u64,
     fsync: FsyncPolicy,
@@ -270,7 +270,7 @@ impl FileSpool {
             stream_id,
             active_segment_id,
             active_segment_path,
-            active_writer: LogjetWriter::new(file),
+            active_writer: LogjetWriter::new(BufWriter::new(file)),
             active_size_bytes,
             segment_target_bytes: config.segment_size_bytes,
             fsync: config.fsync,
@@ -298,15 +298,17 @@ impl FileSpool {
 
     fn flush_pending(&mut self) -> io::Result<()> {
         self.active_writer.flush_block().map_err(to_io_error)?;
+        self.active_writer.inner_mut().flush()?;
         if self.fsync == FsyncPolicy::Block {
-            self.active_writer.inner_mut().sync_all()?;
+            self.active_writer.inner_mut().get_mut().sync_all()?;
         }
         self.refresh_active_size()
     }
 
     fn fsync_if_interval(&mut self) -> io::Result<()> {
         if self.fsync == FsyncPolicy::Interval {
-            self.active_writer.inner_mut().sync_all()?;
+            self.active_writer.inner_mut().flush()?;
+            self.active_writer.inner_mut().get_mut().sync_all()?;
         }
         Ok(())
     }
@@ -363,7 +365,7 @@ impl FileSpool {
             self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
         let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
-        self.active_writer = LogjetWriter::new(file);
+        self.active_writer = LogjetWriter::new(BufWriter::new(file));
         self.active_size_bytes = 0;
         Ok(())
     }
@@ -402,7 +404,7 @@ impl FileSpool {
             self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
         let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
-        self.active_writer = LogjetWriter::new(file);
+        self.active_writer = LogjetWriter::new(BufWriter::new(file));
         self.active_size_bytes = 0;
         if old_path.exists() {
             fs::remove_file(old_path)?;
