@@ -20,3 +20,7 @@ pub use format::{
 pub use reader::{LogjetReader, ReaderConfig, ReaderStats};
 pub use record::{OwnedRecord, Record, RecordType};
 pub use writer::{LogjetWriter, WriterConfig};
+
+#[cfg(test)]
+#[path = "writer_utst.rs"]
+mod writer_utst;

@@ -8,7 +8,7 @@ license = "Apache-2.0"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-opentelemetry-proto = { version = "0.28", features = ["gen-tonic", "logs"] }
-prost = "0.13"
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs"] }
+prost = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
-tonic = { version = "0.12", features = ["transport"] }
+tonic = { version = "0.14", features = ["transport"] }

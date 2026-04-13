@@ -31,6 +31,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut config_path = PathBuf::from("/etc/logjet.conf");
     let mut command = None;
     let mut command_arg = None;
+    let mut inspect_verify_otlp = false;
     let mut replay_path = None;
     let mut replay_name = None;
     let mut replay_dest = None;
@@ -58,7 +59,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "inspect" => {
                 command = Some("inspect");
-                command_arg = args.next();
+                while let Some(arg) = args.next() {
+                    match arg.as_str() {
+                        "--verify-otlp" => inspect_verify_otlp = true,
+                        other if command_arg.is_none() => command_arg = Some(other.to_string()),
+                        other => return Err(format!("unknown inspect argument: {other}").into()),
+                    }
+                }
                 break;
             }
             "replay" => {
@@ -123,7 +130,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some("inspect") => {
             let path = PathBuf::from(command_arg.ok_or("missing path")?);
-            inspect_path(&path)?;
+            inspect_path(&path, inspect_verify_otlp)?;
         }
         Some("segments") => {
             let path = segment_path.ok_or("missing --path")?;
@@ -181,7 +188,7 @@ fn print_usage() {
     println!();
     println!("Usage:");
     println!("  ljd [serve] [-c|--config <path>]");
-    println!("  ljd inspect <path>");
+    println!("  ljd inspect [--verify-otlp] <path>");
     println!("  ljd segments --path <dir> --name <base.logjet>");
     println!("  ljd replay [-c|--config <path>] --path <dir> --name <base.logjet> [--dest <url-or-host:port>]");
     println!("  ljd prune --path <dir> --name <base.logjet> [--keep-files <n> | --keep-bytes <bytes>] [--dry-run]");
