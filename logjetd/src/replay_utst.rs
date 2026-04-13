@@ -116,6 +116,8 @@ fn test_collector_transport(mode: BackpressureMode, max_buffered_records: usize)
             cert_file: None,
             key_file: None,
             server_name: None,
+            batch_size: 1,
+            batch_timeout_ms: 0,
         },
         upstream_mode: UpstreamMode::Keep,
     }
