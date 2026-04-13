@@ -39,6 +39,7 @@ enum LjIngestPlugin {}
 type CreateFn = unsafe extern "C" fn() -> *mut LjIngestPlugin;
 type SetCallbackFn = unsafe extern "C" fn(*mut LjIngestPlugin, RecordCallback, *mut c_void);
 type FeedFn = unsafe extern "C" fn(*mut LjIngestPlugin, *const u8, usize) -> c_int;
+type FetchFn = unsafe extern "C" fn(*mut LjIngestPlugin) -> c_int;
 type FreeFn = unsafe extern "C" fn(*mut LjIngestPlugin);
 type RecordCallback = unsafe extern "C" fn(*mut c_void, *const LjLogRecord);
 
@@ -50,6 +51,9 @@ struct PluginHandle {
     create: CreateFn,
     set_callback: SetCallbackFn,
     feed: FeedFn,
+    /// Active-source plugins export `lj_ingest_fetch`. If present, ljd calls
+    /// it instead of accepting TCP connections and calling `lj_ingest_feed`.
+    fetch: Option<FetchFn>,
     free: FreeFn,
 }
 
@@ -67,11 +71,17 @@ impl PluginHandle {
                 lib.get(b"lj_ingest_set_callback\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_set_callback: {err}")))?;
             let feed: libloading::Symbol<FeedFn> =
                 lib.get(b"lj_ingest_feed\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_feed: {err}")))?;
+            let fetch: Option<FetchFn> = lib.get::<FetchFn>(b"lj_ingest_fetch\0").ok().map(|sym| *sym);
             let free: libloading::Symbol<FreeFn> =
                 lib.get(b"lj_ingest_free\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_free: {err}")))?;
 
-            Ok(Self { create: *create, set_callback: *set_callback, feed: *feed, free: *free, _lib: lib })
+            Ok(Self { create: *create, set_callback: *set_callback, feed: *feed, fetch, free: *free, _lib: lib })
         }
+    }
+
+    /// Returns true if the plugin is an active source (exports `lj_ingest_fetch`).
+    fn is_active(&self) -> bool {
+        self.fetch.is_some()
     }
 }
 
@@ -173,11 +183,18 @@ fn build_otlp_payload(ts: u64, severity: i32, severity_text: Option<&str>, body:
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
-/// Runs the plugin ingest loop: loads the .so, binds TCP, feeds bytes.
+/// Runs the plugin ingest loop: loads the .so, then either calls
+/// `lj_ingest_fetch` (active plugin) or binds TCP and feeds bytes (passive).
 pub fn plugin_ingest_loop(bind_addr: &str, plugin_path: &Path, spool: Arc<super::daemon::SharedSpool>, next_seq: Arc<AtomicU64>) -> io::Result<()> {
     let handle = Arc::new(PluginHandle::load(plugin_path)?);
+
+    if handle.is_active() {
+        eprintln!("ljd ingest using active plugin {}", plugin_path.display());
+        return run_active_plugin(&handle, spool, next_seq);
+    }
+
     let listener = TcpListener::bind(bind_addr)?;
-    eprintln!("ljd ingest listening on {bind_addr} using plugin {}", plugin_path.display());
+    eprintln!("ljd ingest listening on {bind_addr} using passive plugin {}", plugin_path.display());
 
     for stream in listener.incoming() {
         let stream = stream?;
@@ -233,4 +250,29 @@ fn handle_plugin_client(
     unsafe { (handle.free)(plugin_ctx) };
     let _ = unsafe { Box::from_raw(ctx_ptr as *mut CallbackCtx) };
     result
+}
+
+/// Runs an active-source plugin that owns its own I/O via `lj_ingest_fetch`.
+fn run_active_plugin(handle: &PluginHandle, spool: Arc<super::daemon::SharedSpool>, next_seq: Arc<AtomicU64>) -> io::Result<()> {
+    let fetch = handle.fetch.ok_or_else(|| io::Error::other("plugin has no lj_ingest_fetch"))?;
+
+    let ctx = Box::new(CallbackCtx { spool, next_seq });
+    let ctx_ptr = Box::into_raw(ctx) as *mut c_void;
+
+    let plugin_ctx = unsafe { (handle.create)() };
+    if plugin_ctx.is_null() {
+        let _ = unsafe { Box::from_raw(ctx_ptr as *mut CallbackCtx) };
+        return Err(io::Error::other("lj_ingest_create returned NULL"));
+    }
+    unsafe { (handle.set_callback)(plugin_ctx, on_record, ctx_ptr) };
+
+    let rc = unsafe { fetch(plugin_ctx) };
+
+    unsafe { (handle.free)(plugin_ctx) };
+    let _ = unsafe { Box::from_raw(ctx_ptr as *mut CallbackCtx) };
+
+    if rc != 0 {
+        return Err(io::Error::other(format!("lj_ingest_fetch returned error code {rc}")));
+    }
+    Ok(())
 }
