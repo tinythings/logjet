@@ -131,3 +131,17 @@ fn unsupported_replay_request_version_is_rejected() {
     let err = read_replay_request(&mut bytes.as_slice()).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
+
+#[test]
+fn corrupted_payload_is_rejected_by_crc() {
+    let record = WireRecord { record_type: RecordType::Logs, seq: 1, ts_unix_ns: 1, payload: b"hello".to_vec() };
+    let mut bytes = Vec::new();
+    write_record(&mut bytes, &record).unwrap();
+
+    // Flip one bit in the payload region (offset 32 is first payload byte)
+    bytes[32] ^= 0x01;
+
+    let err = read_record(&mut bytes.as_slice()).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("CRC32C mismatch"));
+}
