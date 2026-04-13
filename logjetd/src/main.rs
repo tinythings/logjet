@@ -1,5 +1,6 @@
 mod config;
 mod daemon;
+mod plugin;
 mod protocol;
 mod replay;
 mod spool;

@@ -6,6 +6,7 @@ license = "Apache-2.0"
 
 [dependencies]
 libc = "0.2"
+libloading = "0.8"
 logjet = { path = ".." }
 lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
 opentelemetry-proto = { version = "0.28", features = ["gen-tonic", "logs"] }
