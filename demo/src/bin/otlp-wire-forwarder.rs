@@ -3,7 +3,7 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::net::TcpStream;
 
 use logjet::RecordType;
-use otlp_demo::post_raw_otlp_http;
+use otlp_demo::DemoConnection;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
@@ -17,19 +17,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = TcpStream::connect(&source)?;
     read_replay_hello(&mut stream)?;
     write_replay_request(&mut stream, 0)?;
+    let mut conn = DemoConnection::open(&dest, None, None)?;
     let mut forwarded = 0u64;
 
     while let Some(record) = read_wire_record(&mut stream)? {
         if record.record_type == RecordType::Logs {
-            post_raw_otlp_http(&dest, &record.payload, None, None)?;
+            conn.post(&record.payload)?;
             forwarded += 1;
             eprintln!("forwarded record seq={} to http://{dest}/v1/logs", record.seq);
         }
 
-        if let Some(limit) = max_records {
-            if forwarded >= limit {
-                break;
-            }
+        if let Some(limit) = max_records
+            && forwarded >= limit
+        {
+            break;
         }
     }
 

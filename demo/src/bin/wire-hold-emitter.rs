@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(err) => {
             eprintln!("{service_name}: second record failed; connection was closed: {err}");
-            Err(err.into())
+            Err(err)
         }
     }
 }
