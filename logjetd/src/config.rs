@@ -50,6 +50,18 @@ pub struct FileConfig {
     pub dir: PathBuf,
     pub name: String,
     pub segment_size_bytes: u64,
+    pub fsync: FsyncPolicy,
+}
+
+/// Controls when data is guaranteed durable on disk via fsync().
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsyncPolicy {
+    /// Never fsync — fastest, data may be lost on power cut.
+    None,
+    /// Fsync after every block flush — safest, slowest.
+    Block,
+    /// Fsync periodically in the background flush thread.
+    Interval,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +160,8 @@ struct RawConfig {
     file_size_kb: Option<u64>,
     #[serde(rename = "file.name")]
     file_name: Option<String>,
+    #[serde(rename = "file.fsync")]
+    file_fsync: Option<String>,
     #[serde(rename = "ingest.listen")]
     ingest_addr: Option<String>,
     #[serde(rename = "ingest.protocol")]
@@ -233,6 +247,7 @@ impl Config {
                 file_path: None,
                 file_size_kb: None,
                 file_name: None,
+                file_fsync: None,
                 ingest_addr: None,
                 ingest_protocol: None,
                 ingest_tls_enable: None,
@@ -356,10 +371,17 @@ impl Config {
             "buffer" => StorageConfig::Buffer(BufferConfig { limit: parse_buffer_limit(raw.buffer_size_kb, raw.buffer_messages)?, keep_messages }),
             "file" => {
                 let name = raw.file_name.unwrap_or_else(|| "bar.logjet".to_string());
+                let fsync = match raw.file_fsync.as_deref().unwrap_or("interval") {
+                    "none" => FsyncPolicy::None,
+                    "block" => FsyncPolicy::Block,
+                    "interval" => FsyncPolicy::Interval,
+                    other => return Err(format!("invalid file.fsync policy: {other}").into()),
+                };
                 StorageConfig::File(FileConfig {
                     dir: raw.file_path.unwrap_or_else(|| PathBuf::from(".")),
                     name,
                     segment_size_bytes: u64::try_from(kib_to_bytes(raw.file_size_kb.unwrap_or(100))?)?,
+                    fsync,
                 })
             }
             other => return Err(format!("invalid output mode: {other}").into()),

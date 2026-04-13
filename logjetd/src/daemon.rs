@@ -516,6 +516,7 @@ fn flush_loop(spool: Arc<SharedSpool>) -> io::Result<()> {
         thread::sleep(Duration::from_millis(200));
         let mut inner = spool.spool.lock().map_err(|_| io::Error::other("spool mutex poisoned"))?;
         inner.flush_pending()?;
+        inner.fsync_if_interval()?;
         drop(inner);
         spool.notify_change()?;
     }
