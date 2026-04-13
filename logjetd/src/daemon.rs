@@ -198,11 +198,12 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
     let replay_addr = config.config.replay_addr.clone();
     let replay_max_clients = config.config.replay_max_clients;
     let replay_client_timeout_ms = config.config.replay_client_timeout_ms;
+    let wire_compression = config.config.wire_compression;
     let tls = config.config.tls.clone();
 
     let replay_thread = thread::Builder::new()
         .name("ljd-replay".to_string())
-        .spawn(move || replay_loop(replay_addr, replay_spool, replay_max_clients, replay_client_timeout_ms, tls))?;
+        .spawn(move || replay_loop(replay_addr, replay_spool, replay_max_clients, replay_client_timeout_ms, wire_compression, tls))?;
 
     eprintln!("ljd using config {}", config.config_path.display());
     ingest_loop(
@@ -523,7 +524,7 @@ fn flush_loop(spool: Arc<SharedSpool>) -> io::Result<()> {
 }
 
 fn replay_loop(
-    bind_addr: String, spool: Arc<SharedSpool>, max_clients: usize, client_timeout_ms: u64, tls: crate::config::TlsConfig,
+    bind_addr: String, spool: Arc<SharedSpool>, max_clients: usize, client_timeout_ms: u64, wire_compression: bool, tls: crate::config::TlsConfig,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(&bind_addr)?;
     let limiter = Arc::new(ConnectionLimiter::new(max_clients));
@@ -544,7 +545,7 @@ fn replay_loop(
         let tls_server = tls_server.clone();
         let limiter = Arc::clone(&limiter);
         thread::Builder::new().name("ljd-replay-client".to_string()).spawn(move || {
-            if let Err(err) = handle_replay_client(stream, spool, tls_server, limiter) {
+            if let Err(err) = handle_replay_client(stream, spool, tls_server, limiter, wire_compression) {
                 eprintln!("ljd replay client error: {err}");
             }
         })?;
@@ -612,7 +613,7 @@ impl Drop for ConnectionPermit {
 }
 
 fn handle_replay_client(
-    stream: TcpStream, spool: Arc<SharedSpool>, tls_server: Option<Arc<ServerConfig>>, limiter: Arc<ConnectionLimiter>,
+    stream: TcpStream, spool: Arc<SharedSpool>, tls_server: Option<Arc<ServerConfig>>, limiter: Arc<ConnectionLimiter>, wire_compression: bool,
 ) -> io::Result<()> {
     let Some(_permit) = limiter.try_acquire() else {
         eprintln!("ljd replay refused client: replay.max-clients reached");
@@ -621,14 +622,14 @@ fn handle_replay_client(
     if let Some(server_config) = tls_server {
         let conn = ServerConnection::new(server_config).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         let mut transport = StreamOwned::new(conn, stream);
-        return handle_replay_transport(&mut transport, spool);
+        return handle_replay_transport(&mut transport, spool, wire_compression);
     }
 
     let mut transport = stream;
-    handle_replay_transport(&mut transport, spool)
+    handle_replay_transport(&mut transport, spool, wire_compression)
 }
 
-fn handle_replay_transport<T: io::Read + io::Write>(transport: &mut T, spool: Arc<SharedSpool>) -> io::Result<()> {
+fn handle_replay_transport<T: io::Read + io::Write>(transport: &mut T, spool: Arc<SharedSpool>, wire_compression: bool) -> io::Result<()> {
     let hello = {
         let spool = spool.spool.lock().map_err(|_| io::Error::other("spool mutex poisoned"))?;
         let (first_seq, last_seq) = spool.sequence_bounds()?.unwrap_or((0, 0));
@@ -646,7 +647,7 @@ fn handle_replay_transport<T: io::Read + io::Write>(transport: &mut T, spool: Ar
     eprintln!("ljd replay client requested records after seq={} mode={}", request.from_seq, if request.consume { "drain" } else { "keep" });
 
     if request.consume {
-        return handle_replay_transport_drain(transport, spool, &mut cursor, &mut seen_generation);
+        return handle_replay_transport_drain(transport, spool, &mut cursor, &mut seen_generation, wire_compression);
     }
 
     loop {
@@ -661,7 +662,7 @@ fn handle_replay_transport<T: io::Read + io::Write>(transport: &mut T, spool: Ar
                 break;
             };
 
-            write_record(transport, &record)?;
+            write_record(transport, &record, wire_compression)?;
             sent_any = true;
         }
 
@@ -675,7 +676,7 @@ fn handle_replay_transport<T: io::Read + io::Write>(transport: &mut T, spool: Ar
 }
 
 fn handle_replay_transport_drain<T: io::Read + io::Write>(
-    transport: &mut T, spool: Arc<SharedSpool>, cursor: &mut crate::spool::ReplayCursor, seen_generation: &mut u64,
+    transport: &mut T, spool: Arc<SharedSpool>, cursor: &mut crate::spool::ReplayCursor, seen_generation: &mut u64, wire_compression: bool,
 ) -> io::Result<()> {
     loop {
         let next_record = {
@@ -688,7 +689,7 @@ fn handle_replay_transport_drain<T: io::Read + io::Write>(
             continue;
         };
 
-        write_record(transport, &record)?;
+        write_record(transport, &record, wire_compression)?;
         transport.flush()?;
 
         let ack = read_replay_ack(transport)?;

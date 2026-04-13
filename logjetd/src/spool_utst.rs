@@ -41,7 +41,7 @@ fn replay_since_only_sends_newer_records() {
     let mut bytes = Vec::new();
     let mut cursor = spool.replay_cursor_after(2).unwrap();
     while let Some(record) = spool.next_for_cursor(&mut cursor).unwrap() {
-        crate::protocol::write_record(&mut bytes, &record).unwrap();
+        crate::protocol::write_record(&mut bytes, &record, true).unwrap();
     }
 
     let mut reader = bytes.as_slice();
