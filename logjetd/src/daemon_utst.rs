@@ -135,7 +135,7 @@ fn ingest_policy_allows_priority_bypass_above_threshold() {
 fn classify_otlp_batch_priority_uses_highest_log_severity() {
     let batch = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
-            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0 }),
+            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0, entity_refs: Vec::new() }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
                     name: "test".to_string(),
