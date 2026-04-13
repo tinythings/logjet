@@ -29,7 +29,7 @@ The script:
 2. ljd dlopen's the syslog plugin `.so`
 3. listens for raw syslog TCP on `127.0.0.1:5514`
 4. sends 16 test syslog messages via `nc`
-5. inspects the stored `.logjet` file
+5. stops ljd and opens `ljx view` on the stored `.logjet` file
 
 ## Send Your Own Messages
 
@@ -37,6 +37,33 @@ While the demo is running:
 
 ```bash
 echo '<13>Oct 11 22:14:15 myhost myapp: hello from syslog' | nc -q0 127.0.0.1 5514
+```
+
+## Capture Real Syslog
+
+Point your system syslog daemon at ljd to capture real logs.
+
+**rsyslog** — add to `/etc/rsyslog.d/logjet.conf`:
+
+```
+*.* @@127.0.0.1:5514
+```
+
+Then `sudo systemctl restart rsyslog`.
+
+`@@` = TCP (required). `@` = UDP (not supported).
+
+**syslog-ng** — add a destination:
+
+```
+destination d_ljd { tcp("127.0.0.1" port(5514)); };
+log { source(s_sys); destination(d_ljd); };
+```
+
+**journald** (quick and dirty):
+
+```bash
+journalctl -f | nc 127.0.0.1 5514
 ```
 
 ## Inspect Output
