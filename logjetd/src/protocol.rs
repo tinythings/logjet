@@ -136,12 +136,12 @@ pub fn read_replay_request<R: Read>(reader: &mut R) -> io::Result<ReplayRequest>
 }
 
 pub fn write_replay_request<W: Write>(writer: &mut W, request: &ReplayRequest) -> io::Result<()> {
-    writer.write_all(&REPLAY_REQUEST_MAGIC)?;
-    writer.write_all(&[REPLAY_REQUEST_VERSION])?;
-    writer.write_all(&[u8::from(request.consume)])?;
-    writer.write_all(&[0u8; 6])?;
-    writer.write_all(&request.from_seq.to_le_bytes())?;
-    Ok(())
+    let mut buf = [0u8; 24];
+    buf[..8].copy_from_slice(&REPLAY_REQUEST_MAGIC);
+    buf[8] = REPLAY_REQUEST_VERSION;
+    buf[9] = u8::from(request.consume);
+    buf[16..24].copy_from_slice(&request.from_seq.to_le_bytes());
+    writer.write_all(&buf)
 }
 
 pub fn read_replay_hello<R: Read>(reader: &mut R) -> io::Result<ReplayHello> {
@@ -166,13 +166,13 @@ pub fn read_replay_hello<R: Read>(reader: &mut R) -> io::Result<ReplayHello> {
 }
 
 pub fn write_replay_hello<W: Write>(writer: &mut W, hello: &ReplayHello) -> io::Result<()> {
-    writer.write_all(&REPLAY_HELLO_MAGIC)?;
-    writer.write_all(&[REPLAY_HELLO_VERSION])?;
-    writer.write_all(&[0u8; 7])?;
-    writer.write_all(&hello.stream_id.to_le_bytes())?;
-    writer.write_all(&hello.first_seq.to_le_bytes())?;
-    writer.write_all(&hello.last_seq.to_le_bytes())?;
-    Ok(())
+    let mut buf = [0u8; 40];
+    buf[..8].copy_from_slice(&REPLAY_HELLO_MAGIC);
+    buf[8] = REPLAY_HELLO_VERSION;
+    buf[16..24].copy_from_slice(&hello.stream_id.to_le_bytes());
+    buf[24..32].copy_from_slice(&hello.first_seq.to_le_bytes());
+    buf[32..40].copy_from_slice(&hello.last_seq.to_le_bytes());
+    writer.write_all(&buf)
 }
 
 pub fn read_replay_ack<R: Read>(reader: &mut R) -> io::Result<ReplayAck> {
@@ -193,11 +193,11 @@ pub fn read_replay_ack<R: Read>(reader: &mut R) -> io::Result<ReplayAck> {
 }
 
 pub fn write_replay_ack<W: Write>(writer: &mut W, ack: &ReplayAck) -> io::Result<()> {
-    writer.write_all(&REPLAY_ACK_MAGIC)?;
-    writer.write_all(&[REPLAY_ACK_VERSION])?;
-    writer.write_all(&[0u8; 7])?;
-    writer.write_all(&ack.ack_seq.to_le_bytes())?;
-    Ok(())
+    let mut buf = [0u8; 24];
+    buf[..8].copy_from_slice(&REPLAY_ACK_MAGIC);
+    buf[8] = REPLAY_ACK_VERSION;
+    buf[16..24].copy_from_slice(&ack.ack_seq.to_le_bytes());
+    writer.write_all(&buf)
 }
 
 #[cfg(test)]
