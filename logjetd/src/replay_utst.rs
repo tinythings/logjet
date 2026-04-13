@@ -1,6 +1,6 @@
 use super::{
-    BridgeState, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask, enqueue_export_task, parse_bridge_state, read_bridge_state,
-    reconcile_bridge_state, write_bridge_state,
+    BridgeState, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask, enqueue_export_task, parse_bridge_state, parse_content_length,
+    read_bridge_state, read_http_response, reconcile_bridge_state, write_bridge_state,
 };
 use crate::config::{BackpressureMode, CollectorConfig, UpstreamMode};
 use crate::protocol::ReplayHello;
@@ -124,4 +124,53 @@ fn test_collector_transport(mode: BackpressureMode, max_buffered_records: usize)
 fn unique_temp_path(label: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     std::env::temp_dir().join(format!("ljd-{label}-{nanos}-{}.state", std::process::id()))
+}
+
+#[test]
+fn http_response_200_with_body_is_consumed() {
+    let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+    let mut cursor = std::io::Cursor::new(raw.as_slice());
+    read_http_response(&mut cursor).unwrap();
+    assert_eq!(cursor.position(), raw.len() as u64);
+}
+
+#[test]
+fn http_response_200_no_body_succeeds() {
+    let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+    let mut cursor = std::io::Cursor::new(raw.as_slice());
+    read_http_response(&mut cursor).unwrap();
+}
+
+#[test]
+fn http_response_200_missing_content_length_succeeds() {
+    let raw = b"HTTP/1.1 200 OK\r\n\r\n";
+    let mut cursor = std::io::Cursor::new(raw.as_slice());
+    read_http_response(&mut cursor).unwrap();
+}
+
+#[test]
+fn http_response_non_200_is_rejected() {
+    let raw = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n";
+    let mut cursor = std::io::Cursor::new(raw.as_slice());
+    let err = read_http_response(&mut cursor).unwrap_err();
+    assert!(err.to_string().contains("non-200"), "{err}");
+}
+
+#[test]
+fn http_response_eof_before_headers_is_rejected() {
+    let raw = b"HTTP/1.1 200";
+    let mut cursor = std::io::Cursor::new(raw.as_slice());
+    let err = read_http_response(&mut cursor).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+}
+
+#[test]
+fn parse_content_length_is_case_insensitive() {
+    assert_eq!(parse_content_length("content-length: 42\r\n"), 42);
+    assert_eq!(parse_content_length("Content-Length: 99\r\n"), 99);
+}
+
+#[test]
+fn parse_content_length_returns_zero_when_absent() {
+    assert_eq!(parse_content_length("X-Custom: foo\r\n"), 0);
 }
