@@ -307,10 +307,23 @@ fn read_wire_record(stream: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
     }
     let mut header = [0u8; 24];
     stream.read_exact(&mut header)?;
+    let codec = header[2];
     let payload_len = u32::from_le_bytes([header[20], header[21], header[22], header[23]]) as usize;
     let mut payload = vec![0u8; payload_len];
     stream.read_exact(&mut payload)?;
-    Ok(Some(payload))
+    let mut _crc = [0u8; 4];
+    stream.read_exact(&mut _crc)?;
+    if codec == 1 {
+        if payload.len() < 4 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "LZ4 payload too short"));
+        }
+        let uncompressed_len = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+        let decompressed = lz4_flex::block::decompress(&payload[4..], uncompressed_len)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+        Ok(Some(decompressed))
+    } else {
+        Ok(Some(payload))
+    }
 }
 
 fn build_logs_request(service_name: &str, message: &str) -> ExportLogsServiceRequest {
