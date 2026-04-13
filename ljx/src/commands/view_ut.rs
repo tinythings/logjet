@@ -1,7 +1,8 @@
 use super::{
-    DetailRecord, EntryMeta, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, extract_otlp_log_message, format_summary, render_modal_info_entries,
-    render_modal_message, text_preview,
+    DetailRecord, EntryMeta, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, extract_otlp_log_message, format_summary, open_temp_spool_pair, read_spool_record,
+    render_modal_info_entries, render_modal_message, text_preview, write_spool_record,
 };
+use logjet::OwnedRecord;
 use logjet::RecordType;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
@@ -29,7 +30,7 @@ fn summary_uses_trimmed_single_line_preview() {
 fn summary_prefers_decoded_otlp_log_message() {
     let batch = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
-            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0 }),
+            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0, entity_refs: Vec::new() }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
                     name: "test".to_string(),
@@ -85,6 +86,7 @@ fn modal_info_lists_otlp_attributes() {
                     value: Some(AnyValue { value: Some(Value::StringValue("cpp-appliance".to_string())) }),
                 }],
                 dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
             }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
@@ -132,7 +134,7 @@ fn modal_info_caps_attribute_entries_per_kind() {
         .collect::<Vec<_>>();
     let batch = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
-            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0 }),
+            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0, entity_refs: Vec::new() }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
                     name: "liblogjet".to_string(),
@@ -168,4 +170,25 @@ fn modal_info_caps_attribute_entries_per_kind() {
     let record_entries = entries.iter().filter(|(key, _)| key.starts_with("record.custom.")).count();
     assert_eq!(record_entries, MODAL_ATTR_ENTRY_LIMIT_PER_KIND);
     assert!(entries.iter().any(|(key, value)| key == "record.attrs.more" && value == "8 not shown"));
+}
+
+#[test]
+fn temp_spool_reader_and_writer_use_independent_offsets() {
+    let (path, mut reader, mut writer) = open_temp_spool_pair().unwrap();
+
+    let first = OwnedRecord { record_type: RecordType::Logs, seq: 1, ts_unix_ns: 11, payload: b"first payload".to_vec() };
+    let second = OwnedRecord { record_type: RecordType::Logs, seq: 2, ts_unix_ns: 22, payload: b"second payload".to_vec() };
+
+    let first_meta = write_spool_record(&mut writer, &first).unwrap();
+    let second_meta = write_spool_record(&mut writer, &second).unwrap();
+
+    let reread_first = read_spool_record(&mut reader, first_meta).unwrap();
+    let reread_second = read_spool_record(&mut reader, second_meta).unwrap();
+
+    assert_eq!(reread_first.meta.seq, 1);
+    assert_eq!(reread_first.payload, first.payload);
+    assert_eq!(reread_second.meta.seq, 2);
+    assert_eq!(reread_second.payload, second.payload);
+
+    let _ = std::fs::remove_file(path);
 }
