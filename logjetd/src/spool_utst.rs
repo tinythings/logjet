@@ -285,6 +285,7 @@ fn test_file_config(dir: &Path, segment_size_bytes: u64) -> FileConfig {
         segment_size_bytes,
         fsync: FsyncPolicy::None,
         codec: logjet::Codec::Lz4,
+        block_alignment: 0,
         max_total_bytes: 0,
     }
 }
