@@ -10,8 +10,8 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 colored = "3"
 crossterm = "0.28"
 logjet = { path = ".." }
-opentelemetry-proto = { version = "0.28", features = ["gen-tonic", "logs"] }
-prost = "0.13"
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs"] }
+prost = "0.14"
 ratatui = "0.29"
 regex = "1.12"
 shlex = "1.3"

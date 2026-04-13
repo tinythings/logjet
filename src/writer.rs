@@ -20,7 +20,7 @@ pub struct WriterConfig {
 
 impl Default for WriterConfig {
     fn default() -> Self {
-        Self { block_target_size: DEFAULT_BLOCK_TARGET_SIZE, codec: Codec::Lz4, sync_marker: DEFAULT_SYNC_MARKER, block_alignment: 0 }
+        Self { block_target_size: DEFAULT_BLOCK_TARGET_SIZE, codec: Codec::Zstd, sync_marker: DEFAULT_SYNC_MARKER, block_alignment: 0 }
     }
 }
 
