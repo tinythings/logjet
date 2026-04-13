@@ -602,9 +602,19 @@ fn inspect_file(path: &Path) -> io::Result<()> {
         print_record(&record);
     }
     let stats = reader.stats();
+    let ratio =
+        if stats.total_uncompressed_bytes > 0 { (stats.total_compressed_bytes as f64 / stats.total_uncompressed_bytes as f64) * 100.0 } else { 0.0 };
+    let avg_records = if stats.blocks_ok > 0 { stats.records_ok as f64 / stats.blocks_ok as f64 } else { 0.0 };
     println!(
-        "stats blocks_ok={} blocks_bad={} bytes_skipped={} records_ok={}",
-        stats.blocks_ok, stats.blocks_bad, stats.bytes_skipped, stats.records_ok
+        "stats blocks_ok={} blocks_bad={} bytes_skipped={} records_ok={} compressed={} uncompressed={} ratio={:.1}% avg_records_per_block={:.1}",
+        stats.blocks_ok,
+        stats.blocks_bad,
+        stats.bytes_skipped,
+        stats.records_ok,
+        stats.total_compressed_bytes,
+        stats.total_uncompressed_bytes,
+        ratio,
+        avg_records
     );
     Ok(())
 }

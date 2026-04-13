@@ -27,6 +27,8 @@ pub struct ReaderStats {
     pub blocks_bad: u64,
     pub bytes_skipped: u64,
     pub records_ok: u64,
+    pub total_compressed_bytes: u64,
+    pub total_uncompressed_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -178,6 +180,14 @@ impl<R: Read + Seek> LogjetReader<R> {
         if expected_block_crc != actual_block_crc {
             return Err(Error::BlockCrcMismatch { expected: expected_block_crc, actual: actual_block_crc });
         }
+
+        self.stats.total_compressed_bytes =
+            self.stats.total_compressed_bytes.checked_add(header.compressed_len as u64).ok_or(Error::NumericOverflow("total_compressed_bytes"))?;
+        self.stats.total_uncompressed_bytes = self
+            .stats
+            .total_uncompressed_bytes
+            .checked_add(header.uncompressed_len as u64)
+            .ok_or(Error::NumericOverflow("total_uncompressed_bytes"))?;
 
         let mut payload = Vec::with_capacity(header.uncompressed_len as usize);
         header.codec.decompress(&compressed, header.uncompressed_len as usize, &mut payload)?;
