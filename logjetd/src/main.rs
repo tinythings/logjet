@@ -59,7 +59,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "inspect" => {
                 command = Some("inspect");
-                while let Some(arg) = args.next() {
+                for arg in args.by_ref() {
                     match arg.as_str() {
                         "--verify-otlp" => inspect_verify_otlp = true,
                         other if command_arg.is_none() => command_arg = Some(other.to_string()),

@@ -9,13 +9,13 @@ use std::ffi::{CString, c_char, c_int, c_void};
 // ── C ABI types (must match liblogjet.h) ────────────────────────────────────
 
 #[repr(C)]
-struct LjAttribute {
+pub struct LjAttribute {
     key: *const c_char,
     value: *const c_char,
 }
 
 #[repr(C)]
-struct LjLogRecord {
+pub struct LjLogRecord {
     timestamp_unix_ns: u64,
     severity_number: i32,
     severity_text: *const c_char,
@@ -28,7 +28,7 @@ type RecordCallback = unsafe extern "C" fn(*mut c_void, *const LjLogRecord);
 
 // ── Plugin context ──────────────────────────────────────────────────────────
 
-struct StressPlugin {
+pub struct StressPlugin {
     callback: Option<RecordCallback>,
     user: *mut c_void,
 }
@@ -54,6 +54,11 @@ pub unsafe extern "C" fn lj_ingest_set_callback(ctx: *mut StressPlugin, cb: Reco
 }
 
 /// Passive feed — unused but required by ABI.
+///
+/// # Safety
+///
+/// `_ctx` must be either null or a valid plugin pointer created by
+/// `lj_ingest_create`. `_data` and `_len` are ignored by this plugin.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_ingest_feed(_ctx: *mut StressPlugin, _data: *const u8, _len: usize) -> c_int {
     0
@@ -102,7 +107,7 @@ fn emit_record(ctx: &StressPlugin, cb: RecordCallback, seq: u64) {
 
     // Vary body size — realistic distribution.
     let body_size = match seq % 20 {
-        0 => 4000,        // large JSON-like (~4KB records)
+        0 => 4000, // large JSON-like (~4KB records)
         1 => 3000,
         2..=5 => 500, // medium
         6..=9 => 200, // smallish
