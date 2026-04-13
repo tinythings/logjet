@@ -1,9 +1,9 @@
 use super::{BufferSpool, Spool};
-use crate::config::{BufferConfig, BufferLimit, FileConfig, StorageConfig};
+use crate::config::{BufferConfig, BufferLimit, FileConfig, FsyncPolicy, StorageConfig};
 use crate::protocol::{WireRecord, read_record};
 use logjet::RecordType;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -89,7 +89,7 @@ fn buffer_replay_cursor_resyncs_after_front_records_are_consumed() {
 #[test]
 fn file_spool_consume_state_survives_reopen() {
     let dir = unique_temp_dir("file-consume");
-    let config = FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1024 * 1024 };
+    let config = test_file_config(&dir, 1024 * 1024);
 
     {
         let mut spool = Spool::open(StorageConfig::File(config.clone())).unwrap();
@@ -113,7 +113,7 @@ fn file_spool_consume_state_survives_reopen() {
 #[test]
 fn file_replay_cursor_skips_consumed_records_after_cleanup() {
     let dir = unique_temp_dir("file-cursor-consume");
-    let config = FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1 };
+    let config = test_file_config(&dir, 1);
 
     let mut spool = Spool::open(StorageConfig::File(config)).unwrap();
     for seq in 1..=4 {
@@ -155,8 +155,7 @@ fn list_named_segments_orders_numeric_suffixes() {
 #[test]
 fn file_spool_rotates_when_segment_size_is_exceeded() {
     let dir = unique_temp_dir("file-rotate");
-    let mut spool =
-        Spool::open(StorageConfig::File(FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1 })).unwrap();
+    let mut spool = Spool::open(StorageConfig::File(test_file_config(&dir, 1))).unwrap();
 
     for seq in 1..=2 {
         spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![0u8; 8] }).unwrap();
@@ -171,17 +170,13 @@ fn file_spool_rotates_when_segment_size_is_exceeded() {
 fn file_spool_reuses_existing_non_full_segment() {
     let dir = unique_temp_dir("file-reuse");
     {
-        let mut spool =
-            Spool::open(StorageConfig::File(FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1024 * 1024 }))
-                .unwrap();
+        let mut spool = Spool::open(StorageConfig::File(test_file_config(&dir, 1024 * 1024))).unwrap();
         spool.append(WireRecord { record_type: RecordType::Logs, seq: 1, ts_unix_ns: 1, payload: vec![1u8; 8] }).unwrap();
         spool.flush_pending().unwrap();
     }
 
     {
-        let mut spool =
-            Spool::open(StorageConfig::File(FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1024 * 1024 }))
-                .unwrap();
+        let mut spool = Spool::open(StorageConfig::File(test_file_config(&dir, 1024 * 1024))).unwrap();
         spool.append(WireRecord { record_type: RecordType::Logs, seq: 2, ts_unix_ns: 2, payload: vec![2u8; 8] }).unwrap();
         spool.flush_pending().unwrap();
     }
@@ -194,7 +189,7 @@ fn file_spool_reuses_existing_non_full_segment() {
 #[test]
 fn file_spool_preserves_stream_id_and_advances_sequence_seed_after_reopen() {
     let dir = unique_temp_dir("file-stream-id");
-    let config = FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1024 * 1024 };
+    let config = test_file_config(&dir, 1024 * 1024);
 
     let first_stream_id;
     {
@@ -218,8 +213,7 @@ fn file_spool_preserves_stream_id_and_advances_sequence_seed_after_reopen() {
 #[test]
 fn summarise_named_segments_reports_sequence_ranges() {
     let dir = unique_temp_dir("segment-summary");
-    let mut spool =
-        Spool::open(StorageConfig::File(FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1 })).unwrap();
+    let mut spool = Spool::open(StorageConfig::File(test_file_config(&dir, 1))).unwrap();
 
     for seq in 1..=3 {
         spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![seq as u8; 8] }).unwrap();
@@ -239,8 +233,7 @@ fn summarise_named_segments_reports_sequence_ranges() {
 #[test]
 fn prune_named_segments_by_file_count_keeps_newest_segment() {
     let dir = unique_temp_dir("segment-prune-count");
-    let mut spool =
-        Spool::open(StorageConfig::File(FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1 })).unwrap();
+    let mut spool = Spool::open(StorageConfig::File(test_file_config(&dir, 1))).unwrap();
 
     for seq in 1..=4 {
         spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![seq as u8; 8] }).unwrap();
@@ -264,8 +257,7 @@ fn prune_named_segments_by_file_count_keeps_newest_segment() {
 #[test]
 fn prune_named_segments_dry_run_does_not_remove_files() {
     let dir = unique_temp_dir("segment-prune-dry-run");
-    let mut spool =
-        Spool::open(StorageConfig::File(FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1 })).unwrap();
+    let mut spool = Spool::open(StorageConfig::File(test_file_config(&dir, 1))).unwrap();
 
     for seq in 1..=3 {
         spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![seq as u8; 8] }).unwrap();
@@ -284,4 +276,8 @@ fn unique_temp_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ljd-{label}-{nanos}-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+fn test_file_config(dir: &Path, segment_size_bytes: u64) -> FileConfig {
+    FileConfig { dir: dir.to_path_buf(), name: "bofh.logjet".to_string(), segment_size_bytes, fsync: FsyncPolicy::None }
 }
