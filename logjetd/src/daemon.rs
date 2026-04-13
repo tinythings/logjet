@@ -191,6 +191,9 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
     let ingest_policy = Arc::new(SharedIngestPolicy::new(config.config.ingest_overload));
     let next_seq = Arc::new(AtomicU64::new(next_seq_seed));
 
+    let flush_spool = Arc::clone(&spool);
+    thread::Builder::new().name("ljd-flush".to_string()).spawn(move || flush_loop(flush_spool))?;
+
     let replay_spool = Arc::clone(&spool);
     let replay_addr = config.config.replay_addr.clone();
     let replay_max_clients = config.config.replay_max_clients;
@@ -507,6 +510,16 @@ fn build_grpc_server_tls_config(ingest_tls: &IngestTlsConfig) -> io::Result<Serv
 #[cfg(test)]
 #[path = "daemon_utst.rs"]
 mod daemon_utst;
+
+fn flush_loop(spool: Arc<SharedSpool>) -> io::Result<()> {
+    loop {
+        thread::sleep(Duration::from_millis(200));
+        let mut inner = spool.spool.lock().map_err(|_| io::Error::other("spool mutex poisoned"))?;
+        inner.flush_pending()?;
+        drop(inner);
+        spool.notify_change()?;
+    }
+}
 
 fn replay_loop(
     bind_addr: String, spool: Arc<SharedSpool>, max_clients: usize, client_timeout_ms: u64, tls: crate::config::TlsConfig,

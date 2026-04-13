@@ -96,6 +96,7 @@ fn file_spool_consume_state_survives_reopen() {
         for seq in 1..=3 {
             spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![seq as u8] }).unwrap();
         }
+        spool.flush_pending().unwrap();
         spool.consume_through(2).unwrap();
     }
 
@@ -118,6 +119,7 @@ fn file_replay_cursor_skips_consumed_records_after_cleanup() {
     for seq in 1..=4 {
         spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![seq as u8; 8] }).unwrap();
     }
+    spool.flush_pending().unwrap();
 
     let mut cursor = spool.replay_cursor_after(0).unwrap();
     let first = spool.next_for_cursor(&mut cursor).unwrap().unwrap();
@@ -173,6 +175,7 @@ fn file_spool_reuses_existing_non_full_segment() {
             Spool::open(StorageConfig::File(FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1024 * 1024 }))
                 .unwrap();
         spool.append(WireRecord { record_type: RecordType::Logs, seq: 1, ts_unix_ns: 1, payload: vec![1u8; 8] }).unwrap();
+        spool.flush_pending().unwrap();
     }
 
     {
@@ -180,6 +183,7 @@ fn file_spool_reuses_existing_non_full_segment() {
             Spool::open(StorageConfig::File(FileConfig { dir: dir.clone(), name: "bofh.logjet".to_string(), segment_size_bytes: 1024 * 1024 }))
                 .unwrap();
         spool.append(WireRecord { record_type: RecordType::Logs, seq: 2, ts_unix_ns: 2, payload: vec![2u8; 8] }).unwrap();
+        spool.flush_pending().unwrap();
     }
 
     assert!(dir.join("bofh.logjet").exists());
@@ -199,6 +203,7 @@ fn file_spool_preserves_stream_id_and_advances_sequence_seed_after_reopen() {
         assert_eq!(spool.next_sequence_seed().unwrap(), 1);
         spool.append(WireRecord { record_type: RecordType::Logs, seq: 1, ts_unix_ns: 1, payload: vec![1u8; 8] }).unwrap();
         spool.append(WireRecord { record_type: RecordType::Logs, seq: 2, ts_unix_ns: 2, payload: vec![2u8; 8] }).unwrap();
+        spool.flush_pending().unwrap();
     }
 
     {
@@ -219,6 +224,7 @@ fn summarise_named_segments_reports_sequence_ranges() {
     for seq in 1..=3 {
         spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![seq as u8; 8] }).unwrap();
     }
+    spool.flush_pending().unwrap();
 
     let summaries = super::summarise_named_segments(&dir, "bofh.logjet").unwrap();
     assert!(summaries.len() >= 2);
@@ -239,6 +245,7 @@ fn prune_named_segments_by_file_count_keeps_newest_segment() {
     for seq in 1..=4 {
         spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![seq as u8; 8] }).unwrap();
     }
+    spool.flush_pending().unwrap();
 
     let removed = super::prune_named_segments(&dir, "bofh.logjet", Some(2), None, false).unwrap();
     assert_eq!(removed.len(), 3);
@@ -263,6 +270,7 @@ fn prune_named_segments_dry_run_does_not_remove_files() {
     for seq in 1..=3 {
         spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: seq, payload: vec![seq as u8; 8] }).unwrap();
     }
+    spool.flush_pending().unwrap();
 
     let removed = super::prune_named_segments(&dir, "bofh.logjet", Some(1), None, true).unwrap();
     assert_eq!(removed.len(), 3);

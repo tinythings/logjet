@@ -116,6 +116,14 @@ impl Spool {
         }
     }
 
+    /// Flush any buffered records to disk so replay clients can see them.
+    pub fn flush_pending(&mut self) -> io::Result<()> {
+        match self {
+            Self::Buffer(_) => Ok(()),
+            Self::File(spool) => spool.flush_pending(),
+        }
+    }
+
     pub fn stream_id(&self) -> u64 {
         match self {
             Self::Buffer(spool) => spool.stream_id,
@@ -268,14 +276,19 @@ impl FileSpool {
         }
 
         self.active_writer.push(record.record_type, record.seq, record.ts_unix_ns, &record.payload).map_err(to_io_error)?;
-        self.active_writer.flush_block().map_err(to_io_error)?;
         self.refresh_active_size()?;
 
-        if self.active_size_bytes >= self.segment_target_bytes {
+        let effective_size = self.active_size_bytes + self.active_writer.pending_bytes() as u64;
+        if effective_size >= self.segment_target_bytes {
             self.rotate()?;
         }
 
         Ok(())
+    }
+
+    fn flush_pending(&mut self) -> io::Result<()> {
+        self.active_writer.flush_block().map_err(to_io_error)?;
+        self.refresh_active_size()
     }
 
     fn replay_cursor_after(&self, last_seq: u64) -> FileReplayCursor {
