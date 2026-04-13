@@ -73,6 +73,47 @@ void lj_logger_free(lj_logger *logger);
  */
 bool lj_logger_log(lj_logger *logger, const lj_log_record *record);
 
+/* ---------------------------------------------------------------------------
+ * Inbound ingest plugin ABI.
+ *
+ * A plugin is a shared library (.so / .dylib) that ljd dlopen's at startup.
+ * ljd feeds raw TCP bytes into the plugin; the plugin parses them and calls
+ * back with lj_log_record structs (same struct as outbound, both directions).
+ *
+ * The plugin must export these four symbols:
+ *   lj_ingest_create        — allocate parsing context
+ *   lj_ingest_set_callback  — register the record-delivery callback
+ *   lj_ingest_feed          — push raw bytes into the parser
+ *   lj_ingest_free          — destroy the parsing context
+ * --------------------------------------------------------------------------- */
+
+/* Opaque plugin context created by lj_ingest_create and freed by lj_ingest_free. */
+typedef struct lj_ingest_plugin lj_ingest_plugin;
+
+/* Callback invoked by the plugin for each parsed record.
+ * `user` is the opaque pointer passed to lj_ingest_set_callback.
+ * The record pointer is only valid for the duration of the callback.
+ */
+typedef void (*lj_record_callback)(void *user, const lj_log_record *record);
+
+/* Creates a new plugin parsing context. Returns NULL on failure. */
+lj_ingest_plugin *lj_ingest_create(void);
+
+/* Registers the callback that the plugin calls for each parsed record.
+ * `user` is forwarded as-is to every callback invocation.
+ */
+void lj_ingest_set_callback(lj_ingest_plugin *ctx,
+                            lj_record_callback cb, void *user);
+
+/* Feeds raw bytes from a TCP stream into the plugin parser.
+ * Returns 0 on success, non-zero on unrecoverable parse error.
+ */
+int lj_ingest_feed(lj_ingest_plugin *ctx,
+                   const uint8_t *data, size_t len);
+
+/* Destroys the plugin context. Accepts NULL. */
+void lj_ingest_free(lj_ingest_plugin *ctx);
+
 #ifdef __cplusplus
 }
 #endif

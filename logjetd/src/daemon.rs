@@ -30,7 +30,7 @@ pub struct DaemonConfig {
     pub config_path: PathBuf,
 }
 
-struct SharedSpool {
+pub(crate) struct SharedSpool {
     spool: Mutex<Spool>,
     wake_state: Mutex<u64>,
     wake_cv: Condvar,
@@ -211,6 +211,7 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
         config.config.ingest_protocol,
         config.config.ingest_tls,
         config.config.ingest_limits,
+        config.config.ingest_plugin_path,
         ingest_policy,
         spool,
         next_seq,
@@ -218,12 +219,17 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
     replay_thread.join().map_err(|_| io::Error::other("replay listener thread panicked"))?
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_loop(
-    bind_addr: String, protocol: IngestProtocol, ingest_tls: IngestTlsConfig, ingest_limits: IngestLimits, ingest_policy: Arc<SharedIngestPolicy>,
-    spool: Arc<SharedSpool>, next_seq: Arc<AtomicU64>,
+    bind_addr: String, protocol: IngestProtocol, ingest_tls: IngestTlsConfig, ingest_limits: IngestLimits, plugin_path: Option<PathBuf>,
+    ingest_policy: Arc<SharedIngestPolicy>, spool: Arc<SharedSpool>, next_seq: Arc<AtomicU64>,
 ) -> io::Result<()> {
     let limiter = Arc::new(ConnectionLimiter::new(ingest_limits.max_clients));
     match protocol {
+        IngestProtocol::Plugin => {
+            let path = plugin_path.ok_or_else(|| io::Error::other("ingest.plugin-path is required for plugin protocol"))?;
+            return crate::plugin::plugin_ingest_loop(&bind_addr, &path, spool, next_seq);
+        }
         IngestProtocol::Wire => {
             let listener = TcpListener::bind(&bind_addr)?;
             eprintln!(
@@ -417,6 +423,11 @@ fn append_batch_record(spool: &Arc<SharedSpool>, record: WireRecord) -> io::Resu
         inner.append(record)?;
     }
     spool.notify_change()
+}
+
+/// Appends a record to the spool. Exposed for the plugin ingest path.
+pub(crate) fn append_to_spool(spool: &Arc<SharedSpool>, record: WireRecord) -> io::Result<()> {
+    append_batch_record(spool, record)
 }
 
 struct ParsedHttpRequest {
