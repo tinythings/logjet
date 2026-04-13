@@ -78,6 +78,10 @@ pub struct CollectorConfig {
     pub cert_file: Option<PathBuf>,
     pub key_file: Option<PathBuf>,
     pub server_name: Option<String>,
+    /// Merge up to this many stored OTLP requests into one POST. 1 = no re-batching.
+    pub batch_size: usize,
+    /// Flush a partial batch after this many ms. 0 = flush only on batch_size.
+    pub batch_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +220,10 @@ struct RawConfig {
     collector_key_file: Option<PathBuf>,
     #[serde(rename = "collector.server-name")]
     collector_server_name: Option<String>,
+    #[serde(rename = "collector.batch-size")]
+    collector_batch_size: Option<usize>,
+    #[serde(rename = "collector.batch-timeout-ms")]
+    collector_batch_timeout_ms: Option<u64>,
     #[serde(rename = "backpressure.enabled")]
     backpressure_enabled: Option<bool>,
     #[serde(rename = "backpressure.mode")]
@@ -284,6 +292,8 @@ impl Config {
                 collector_cert_file: None,
                 collector_key_file: None,
                 collector_server_name: None,
+                collector_batch_size: None,
+                collector_batch_timeout_ms: None,
                 backpressure_enabled: None,
                 backpressure_mode: None,
                 backpressure_max_buffered_records: None,
@@ -347,6 +357,8 @@ impl Config {
             cert_file: raw.collector_cert_file,
             key_file: raw.collector_key_file,
             server_name: raw.collector_server_name,
+            batch_size: raw.collector_batch_size.unwrap_or(50).max(1),
+            batch_timeout_ms: raw.collector_batch_timeout_ms.unwrap_or(200),
         };
         let backpressure = BackpressureConfig {
             enabled: raw.backpressure_enabled.unwrap_or(false),

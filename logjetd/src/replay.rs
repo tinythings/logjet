@@ -4,9 +4,11 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use logjet::{LogjetReader, ReaderConfig, RecordType};
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use prost::Message;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
 use crate::config::{BackpressureConfig, BackpressureMode, CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode};
@@ -19,6 +21,7 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
     let endpoint = CollectorEndpoint::parse(&collector.url)?;
     let tls_client = if endpoint.tls { Some(load_collector_client_config(collector)?) } else { None };
     let mut conn = CollectorConnection::connect(&endpoint, Duration::from_millis(collector.timeout_ms), tls_client.as_ref(), collector)?;
+    let mut batcher = OtlpBatcher::new(collector.batch_size, collector.batch_timeout_ms);
 
     for segment in list_named_segments(path, name)? {
         let file = File::open(&segment.path)?;
@@ -29,11 +32,12 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
                 continue;
             }
 
-            conn.post(&record.payload)?;
+            batcher.add(&record.payload, &mut conn)?;
             sent = sent.saturating_add(1);
         }
     }
 
+    batcher.flush(&mut conn)?;
     Ok(sent)
 }
 
@@ -193,8 +197,19 @@ fn export_worker(
     collector_transport: CollectorTransport, task_rx: mpsc::Receiver<ExportTask>, result_tx: mpsc::Sender<ExportResult>,
 ) -> io::Result<()> {
     let mut conn = collector_transport.open_connection()?;
-    while let Ok(task) = task_rx.recv() {
-        let outcome = conn.post(&task.payload).map(|()| ExportOutcome::Delivered);
+    let mut batcher = OtlpBatcher::new(collector_transport.collector.batch_size, collector_transport.collector.batch_timeout_ms);
+    let recv_timeout = Duration::from_millis(collector_transport.collector.batch_timeout_ms.max(50));
+    loop {
+        let task = match task_rx.recv_timeout(recv_timeout) {
+            Ok(task) => task,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                batcher.flush_if_expired(&mut conn)?;
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        let outcome = batcher.add(&task.payload, &mut conn).map(|()| ExportOutcome::Delivered);
+        batcher.flush_if_expired(&mut conn)?;
         let failed = outcome.is_err();
         if result_tx.send(ExportResult { seq: task.seq, outcome }).is_err() {
             break;
@@ -203,6 +218,7 @@ fn export_worker(
             break;
         }
     }
+    let _ = batcher.flush(&mut conn);
     Ok(())
 }
 
@@ -547,6 +563,94 @@ fn parse_content_length(headers: &str) -> usize {
         }
     }
     0
+}
+
+/// Accumulates OTLP payloads and merges them into combined ExportLogsServiceRequests
+/// grouped by Resource+Scope before posting to the collector.
+struct OtlpBatcher {
+    batch_size: usize,
+    batch_timeout: Duration,
+    pending: ExportLogsServiceRequest,
+    pending_count: usize,
+    first_added: Option<Instant>,
+}
+
+impl OtlpBatcher {
+    fn new(batch_size: usize, batch_timeout_ms: u64) -> Self {
+        Self {
+            batch_size,
+            batch_timeout: Duration::from_millis(batch_timeout_ms),
+            pending: ExportLogsServiceRequest { resource_logs: Vec::new() },
+            pending_count: 0,
+            first_added: None,
+        }
+    }
+
+    /// Add a raw OTLP payload to the batch. Flushes to conn if batch is full.
+    fn add(&mut self, payload: &[u8], conn: &mut CollectorConnection) -> io::Result<()> {
+        if self.batch_size <= 1 {
+            return conn.post(payload);
+        }
+        match ExportLogsServiceRequest::decode(payload) {
+            Ok(req) => self.merge(req),
+            Err(_) => return conn.post(payload),
+        }
+        if self.pending_count >= self.batch_size {
+            self.flush(conn)?;
+        }
+        Ok(())
+    }
+
+    /// Flush any pending records if the batch timeout has expired.
+    fn flush_if_expired(&mut self, conn: &mut CollectorConnection) -> io::Result<()> {
+        if self.pending_count > 0 && self.batch_timeout.as_millis() > 0 && self.first_added.is_some_and(|t| t.elapsed() >= self.batch_timeout) {
+            self.flush(conn)?;
+        }
+        Ok(())
+    }
+
+    /// Flush all pending records to the collector.
+    fn flush(&mut self, conn: &mut CollectorConnection) -> io::Result<()> {
+        if self.pending_count == 0 {
+            return Ok(());
+        }
+        let merged = std::mem::replace(&mut self.pending, ExportLogsServiceRequest { resource_logs: Vec::new() });
+        self.pending_count = 0;
+        self.first_added = None;
+        conn.post(&merged.encode_to_vec())
+    }
+
+    fn merge(&mut self, req: ExportLogsServiceRequest) {
+        if self.first_added.is_none() {
+            self.first_added = Some(Instant::now());
+        }
+        for incoming_rl in req.resource_logs {
+            let existing = self.pending.resource_logs.iter_mut().find(|rl| rl.resource == incoming_rl.resource);
+            match existing {
+                Some(rl) => {
+                    for incoming_sl in incoming_rl.scope_logs {
+                        let existing_sl = rl.scope_logs.iter_mut().find(|sl| sl.scope == incoming_sl.scope);
+                        match existing_sl {
+                            Some(sl) => {
+                                self.pending_count += incoming_sl.log_records.len();
+                                sl.log_records.extend(incoming_sl.log_records);
+                            }
+                            None => {
+                                self.pending_count += incoming_sl.log_records.len();
+                                rl.scope_logs.push(incoming_sl);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    for sl in &incoming_rl.scope_logs {
+                        self.pending_count += sl.log_records.len();
+                    }
+                    self.pending.resource_logs.push(incoming_rl);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
