@@ -279,7 +279,14 @@ fn unique_temp_dir(label: &str) -> PathBuf {
 }
 
 fn test_file_config(dir: &Path, segment_size_bytes: u64) -> FileConfig {
-    FileConfig { dir: dir.to_path_buf(), name: "bofh.logjet".to_string(), segment_size_bytes, fsync: FsyncPolicy::None, max_total_bytes: 0 }
+    FileConfig {
+        dir: dir.to_path_buf(),
+        name: "bofh.logjet".to_string(),
+        segment_size_bytes,
+        fsync: FsyncPolicy::None,
+        codec: logjet::Codec::Lz4,
+        max_total_bytes: 0,
+    }
 }
 
 #[test]
