@@ -10,6 +10,8 @@ pub struct Config {
     pub ingest_tls: IngestTlsConfig,
     pub ingest_limits: IngestLimits,
     pub ingest_overload: IngestOverloadConfig,
+    /// Path to the ingest plugin shared library (.so). Required when protocol = plugin.
+    pub ingest_plugin_path: Option<PathBuf>,
     pub replay_addr: String,
     pub replay_max_clients: usize,
     pub replay_client_timeout_ms: u64,
@@ -27,6 +29,7 @@ pub enum IngestProtocol {
     Wire,
     OtlpHttp,
     OtlpGrpc,
+    Plugin,
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +207,8 @@ struct RawConfig {
     ingest_priority_severity_floor: Option<String>,
     #[serde(rename = "ingest.overload-report-ms")]
     ingest_overload_report_ms: Option<u64>,
+    #[serde(rename = "ingest.plugin-path")]
+    ingest_plugin_path: Option<PathBuf>,
     #[serde(rename = "replay.listen")]
     replay_addr: Option<String>,
     #[serde(rename = "replay.max-clients")]
@@ -287,6 +292,7 @@ impl Config {
                 ingest_max_batches_per_second: None,
                 ingest_priority_severity_floor: None,
                 ingest_overload_report_ms: None,
+                ingest_plugin_path: None,
                 replay_addr: None,
                 replay_max_clients: None,
                 replay_client_timeout_ms: None,
@@ -324,8 +330,13 @@ impl Config {
             "wire" => IngestProtocol::Wire,
             "otlp-http" => IngestProtocol::OtlpHttp,
             "otlp-grpc" => IngestProtocol::OtlpGrpc,
+            "plugin" => IngestProtocol::Plugin,
             other => return Err(format!("invalid ingest protocol: {other}").into()),
         };
+        let ingest_plugin_path = raw.ingest_plugin_path;
+        if ingest_protocol == IngestProtocol::Plugin && ingest_plugin_path.is_none() {
+            return Err("ingest.plugin-path is required when ingest.protocol = plugin".into());
+        }
         let ingest_tls = IngestTlsConfig {
             enable: raw.ingest_tls_enable.unwrap_or(false),
             ca_file: raw.ingest_ca_file,
@@ -434,6 +445,7 @@ impl Config {
             ingest_tls,
             ingest_limits,
             ingest_overload,
+            ingest_plugin_path,
             replay_addr,
             replay_max_clients,
             replay_client_timeout_ms,
