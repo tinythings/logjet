@@ -39,7 +39,7 @@ fn read_all(bytes: Vec<u8>, config: ReaderConfig) -> ReadAllOutput {
 
 #[test]
 fn write_one_block_read_back() {
-    let bytes = write_records(WriterConfig { block_target_size: 1024, codec: Codec::Lz4, sync_marker: DEFAULT_SYNC_MARKER }, 3);
+    let bytes = write_records(WriterConfig { block_target_size: 1024, codec: Codec::Lz4, ..Default::default() }, 3);
 
     let (records, stats) = read_all(bytes, ReaderConfig::default());
     assert_eq!(records.len(), 3);
@@ -52,7 +52,7 @@ fn write_one_block_read_back() {
 
 #[test]
 fn write_many_blocks_read_all() {
-    let bytes = write_records(WriterConfig { block_target_size: 48, codec: Codec::None, sync_marker: DEFAULT_SYNC_MARKER }, 20);
+    let bytes = write_records(WriterConfig { block_target_size: 48, codec: Codec::None, ..Default::default() }, 20);
 
     let (records, stats) = read_all(bytes, ReaderConfig::default());
     assert_eq!(records.len(), 20);
@@ -63,7 +63,7 @@ fn write_many_blocks_read_all() {
 
 #[test]
 fn corrupt_middle_block_and_recover() {
-    let mut bytes = write_records(WriterConfig { block_target_size: 48, codec: Codec::None, sync_marker: DEFAULT_SYNC_MARKER }, 12);
+    let mut bytes = write_records(WriterConfig { block_target_size: 48, codec: Codec::None, ..Default::default() }, 12);
 
     let sync_positions: Vec<usize> =
         bytes.windows(DEFAULT_SYNC_MARKER.len()).enumerate().filter_map(|(idx, window)| (window == DEFAULT_SYNC_MARKER).then_some(idx)).collect();
@@ -112,10 +112,8 @@ fn oversized_lengths_rejected_safely() {
 #[test]
 fn single_huge_record_stored_in_own_block() {
     let payload = vec![7u8; 8192];
-    let mut writer = LogjetWriter::with_config(
-        Cursor::new(Vec::new()),
-        WriterConfig { block_target_size: 128, codec: Codec::Lz4, sync_marker: DEFAULT_SYNC_MARKER },
-    );
+    let mut writer =
+        LogjetWriter::with_config(Cursor::new(Vec::new()), WriterConfig { block_target_size: 128, codec: Codec::Lz4, ..Default::default() });
     writer.push(RecordType::Logs, 1, 10, b"small").unwrap();
     writer.push(RecordType::Logs, 2, 20, &payload).unwrap();
     writer.push(RecordType::Logs, 3, 30, b"tail").unwrap();
@@ -132,10 +130,8 @@ fn single_huge_record_stored_in_own_block() {
 
 #[test]
 fn seq_and_timestamp_deltas_round_trip() {
-    let mut writer = LogjetWriter::with_config(
-        Cursor::new(Vec::new()),
-        WriterConfig { block_target_size: 1024, codec: Codec::None, sync_marker: DEFAULT_SYNC_MARKER },
-    );
+    let mut writer =
+        LogjetWriter::with_config(Cursor::new(Vec::new()), WriterConfig { block_target_size: 1024, codec: Codec::None, ..Default::default() });
     writer.push(RecordType::Logs, 42, 1_000, b"a").unwrap();
     writer.push(RecordType::Metrics, 50, 1_250, b"b").unwrap();
     writer.push(RecordType::Traces, 99, 9_999, b"c").unwrap();

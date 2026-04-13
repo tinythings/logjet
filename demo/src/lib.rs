@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::net::TcpStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -110,26 +110,155 @@ fn parse_demo_severity(value: &str) -> (String, i32) {
 }
 
 pub fn post_otlp_http(addr: &str, request: &ExportLogsServiceRequest) -> io::Result<()> {
-    post_raw_otlp_http(addr, &request.encode_to_vec(), None, None)
+    DemoConnection::open(addr, None, None)?.post(&request.encode_to_vec())
 }
 
 pub fn post_raw_otlp_http(addr: &str, body: &[u8], ca_file: Option<&Path>, server_name: Option<&str>) -> io::Result<()> {
-    let endpoint = DemoEndpoint::parse(addr);
-    let mut stream = TcpStream::connect(&endpoint.authority)?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    DemoConnection::open(addr, ca_file, server_name)?.post(body)
+}
 
-    if endpoint.tls {
-        let ca_file =
-            ca_file.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "https demo posting requires --ca-file or explicit CA path"))?;
-        let client_config = load_demo_client_config(ca_file)?;
-        let server_name = demo_server_name(&endpoint, server_name)?;
-        let conn = ClientConnection::new(client_config, server_name).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
-        let mut transport = StreamOwned::new(conn, stream);
-        return post_raw_otlp_http_transport(&endpoint, body, &mut transport);
+enum DemoStream {
+    Plain(TcpStream),
+    Tls(Box<StreamOwned<ClientConnection, TcpStream>>),
+}
+
+impl io::Read for DemoStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(s) => s.read(buf),
+            Self::Tls(s) => s.read(buf),
+        }
+    }
+}
+
+impl io::Write for DemoStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(s) => s.write(buf),
+            Self::Tls(s) => s.write(buf),
+        }
     }
 
-    post_raw_otlp_http_transport(&endpoint, body, &mut stream)
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Plain(s) => s.flush(),
+            Self::Tls(s) => s.flush(),
+        }
+    }
+}
+
+/// Persistent HTTP/1.1 keep-alive connection for demo OTLP posting.
+pub struct DemoConnection {
+    stream: DemoStream,
+    endpoint: DemoEndpoint,
+    ca_file: Option<PathBuf>,
+    override_server_name: Option<String>,
+}
+
+impl DemoConnection {
+    pub fn open(addr: &str, ca_file: Option<&Path>, server_name: Option<&str>) -> io::Result<Self> {
+        let endpoint = DemoEndpoint::parse(addr);
+        let ca_owned = ca_file.map(Path::to_path_buf);
+        let sn_owned = server_name.map(str::to_string);
+        let stream = Self::connect_stream(&endpoint, ca_file, server_name)?;
+        Ok(Self { stream, endpoint, ca_file: ca_owned, override_server_name: sn_owned })
+    }
+
+    fn connect_stream(endpoint: &DemoEndpoint, ca_file: Option<&Path>, server_name: Option<&str>) -> io::Result<DemoStream> {
+        let tcp = TcpStream::connect(&endpoint.authority)?;
+        tcp.set_write_timeout(Some(Duration::from_secs(5)))?;
+        tcp.set_read_timeout(Some(Duration::from_secs(5)))?;
+        if endpoint.tls {
+            let ca =
+                ca_file.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "https demo posting requires --ca-file or explicit CA path"))?;
+            let cfg = load_demo_client_config(ca)?;
+            let sn = demo_server_name(endpoint, server_name)?;
+            let conn = ClientConnection::new(cfg, sn).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+            Ok(DemoStream::Tls(Box::new(StreamOwned::new(conn, tcp))))
+        } else {
+            Ok(DemoStream::Plain(tcp))
+        }
+    }
+
+    fn reconnect(&mut self) -> io::Result<()> {
+        self.stream = Self::connect_stream(&self.endpoint, self.ca_file.as_deref(), self.override_server_name.as_deref())?;
+        Ok(())
+    }
+
+    /// POST one OTLP payload, reconnecting once on transport failure.
+    pub fn post(&mut self, body: &[u8]) -> io::Result<()> {
+        match self.post_inner(body) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                self.reconnect()?;
+                self.post_inner(body)
+            }
+        }
+    }
+
+    fn post_inner(&mut self, body: &[u8]) -> io::Result<()> {
+        write!(
+            self.stream,
+            "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+            self.endpoint.path,
+            self.endpoint.authority,
+            body.len()
+        )?;
+        self.stream.write_all(body)?;
+        self.stream.flush()?;
+        read_http_response(&mut self.stream)
+    }
+}
+
+/// Read an HTTP/1.1 response, consuming exactly the headers + body.
+fn read_http_response(stream: &mut impl io::Read) -> io::Result<()> {
+    let mut hdr_buf = Vec::with_capacity(512);
+    let mut b = [0u8; 1];
+    loop {
+        if stream.read(&mut b)? == 0 {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "collector closed connection before response headers"));
+        }
+        hdr_buf.push(b[0]);
+        if hdr_buf.len() >= 4 && &hdr_buf[hdr_buf.len() - 4..] == b"\r\n\r\n" {
+            break;
+        }
+        if hdr_buf.len() > 16_384 {
+            return Err(io::Error::other("collector response headers exceed 16 KiB"));
+        }
+    }
+
+    let hdr_str = String::from_utf8_lossy(&hdr_buf);
+    let status_line = hdr_str.lines().next().unwrap_or("");
+    if !status_line.starts_with("HTTP/1.1 200") && !status_line.starts_with("HTTP/1.0 200") {
+        return Err(io::Error::other(format!("collector returned non-200 response: {status_line}")));
+    }
+
+    let content_len = parse_content_length(&hdr_str);
+    if content_len > 0 {
+        let mut remaining = content_len;
+        let mut discard = [0u8; 4096];
+        while remaining > 0 {
+            let chunk = discard.len().min(remaining);
+            let n = stream.read(&mut discard[..chunk])?;
+            if n == 0 {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "collector closed connection during response body"));
+            }
+            remaining -= n;
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_content_length(headers: &str) -> usize {
+    for line in headers.lines() {
+        if let Some(val) = line.strip_prefix("Content-Length:").or_else(|| line.strip_prefix("content-length:"))
+            && let Ok(n) = val.trim().parse::<usize>()
+        {
+            return n;
+        }
+    }
+    0
 }
 
 pub fn load_demo_server_config(cert_path: &Path, key_path: &Path) -> io::Result<Arc<ServerConfig>> {
@@ -154,26 +283,6 @@ pub fn load_demo_mtls_server_config(ca_path: &Path, cert_path: &Path, key_path: 
         .with_single_cert(certs, key)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     Ok(Arc::new(config))
-}
-
-fn post_raw_otlp_http_transport<T: io::Read + io::Write>(endpoint: &DemoEndpoint, body: &[u8], transport: &mut T) -> io::Result<()> {
-    write!(
-        transport,
-        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        endpoint.path,
-        endpoint.authority,
-        body.len()
-    )?;
-    transport.write_all(body)?;
-    transport.flush()?;
-
-    let mut response = String::new();
-    std::io::Read::read_to_string(transport, &mut response)?;
-    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
-        return Err(io::Error::other(format!("collector returned non-200 response: {}", response.lines().next().unwrap_or("unknown response"))));
-    }
-
-    Ok(())
 }
 
 fn load_demo_client_config(ca_path: &Path) -> io::Result<Arc<ClientConfig>> {

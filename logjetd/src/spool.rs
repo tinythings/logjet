@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, ErrorKind};
+use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, ReaderConfig};
 
-use crate::config::{BufferConfig, BufferLimit, FileConfig, StorageConfig};
+use crate::config::{BufferConfig, BufferLimit, FileConfig, FsyncPolicy, StorageConfig};
 use crate::protocol::WireRecord;
 
 #[derive(Debug)]
@@ -31,9 +31,13 @@ pub struct FileSpool {
     stream_id: u64,
     active_segment_id: u64,
     active_segment_path: PathBuf,
-    active_writer: LogjetWriter<File>,
+    active_writer: LogjetWriter<BufWriter<File>>,
     active_size_bytes: u64,
     segment_target_bytes: u64,
+    fsync: FsyncPolicy,
+    codec: logjet::Codec,
+    block_alignment: usize,
+    max_total_bytes: u64,
     consumed_through_seq: u64,
 }
 
@@ -113,6 +117,22 @@ impl Spool {
                 Ok(())
             }
             Self::File(spool) => spool.consume_through(seq),
+        }
+    }
+
+    /// Flush any buffered records to disk so replay clients can see them.
+    pub fn flush_pending(&mut self) -> io::Result<()> {
+        match self {
+            Self::Buffer(_) => Ok(()),
+            Self::File(spool) => spool.flush_pending(),
+        }
+    }
+
+    /// Call fsync if the policy is Interval (used by background flush thread).
+    pub fn fsync_if_interval(&mut self) -> io::Result<()> {
+        match self {
+            Self::Buffer(_) => Ok(()),
+            Self::File(spool) => spool.fsync_if_interval(),
         }
     }
 
@@ -245,6 +265,10 @@ impl FileSpool {
         };
 
         let file = OpenOptions::new().create(true).append(true).open(&active_segment_path)?;
+        if active_size_bytes == 0 && config.segment_size_bytes > 0 {
+            preallocate_file(&file, config.segment_size_bytes);
+        }
+        let writer_config = logjet::WriterConfig { codec: config.codec, block_alignment: config.block_alignment, ..Default::default() };
 
         let mut spool = Self {
             dir: config.dir,
@@ -253,9 +277,13 @@ impl FileSpool {
             stream_id,
             active_segment_id,
             active_segment_path,
-            active_writer: LogjetWriter::new(file),
+            active_writer: LogjetWriter::with_config(BufWriter::new(file), writer_config),
             active_size_bytes,
             segment_target_bytes: config.segment_size_bytes,
+            fsync: config.fsync,
+            codec: config.codec,
+            block_alignment: config.block_alignment,
+            max_total_bytes: config.max_total_bytes,
             consumed_through_seq,
         };
         spool.cleanup_consumed_segments()?;
@@ -268,13 +296,30 @@ impl FileSpool {
         }
 
         self.active_writer.push(record.record_type, record.seq, record.ts_unix_ns, &record.payload).map_err(to_io_error)?;
-        self.active_writer.flush_block().map_err(to_io_error)?;
         self.refresh_active_size()?;
 
-        if self.active_size_bytes >= self.segment_target_bytes {
+        let effective_size = self.active_size_bytes + self.active_writer.pending_bytes() as u64;
+        if effective_size >= self.segment_target_bytes {
             self.rotate()?;
         }
 
+        Ok(())
+    }
+
+    fn flush_pending(&mut self) -> io::Result<()> {
+        self.active_writer.flush_block().map_err(to_io_error)?;
+        self.active_writer.inner_mut().flush()?;
+        if self.fsync == FsyncPolicy::Block {
+            self.active_writer.inner_mut().get_mut().sync_all()?;
+        }
+        self.refresh_active_size()
+    }
+
+    fn fsync_if_interval(&mut self) -> io::Result<()> {
+        if self.fsync == FsyncPolicy::Interval {
+            self.active_writer.inner_mut().flush()?;
+            self.active_writer.inner_mut().get_mut().sync_all()?;
+        }
         Ok(())
     }
 
@@ -326,12 +371,45 @@ impl FileSpool {
 
     fn rotate(&mut self) -> io::Result<()> {
         self.active_writer.flush_block().map_err(to_io_error)?;
+        self.active_writer.inner_mut().flush()?;
+        self.refresh_active_size()?;
+        let _ = self.active_writer.inner_mut().get_mut().set_len(self.active_size_bytes);
+
         self.active_segment_id =
             self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
         let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
-        self.active_writer = LogjetWriter::new(file);
+        if self.segment_target_bytes > 0 {
+            preallocate_file(&file, self.segment_target_bytes);
+        }
+        let writer_config = logjet::WriterConfig { codec: self.codec, block_alignment: self.block_alignment, ..Default::default() };
+        self.active_writer = LogjetWriter::with_config(BufWriter::new(file), writer_config);
         self.active_size_bytes = 0;
+        self.enforce_retention()
+    }
+
+    /// Delete oldest segments until total size is within max_total_bytes.
+    fn enforce_retention(&mut self) -> io::Result<()> {
+        if self.max_total_bytes == 0 {
+            return Ok(());
+        }
+
+        let segments = list_segments(&self.dir, &self.base_stem)?;
+        let total: u64 = segments.iter().filter_map(|s| fs::metadata(&s.path).ok()).map(|m| m.len()).sum();
+        if total <= self.max_total_bytes {
+            return Ok(());
+        }
+
+        let mut excess = total - self.max_total_bytes;
+        for segment in &segments {
+            if excess == 0 || segment.id == self.active_segment_id {
+                break;
+            }
+            let size = fs::metadata(&segment.path).map(|m| m.len()).unwrap_or(0);
+            fs::remove_file(&segment.path)?;
+            excess = excess.saturating_sub(size);
+            eprintln!("ljd retention: removed {} ({size} bytes)", segment.path.display());
+        }
         Ok(())
     }
 
@@ -369,7 +447,11 @@ impl FileSpool {
             self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
         let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
-        self.active_writer = LogjetWriter::new(file);
+        if self.segment_target_bytes > 0 {
+            preallocate_file(&file, self.segment_target_bytes);
+        }
+        let writer_config = logjet::WriterConfig { codec: self.codec, block_alignment: self.block_alignment, ..Default::default() };
+        self.active_writer = LogjetWriter::with_config(BufWriter::new(file), writer_config);
         self.active_size_bytes = 0;
         if old_path.exists() {
             fs::remove_file(old_path)?;
@@ -520,9 +602,19 @@ fn inspect_file(path: &Path) -> io::Result<()> {
         print_record(&record);
     }
     let stats = reader.stats();
+    let ratio =
+        if stats.total_uncompressed_bytes > 0 { (stats.total_compressed_bytes as f64 / stats.total_uncompressed_bytes as f64) * 100.0 } else { 0.0 };
+    let avg_records = if stats.blocks_ok > 0 { stats.records_ok as f64 / stats.blocks_ok as f64 } else { 0.0 };
     println!(
-        "stats blocks_ok={} blocks_bad={} bytes_skipped={} records_ok={}",
-        stats.blocks_ok, stats.blocks_bad, stats.bytes_skipped, stats.records_ok
+        "stats blocks_ok={} blocks_bad={} bytes_skipped={} records_ok={} compressed={} uncompressed={} ratio={:.1}% avg_records_per_block={:.1}",
+        stats.blocks_ok,
+        stats.blocks_bad,
+        stats.bytes_skipped,
+        stats.records_ok,
+        stats.total_compressed_bytes,
+        stats.total_uncompressed_bytes,
+        ratio,
+        avg_records
     );
     Ok(())
 }
@@ -629,6 +721,22 @@ fn segment_max_seq(path: &Path) -> io::Result<Option<u64>> {
     }
 
     Ok(max_seq)
+}
+
+/// Best-effort pre-allocation. Reserves disk blocks without changing logical size.
+/// Silently ignored on unsupported platforms or on failure.
+fn preallocate_file(file: &File, len: u64) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            libc::fallocate(file.as_raw_fd(), libc::FALLOC_FL_KEEP_SIZE, 0, len as libc::off_t);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (file, len);
+    }
 }
 
 #[cfg(test)]

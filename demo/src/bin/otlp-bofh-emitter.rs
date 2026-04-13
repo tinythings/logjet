@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use prost::Message;
 
-use otlp_demo::{build_excuse_request, build_excuse_request_for_service_with_severity, build_message_request_for_service, format_batch_plain};
+use otlp_demo::{
+    DemoConnection, build_excuse_request, build_excuse_request_for_service_with_severity, build_message_request_for_service, format_batch_plain,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
@@ -58,6 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     eprintln!("otlp-bofh-emitter sending OTLP logs to {display_target}");
 
+    let mut conn = DemoConnection::open(&addr, ca_file.as_deref(), server_name.as_deref())?;
     let mut sequence = 1u64;
     loop {
         let request = match &once_message {
@@ -66,16 +69,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None => build_excuse_request_for_service_with_severity(sequence, &service_name, &severity),
         };
         print!("{}", format_batch_plain(&request));
-        match otlp_demo::post_raw_otlp_http(&addr, &request.encode_to_vec(), ca_file.as_deref(), server_name.as_deref()) {
+        match conn.post(&request.encode_to_vec()) {
             Ok(()) => eprintln!("sent OTLP log batch #{sequence} to {display_target}"),
             Err(err) => eprintln!("send failed for batch #{sequence}: {err}"),
         }
 
         sequence += 1;
-        if let Some(max_count) = count {
-            if sequence > max_count {
-                break;
-            }
+        if let Some(max_count) = count
+            && sequence > max_count
+        {
+            break;
         }
 
         if interval_ms > 0 {
