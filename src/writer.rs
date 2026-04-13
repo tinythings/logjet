@@ -14,11 +14,13 @@ pub struct WriterConfig {
     pub block_target_size: usize,
     pub codec: Codec,
     pub sync_marker: [u8; 8],
+    /// Pad each block to this alignment (bytes). 0 = no padding.
+    pub block_alignment: usize,
 }
 
 impl Default for WriterConfig {
     fn default() -> Self {
-        Self { block_target_size: DEFAULT_BLOCK_TARGET_SIZE, codec: Codec::Lz4, sync_marker: DEFAULT_SYNC_MARKER }
+        Self { block_target_size: DEFAULT_BLOCK_TARGET_SIZE, codec: Codec::Lz4, sync_marker: DEFAULT_SYNC_MARKER, block_alignment: 0 }
     }
 }
 
@@ -146,6 +148,16 @@ impl<W: Write> LogjetWriter<W> {
         self.block_buf.extend_from_slice(&crc.to_le_bytes());
 
         self.inner.write_all(&self.block_buf)?;
+
+        if self.config.block_alignment > 0 {
+            let remainder = self.block_buf.len() % self.config.block_alignment;
+            if remainder > 0 {
+                let pad = self.config.block_alignment - remainder;
+                let zeroes = vec![0u8; pad];
+                self.inner.write_all(&zeroes)?;
+            }
+        }
+
         self.reset_block_state();
         Ok(())
     }

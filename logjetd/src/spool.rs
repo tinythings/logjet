@@ -36,6 +36,7 @@ pub struct FileSpool {
     segment_target_bytes: u64,
     fsync: FsyncPolicy,
     codec: logjet::Codec,
+    block_alignment: usize,
     max_total_bytes: u64,
     consumed_through_seq: u64,
 }
@@ -264,7 +265,7 @@ impl FileSpool {
         };
 
         let file = OpenOptions::new().create(true).append(true).open(&active_segment_path)?;
-        let writer_config = logjet::WriterConfig { codec: config.codec, ..Default::default() };
+        let writer_config = logjet::WriterConfig { codec: config.codec, block_alignment: config.block_alignment, ..Default::default() };
 
         let mut spool = Self {
             dir: config.dir,
@@ -278,6 +279,7 @@ impl FileSpool {
             segment_target_bytes: config.segment_size_bytes,
             fsync: config.fsync,
             codec: config.codec,
+            block_alignment: config.block_alignment,
             max_total_bytes: config.max_total_bytes,
             consumed_through_seq,
         };
@@ -370,7 +372,7 @@ impl FileSpool {
             self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
         let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
-        let writer_config = logjet::WriterConfig { codec: self.codec, ..Default::default() };
+        let writer_config = logjet::WriterConfig { codec: self.codec, block_alignment: self.block_alignment, ..Default::default() };
         self.active_writer = LogjetWriter::with_config(BufWriter::new(file), writer_config);
         self.active_size_bytes = 0;
         self.enforce_retention()
@@ -435,7 +437,7 @@ impl FileSpool {
             self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
         let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
-        let writer_config = logjet::WriterConfig { codec: self.codec, ..Default::default() };
+        let writer_config = logjet::WriterConfig { codec: self.codec, block_alignment: self.block_alignment, ..Default::default() };
         self.active_writer = LogjetWriter::with_config(BufWriter::new(file), writer_config);
         self.active_size_bytes = 0;
         if old_path.exists() {
