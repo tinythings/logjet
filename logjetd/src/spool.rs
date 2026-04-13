@@ -265,6 +265,9 @@ impl FileSpool {
         };
 
         let file = OpenOptions::new().create(true).append(true).open(&active_segment_path)?;
+        if active_size_bytes == 0 && config.segment_size_bytes > 0 {
+            preallocate_file(&file, config.segment_size_bytes);
+        }
         let writer_config = logjet::WriterConfig { codec: config.codec, block_alignment: config.block_alignment, ..Default::default() };
 
         let mut spool = Self {
@@ -368,10 +371,17 @@ impl FileSpool {
 
     fn rotate(&mut self) -> io::Result<()> {
         self.active_writer.flush_block().map_err(to_io_error)?;
+        self.active_writer.inner_mut().flush()?;
+        self.refresh_active_size()?;
+        let _ = self.active_writer.inner_mut().get_mut().set_len(self.active_size_bytes);
+
         self.active_segment_id =
             self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
         let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
+        if self.segment_target_bytes > 0 {
+            preallocate_file(&file, self.segment_target_bytes);
+        }
         let writer_config = logjet::WriterConfig { codec: self.codec, block_alignment: self.block_alignment, ..Default::default() };
         self.active_writer = LogjetWriter::with_config(BufWriter::new(file), writer_config);
         self.active_size_bytes = 0;
@@ -437,6 +447,9 @@ impl FileSpool {
             self.active_segment_id.checked_add(1).ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "segment id overflow"))?;
         self.active_segment_path = segment_path(&self.dir, &self.base_stem, self.active_segment_id);
         let file = OpenOptions::new().create(true).append(true).open(&self.active_segment_path)?;
+        if self.segment_target_bytes > 0 {
+            preallocate_file(&file, self.segment_target_bytes);
+        }
         let writer_config = logjet::WriterConfig { codec: self.codec, block_alignment: self.block_alignment, ..Default::default() };
         self.active_writer = LogjetWriter::with_config(BufWriter::new(file), writer_config);
         self.active_size_bytes = 0;
@@ -698,6 +711,22 @@ fn segment_max_seq(path: &Path) -> io::Result<Option<u64>> {
     }
 
     Ok(max_seq)
+}
+
+/// Best-effort pre-allocation. Reserves disk blocks without changing logical size.
+/// Silently ignored on unsupported platforms or on failure.
+fn preallocate_file(file: &File, len: u64) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            libc::fallocate(file.as_raw_fd(), libc::FALLOC_FL_KEEP_SIZE, 0, len as libc::off_t);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (file, len);
+    }
 }
 
 #[cfg(test)]
