@@ -160,6 +160,11 @@ impl<W: Write> LogjetWriter<W> {
         self.payload_buf.len()
     }
 
+    /// Mutable reference to the underlying writer (e.g. for fsync).
+    pub fn inner_mut(&mut self) -> &mut W {
+        &mut self.inner
+    }
+
     fn reset_block_state(&mut self) {
         self.payload_buf.clear();
         self.encoded_record_buf.clear();
