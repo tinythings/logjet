@@ -111,6 +111,17 @@ void lj_ingest_set_callback(lj_ingest_plugin *ctx,
 int lj_ingest_feed(lj_ingest_plugin *ctx,
                    const uint8_t *data, size_t len);
 
+/* Optional. Active-source plugins export this instead of expecting
+ * lj_ingest_feed calls. ljd calls lj_ingest_fetch once; the plugin
+ * takes over, reads from its own source (device buffer, file, etc.),
+ * and delivers records through the callback. Blocks until the source
+ * is exhausted or an error occurs.
+ * Returns 0 on success, non-zero on error.
+ * If a plugin does NOT export this symbol, ljd uses passive TCP mode
+ * with lj_ingest_feed.
+ */
+int lj_ingest_fetch(lj_ingest_plugin *ctx);
+
 /* Destroys the plugin context. Accepts NULL. */
 void lj_ingest_free(lj_ingest_plugin *ctx);
 
