@@ -43,6 +43,9 @@ impl Codec {
             }
             Self::Lz4 => {
                 let decoded = lz4_flex::block::decompress(input, expected_len).map_err(|err| Error::Codec(err.to_string()))?;
+                if decoded.len() != expected_len {
+                    return Err(Error::Codec(format!("LZ4 decompressed {} bytes, expected {expected_len}", decoded.len())));
+                }
                 output.extend_from_slice(&decoded);
             }
             Self::Zstd => {

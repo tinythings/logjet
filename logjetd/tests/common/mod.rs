@@ -338,6 +338,7 @@ fn build_logs_request(service_name: &str, message: &str) -> ExportLogsServiceReq
                     }),
                 }],
                 dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
             }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {

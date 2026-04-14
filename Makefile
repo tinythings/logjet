@@ -67,6 +67,9 @@ x86: setup setup-x86
 
 demo: devel
 	cargo build -p otlp-demo
+	cargo build -p lj-syslog-ingest
+	cargo build -p lj-logcat-ingest
+	cargo build -p lj-stress-ingest
 
 man: $(MANPAGE_OUT)
 
