@@ -118,6 +118,7 @@ struct FieldFilterState {
     service_cursor: usize,
     severity_scroll: u16,
     service_scroll: u16,
+    filter_text: String,
     selected_severities: HashSet<String>,
     selected_services: HashSet<String>,
 }
@@ -599,6 +600,7 @@ impl ViewApp {
             service_cursor: 0,
             severity_scroll: 0,
             service_scroll: 0,
+            filter_text: String::new(),
             selected_severities: self.active_field_filter.severities.clone().unwrap_or_default(),
             selected_services: self.active_field_filter.services.clone().unwrap_or_default(),
         });
@@ -614,8 +616,6 @@ impl ViewApp {
             self.focus = Focus::List;
             return Ok(false);
         };
-        let sev_count = cat.severities.len();
-        let svc_count = cat.services.len();
         let sev_list = cat.severities.clone();
         let svc_list = cat.services.clone();
         drop(catalog);
@@ -625,19 +625,25 @@ impl ViewApp {
             return Ok(false);
         };
 
-        // Visible rows per panel: popup is 70% height, minus borders(2), title(1 line inside panel), footer(1).
-        // We approximate with a safe default; the exact value depends on terminal size.
+        // Build filtered lists for the active panel.
+        let filter_lower = state.filter_text.to_lowercase();
+        let filtered_sev: Vec<&String> = sev_list.iter().filter(|s| filter_lower.is_empty() || s.to_lowercase().contains(&filter_lower)).collect();
+        let filtered_svc: Vec<&String> = svc_list.iter().filter(|s| filter_lower.is_empty() || s.to_lowercase().contains(&filter_lower)).collect();
+        let _active_count = if state.panel == 0 { filtered_sev.len() } else { filtered_svc.len() };
+
+        // Visible rows for scroll calculation.
         let screen_h = crossterm::terminal::size().map(|(_, h)| h).unwrap_or(40);
         let popup_h = ((screen_h as u32 * 70 / 100) as u16).max(6);
-        let visible_rows = popup_h.saturating_sub(4) as usize; // borders + footer + panel title
+        let visible_rows = popup_h.saturating_sub(4) as usize;
 
         match key.code {
             KeyCode::Esc => {
                 self.field_filter_state = None;
                 self.focus = Focus::List;
             }
-            KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+            KeyCode::Tab => {
                 state.panel = 1 - state.panel;
+                state.filter_text.clear();
             }
             KeyCode::Up => {
                 if state.panel == 0 {
@@ -648,24 +654,43 @@ impl ViewApp {
             }
             KeyCode::Down => {
                 if state.panel == 0 {
-                    if sev_count > 0 {
-                        state.severity_cursor = (state.severity_cursor + 1).min(sev_count - 1);
+                    if !filtered_sev.is_empty() {
+                        state.severity_cursor = (state.severity_cursor + 1).min(filtered_sev.len() - 1);
                     }
-                } else if svc_count > 0 {
-                    state.service_cursor = (state.service_cursor + 1).min(svc_count - 1);
+                } else if !filtered_svc.is_empty() {
+                    state.service_cursor = (state.service_cursor + 1).min(filtered_svc.len() - 1);
                 }
             }
             KeyCode::Char(' ') => {
-                if state.panel == 0 && state.severity_cursor < sev_count {
-                    let val = &sev_list[state.severity_cursor];
-                    if !state.selected_severities.remove(val) {
-                        state.selected_severities.insert(val.clone());
-                    }
-                } else if state.panel == 1 && state.service_cursor < svc_count {
-                    let val = &svc_list[state.service_cursor];
-                    if !state.selected_services.remove(val) {
+                if state.panel == 0 {
+                    if let Some(&val) = filtered_sev.get(state.severity_cursor)
+                        && !state.selected_severities.remove(val) {
+                            state.selected_severities.insert(val.clone());
+                        }
+                } else if let Some(&val) = filtered_svc.get(state.service_cursor)
+                    && !state.selected_services.remove(val) {
                         state.selected_services.insert(val.clone());
                     }
+            }
+            KeyCode::Char(c) => {
+                state.filter_text.push(c);
+                // Reset cursor to 0 since list changed.
+                if state.panel == 0 {
+                    state.severity_cursor = 0;
+                    state.severity_scroll = 0;
+                } else {
+                    state.service_cursor = 0;
+                    state.service_scroll = 0;
+                }
+            }
+            KeyCode::Backspace => {
+                state.filter_text.pop();
+                if state.panel == 0 {
+                    state.severity_cursor = 0;
+                    state.severity_scroll = 0;
+                } else {
+                    state.service_cursor = 0;
+                    state.service_scroll = 0;
                 }
             }
             KeyCode::Enter => {
@@ -675,20 +700,37 @@ impl ViewApp {
             _ => {}
         }
 
-        // Keep scroll in sync with cursor (cursor_row = cursor + 1 for the title line).
+        // Clamp cursor to filtered list size and keep scroll in sync.
         if let Some(state) = &mut self.field_filter_state {
-            let sev_row = state.severity_cursor as u16 + 1;
-            if sev_row < state.severity_scroll {
-                state.severity_scroll = sev_row;
-            } else if sev_row >= state.severity_scroll + visible_rows as u16 {
-                state.severity_scroll = sev_row - visible_rows as u16 + 1;
-            }
-
-            let svc_row = state.service_cursor as u16 + 1;
-            if svc_row < state.service_scroll {
-                state.service_scroll = svc_row;
-            } else if svc_row >= state.service_scroll + visible_rows as u16 {
-                state.service_scroll = svc_row - visible_rows as u16 + 1;
+            let active_count = if state.panel == 0 {
+                sev_list.iter().filter(|s| state.filter_text.is_empty() || s.to_lowercase().contains(&state.filter_text.to_lowercase())).count()
+            } else {
+                svc_list.iter().filter(|s| state.filter_text.is_empty() || s.to_lowercase().contains(&state.filter_text.to_lowercase())).count()
+            };
+            if state.panel == 0 {
+                if active_count > 0 {
+                    state.severity_cursor = state.severity_cursor.min(active_count - 1);
+                } else {
+                    state.severity_cursor = 0;
+                }
+                let row = state.severity_cursor as u16 + 1;
+                if row < state.severity_scroll {
+                    state.severity_scroll = row;
+                } else if row >= state.severity_scroll + visible_rows as u16 {
+                    state.severity_scroll = row - visible_rows as u16 + 1;
+                }
+            } else {
+                if active_count > 0 {
+                    state.service_cursor = state.service_cursor.min(active_count - 1);
+                } else {
+                    state.service_cursor = 0;
+                }
+                let row = state.service_cursor as u16 + 1;
+                if row < state.service_scroll {
+                    state.service_scroll = row;
+                } else if row >= state.service_scroll + visible_rows as u16 {
+                    state.service_scroll = row - visible_rows as u16 + 1;
+                }
             }
         }
 
@@ -1038,18 +1080,43 @@ impl ViewApp {
         let Some(state) = &self.field_filter_state else { return };
 
         let screen = frame.area();
-        let sev_count = cat.severities.len();
-        let svc_count = cat.services.len();
-        let body_height = sev_count.max(svc_count).max(1) as u16;
-        let popup_h = (body_height + 4).min(screen.height * 70 / 100).max(6); // borders + title + footer
+        let filter_lower = state.filter_text.to_lowercase();
+
+        // Filter lists: active panel gets filtered, inactive shows all.
+        let filtered_sev: Vec<&String> = if state.panel == 0 && !filter_lower.is_empty() {
+            cat.severities.iter().filter(|s| s.to_lowercase().contains(&filter_lower)).collect()
+        } else {
+            cat.severities.iter().collect()
+        };
+        let filtered_svc: Vec<&String> = if state.panel == 1 && !filter_lower.is_empty() {
+            cat.services.iter().filter(|s| s.to_lowercase().contains(&filter_lower)).collect()
+        } else {
+            cat.services.iter().collect()
+        };
+
+        let body_height = filtered_sev.len().max(filtered_svc.len()).max(1) as u16;
+        let popup_h = (body_height + 4).min(screen.height * 70 / 100).max(6);
         let popup_w = (screen.width * 60 / 100).max(40);
         let x = screen.width.saturating_sub(popup_w) / 2;
         let y = screen.height.saturating_sub(popup_h) / 2;
         let area = Rect::new(x, y, popup_w, popup_h);
         frame.render_widget(Clear, area);
 
+        // Title with search text.
+        let title = if state.filter_text.is_empty() {
+            vec![Span::styled(" Field Filter ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD))]
+        } else {
+            vec![
+                Span::styled(" Field Filter ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(" [{}▏]", state.filter_text),
+                    Style::default().fg(Color::LightYellow).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                ),
+            ]
+        };
+
         let block = Block::default()
-            .title(Span::styled(" Field Filter ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)))
+            .title(Line::from(title))
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
@@ -1069,8 +1136,8 @@ impl ViewApp {
             Style::default().fg(Color::Gray)
         };
         let mut sev_lines: Vec<Line<'_>> = vec![Line::from(Span::styled("── Severity ──", sev_title_style))];
-        for (i, sev) in cat.severities.iter().enumerate() {
-            let checked = if state.selected_severities.contains(sev) { "▣" } else { "☐" };
+        for (i, sev) in filtered_sev.iter().enumerate() {
+            let checked = if state.selected_severities.contains(*sev) { "▣" } else { "☐" };
             let style = if state.panel == 0 && i == state.severity_cursor {
                 Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)
             } else {
@@ -1090,8 +1157,8 @@ impl ViewApp {
             Style::default().fg(Color::Gray)
         };
         let mut svc_lines: Vec<Line<'_>> = vec![Line::from(Span::styled("── Services ──", svc_title_style))];
-        for (i, svc) in cat.services.iter().enumerate() {
-            let checked = if state.selected_services.contains(svc) { "▣" } else { "☐" };
+        for (i, svc) in filtered_svc.iter().enumerate() {
+            let checked = if state.selected_services.contains(*svc) { "▣" } else { "☐" };
             let style = if state.panel == 1 && i == state.service_cursor {
                 Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)
             } else {
