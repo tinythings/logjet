@@ -24,11 +24,21 @@ enum {
     LJ_SEVERITY_FATAL = 21
 };
 
+/* OTLP attribute value type. Determines how ljd interprets the value string. */
+enum {
+    LJ_ATTR_STRING = 0,  /* value is a UTF-8 string (default) */
+    LJ_ATTR_INT    = 1,  /* value is a decimal integer string, stored as OTLP IntValue */
+    LJ_ATTR_ARRAY  = 2   /* value is comma-separated, stored as OTLP ArrayValue of strings */
+};
+
 typedef struct lj_attribute {
     /* OTLP LogRecord attribute key */
     const char *key;
     /* OTLP LogRecord attribute value as UTF-8 string */
     const char *value;
+    /* Value type: LJ_ATTR_STRING (0), LJ_ATTR_INT (1), or LJ_ATTR_ARRAY (2).
+     * When 0, behaviour is identical to the original ABI. */
+    int32_t value_type;
 } lj_attribute;
 
 typedef struct lj_log_record {
@@ -44,6 +54,34 @@ typedef struct lj_log_record {
     const struct lj_attribute *attributes;
     /* Number of entries in attributes */
     size_t attributes_len;
+
+    /* ── Extended OTel fields (optional, all default to NULL/0) ───────────
+     *
+     * When these are NULL, ljd wraps the record into a minimal OTLP
+     * structure with an empty Resource and a generic Scope.
+     *
+     * When populated, ljd builds a spec-compliant OTLP structure:
+     *   - service_name  → Resource.attributes["service.name"]
+     *   - scope_name    → InstrumentationScope.name
+     *   - event_name    → LogRecord.event_name
+     *   - resource_attrs → Resource.attributes (e.g. logjet.target, logjet.process)
+     *   - scope_attrs    → InstrumentationScope.attributes (e.g. logjet.thread, logjet.channel)
+     */
+
+    /* OTel LogRecord.event_name; UTF-8, NUL-terminated, may be NULL */
+    const char *event_name;
+    /* OTel Resource service.name; UTF-8, NUL-terminated, may be NULL */
+    const char *service_name;
+    /* OTel InstrumentationScope.name; UTF-8, NUL-terminated, may be NULL */
+    const char *scope_name;
+    /* Resource-level attributes; may be NULL when resource_attrs_len == 0 */
+    const struct lj_attribute *resource_attrs;
+    /* Number of entries in resource_attrs */
+    size_t resource_attrs_len;
+    /* Scope-level attributes; may be NULL when scope_attrs_len == 0 */
+    const struct lj_attribute *scope_attrs;
+    /* Number of entries in scope_attrs */
+    size_t scope_attrs_len;
 } lj_log_record;
 
 /* Returns the liblogjet version string as a static NUL-terminated string. */
