@@ -135,6 +135,7 @@ struct ViewApp {
     selected: usize,
     list_offset: usize,
     modal_scroll: u16,
+    modal_info_visible: bool,
     detail_scroll: u16,
     summary_cache: HashMap<usize, String>,
     summary_order: VecDeque<usize>,
@@ -171,6 +172,7 @@ impl ViewApp {
             selected: 0,
             list_offset: 0,
             modal_scroll: 0,
+            modal_info_visible: false,
             detail_scroll: 0,
             summary_cache: HashMap::new(),
             summary_order: VecDeque::new(),
@@ -236,6 +238,9 @@ impl ViewApp {
             }
             KeyCode::PageDown => {
                 self.modal_scroll = self.modal_scroll.saturating_add(10);
+            }
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                self.modal_info_visible = !self.modal_info_visible;
             }
             KeyCode::Left => {
                 self.move_selection(-1)?;
@@ -346,6 +351,9 @@ impl ViewApp {
             }
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 self.open_field_filter();
+            }
+            KeyCode::Char('/') => {
+                self.focus = Focus::Search;
             }
             _ => {}
         }
@@ -888,7 +896,7 @@ impl ViewApp {
                 area.x,
                 y,
                 area.width,
-                &[status_key("ESC"), status_text(" close   "), status_key("UP/DOWN"), status_text(" scroll   "), status_key("LEFT/RIGHT"), status_text(" prev/next record")],
+                &[status_key("ESC"), status_text(" close   "), status_key("UP/DOWN"), status_text(" scroll   "), status_key("LEFT/RIGHT"), status_text(" prev/next   "), status_key("I"), status_text(" info panel")],
             );
             return;
         }
@@ -967,12 +975,58 @@ impl ViewApp {
 
     fn render_modal(&self, frame: &mut Frame<'_>) {
         let screen = frame.area();
+        let message = self.modal_text.as_deref().unwrap_or("No record loaded.");
 
-        // Fixed width: 80% of screen. Height will be computed from content.
+        // Fixed width: 80% of screen.
         let popup_width = (screen.width * 80 / 100).max(20);
-        let inner_width = popup_width.saturating_sub(2); // minus left+right border
+        let inner_width = popup_width.saturating_sub(2);
 
-        // Compute info entries and column widths (independent of final height).
+        if !self.modal_info_visible {
+            // ── Collapsed mode: full-width log view, no info panel ───────
+            let wrap_width = inner_width.saturating_sub(1) as usize; // -1 for scrollbar
+            let wrapped = smart_wrap(message, wrap_width);
+            let left_lines = wrapped.lines().count() as u16;
+            let desired_height = left_lines + 3;
+            let max_height = screen.height * 80 / 100;
+            let popup_height = desired_height.min(max_height).max(5);
+
+            let x = screen.width.saturating_sub(popup_width) / 2;
+            let y = screen.height.saturating_sub(popup_height) / 2;
+            let area = Rect::new(x, y, popup_width, popup_height);
+            frame.render_widget(Clear, area);
+
+            let block = Block::default()
+                .title(Span::styled(" Log record ", Style::default().fg(Color::Black).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .border_style(Style::default().fg(Color::Black).bg(Color::Gray))
+                .style(Style::default().fg(Color::Black).bg(Color::Gray));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+
+            let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+
+            let paragraph = Paragraph::new(wrapped.as_str())
+                .style(Style::default().fg(Color::Black).bg(Color::Gray))
+                .scroll((self.modal_scroll, 0));
+            frame.render_widget(paragraph, chunks[0]);
+
+            // Scrollbar
+            let mut scrollbar_state = ScrollbarState::new(left_lines as usize).position(self.modal_scroll as usize);
+            frame.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(Color::Black).bg(Color::Gray)),
+                chunks[0],
+                &mut scrollbar_state,
+            );
+
+            let footer = if let Some(detail) = &self.selected_detail { render_modal_footer(detail) } else { render_modal_footer_placeholder() };
+            frame.render_widget(Paragraph::new(footer).style(Style::default().bg(Color::Blue)), chunks[1]);
+            return;
+        }
+
+        // ── Expanded mode: message + divider + info panel ────────────────
+
+        // Compute info entries and column widths.
         let info_entries = if let Some(detail) = &self.selected_detail {
             render_modal_info_entries(detail)
         } else {
@@ -988,22 +1042,20 @@ impl ViewApp {
 
         // Measure content heights.
         let right_lines = info_entries.len() as u16;
-        let message = self.modal_text.as_deref().unwrap_or("No record loaded.");
-        let left_lines = count_wrapped_lines(message, message_width as usize);
+        let wrap_width = message_width.saturating_sub(1) as usize; // -1 for scrollbar
+        let wrapped = smart_wrap(message, wrap_width);
+        let left_lines = wrapped.lines().count() as u16;
         let body_height = right_lines.max(left_lines);
 
-        // Total: top border(1) + body + footer(1) + bottom border(1)
         let desired_height = body_height + 3;
         let max_height = screen.height * 80 / 100;
         let popup_height = desired_height.min(max_height).max(5);
 
-        // Centre the popup on screen.
         let x = screen.width.saturating_sub(popup_width) / 2;
         let y = screen.height.saturating_sub(popup_height) / 2;
         let area = Rect::new(x, y, popup_width, popup_height);
         frame.render_widget(Clear, area);
 
-        // Draw the block with a neutral style first; we repaint the border cells below.
         let block = Block::default()
             .title(Span::styled(" Log record ", Style::default().fg(Color::Black).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)))
             .borders(Borders::ALL)
@@ -1025,10 +1077,9 @@ impl ViewApp {
         frame.render_widget(Paragraph::new(divider).style(Style::default().bg(Color::Indexed(30))), body[1]);
 
         let footer = if let Some(detail) = &self.selected_detail { render_modal_footer(detail) } else { render_modal_footer_placeholder() };
-        let paragraph = Paragraph::new(message)
+        let paragraph = Paragraph::new(wrapped.as_str())
             .style(Style::default().fg(Color::Black).bg(Color::Gray))
-            .scroll((self.modal_scroll, 0))
-            .wrap(Wrap { trim: false });
+            .scroll((self.modal_scroll, 0));
         frame.render_widget(paragraph, body[0]);
 
         // Scrollbar on the left panel — always visible.
@@ -1757,17 +1808,55 @@ fn trim_single_line(input: &str, limit: usize) -> String {
     output
 }
 
-/// Estimates the number of terminal lines a text occupies when soft-wrapped at `width`.
-fn count_wrapped_lines(text: &str, width: usize) -> u16 {
+/// Word-wraps `text` at space boundaries. Words longer than `width` are
+/// truncated with `…` instead of wrapping — prevents Java FQCNs and other
+/// long tokens from creating multi-line visual noise.
+fn smart_wrap(text: &str, width: usize) -> String {
     if width == 0 {
-        return 1;
+        return text.to_string();
     }
-    let mut total: u16 = 0;
-    for line in text.split('\n') {
-        let chars = line.chars().count();
-        total += if chars == 0 { 1 } else { ((chars as u16).saturating_add(width as u16 - 1)) / width as u16 };
+    // Expand tabs to spaces — raw \t punches holes in the terminal background.
+    let text = text.replace('\t', "    ");
+    let mut out = String::with_capacity(text.len() + text.len() / 4);
+    for (li, line) in text.split('\n').enumerate() {
+        if li > 0 {
+            out.push('\n');
+        }
+        let mut col: usize = 0;
+        for word in line.split(' ') {
+            let wlen = word.chars().count();
+            if wlen == 0 {
+                // Consecutive spaces — preserve one space.
+                if col > 0 && col < width {
+                    out.push(' ');
+                    col += 1;
+                }
+                continue;
+            }
+            if wlen > width {
+                // Long token: start a new line if needed, then truncate.
+                if col > 0 {
+                    out.push('\n');
+                }
+                out.extend(word.chars().take(width.saturating_sub(1)));
+                out.push('…');
+                col = width;
+            } else if col + (if col > 0 { 1 } else { 0 }) + wlen > width {
+                // Word doesn't fit on current line — wrap.
+                out.push('\n');
+                out.push_str(word);
+                col = wlen;
+            } else {
+                if col > 0 {
+                    out.push(' ');
+                    col += 1;
+                }
+                out.push_str(word);
+                col += wlen;
+            }
+        }
     }
-    total.max(1)
+    out
 }
 
 fn fit_to_width(input: &str, width: usize) -> String {
