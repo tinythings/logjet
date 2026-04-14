@@ -202,7 +202,11 @@ pub unsafe extern "C" fn lj_logger_log(logger: *mut LjLogger, record: *const lj_
 fn build_logs_request(service_name: &str, record: LogRecordInput, transport_name: &str) -> ExportLogsServiceRequest {
     ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
-            resource: Some(Resource { attributes: vec![string_attr("service.name", service_name)], dropped_attributes_count: 0 }),
+            resource: Some(Resource {
+                attributes: vec![string_attr("service.name", service_name)],
+                dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
+            }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
                     name: "liblogjet".to_string(),

@@ -4,6 +4,8 @@ use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, ReaderConfig};
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use prost::Message;
 
 use crate::config::{BufferConfig, BufferLimit, FileConfig, FsyncPolicy, StorageConfig};
 use crate::protocol::WireRecord;
@@ -41,6 +43,14 @@ pub struct FileSpool {
     consumed_through_seq: u64,
 }
 
+impl Drop for FileSpool {
+    fn drop(&mut self) {
+        if let Err(err) = self.active_writer.flush_block().and_then(|_| self.active_writer.inner_mut().flush().map_err(logjet::Error::Io)) {
+            eprintln!("ljd spool: flush on drop failed: {err}");
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SegmentInfo {
     pub id: u64,
@@ -55,6 +65,13 @@ pub struct SegmentSummary {
     pub record_count: u64,
     pub first_seq: Option<u64>,
     pub last_seq: Option<u64>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct InspectSummary {
+    reader_stats: logjet::ReaderStats,
+    otlp_verified: u64,
+    otlp_failed: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -485,18 +502,18 @@ impl FileSpool {
     }
 }
 
-pub fn inspect_path(path: &Path) -> io::Result<()> {
+pub fn inspect_path(path: &Path, verify_otlp: bool) -> io::Result<()> {
     if path.is_dir() {
         for entry in fs::read_dir(path)? {
             let entry = entry?;
             if entry.file_type()?.is_file() && entry.path().extension().and_then(|ext| ext.to_str()) == Some("logjet") {
-                inspect_file(&entry.path())?;
+                inspect_file(&entry.path(), verify_otlp)?;
             }
         }
         return Ok(());
     }
 
-    inspect_file(path)
+    inspect_file(path, verify_otlp)
 }
 
 pub fn print_named_segments(dir: &Path, file_name: &str) -> io::Result<()> {
@@ -593,15 +610,21 @@ pub fn prune_named_segments(
     Ok(removed_paths)
 }
 
-fn inspect_file(path: &Path) -> io::Result<()> {
+fn inspect_file(path: &Path, verify_otlp: bool) -> io::Result<()> {
     let file = File::open(path)?;
     let mut reader = LogjetReader::new(BufReader::new(file));
+    let summary = inspect_reader(&mut reader, verify_otlp)?;
 
     println!("file={}", path.display());
+    let file = File::open(path)?;
+    let mut reader = LogjetReader::new(BufReader::new(file));
     while let Some(record) = reader.next_record().map_err(to_io_error)? {
+        if verify_otlp && let Err(err) = verify_otlp_payload(&record) {
+            println!("otlp_decode_failed seq={} payload_len={} error={}", record.seq, record.payload.len(), err);
+        }
         print_record(&record);
     }
-    let stats = reader.stats();
+    let stats = summary.reader_stats;
     let ratio =
         if stats.total_uncompressed_bytes > 0 { (stats.total_compressed_bytes as f64 / stats.total_uncompressed_bytes as f64) * 100.0 } else { 0.0 };
     let avg_records = if stats.blocks_ok > 0 { stats.records_ok as f64 / stats.blocks_ok as f64 } else { 0.0 };
@@ -616,7 +639,32 @@ fn inspect_file(path: &Path) -> io::Result<()> {
         ratio,
         avg_records
     );
+    if verify_otlp {
+        println!("otlp_verify logs_ok={} logs_failed={}", summary.otlp_verified, summary.otlp_failed);
+    }
     Ok(())
+}
+
+fn inspect_reader<R: std::io::Read + std::io::Seek>(reader: &mut LogjetReader<R>, verify_otlp: bool) -> io::Result<InspectSummary> {
+    let mut summary = InspectSummary::default();
+    while let Some(record) = reader.next_record().map_err(to_io_error)? {
+        if verify_otlp {
+            match verify_otlp_payload(&record) {
+                Ok(()) => summary.otlp_verified = summary.otlp_verified.saturating_add(1),
+                Err(_) => summary.otlp_failed = summary.otlp_failed.saturating_add(1),
+            }
+        }
+    }
+    summary.reader_stats = reader.stats();
+    Ok(summary)
+}
+
+fn verify_otlp_payload(record: &OwnedRecord) -> io::Result<()> {
+    if record.record_type != logjet::RecordType::Logs {
+        return Ok(());
+    }
+
+    ExportLogsServiceRequest::decode(record.payload.as_slice()).map(|_| ()).map_err(|err| io::Error::new(ErrorKind::InvalidData, err.to_string()))
 }
 
 fn print_record(record: &OwnedRecord) {
