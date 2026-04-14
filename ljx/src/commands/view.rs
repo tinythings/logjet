@@ -201,6 +201,14 @@ impl ViewApp {
             KeyCode::PageDown => {
                 self.modal_scroll = self.modal_scroll.saturating_add(10);
             }
+            KeyCode::Left => {
+                self.move_selection(-1)?;
+                self.open_modal()?;
+            }
+            KeyCode::Right => {
+                self.move_selection(1)?;
+                self.open_modal()?;
+            }
             _ => {}
         }
 
@@ -665,7 +673,7 @@ impl ViewApp {
                 area.x,
                 y,
                 area.width,
-                &[status_key("ESC"), status_text(" to close   "), status_key("UP/DOWN"), status_text(" scroll")],
+                &[status_key("ESC"), status_text(" close   "), status_key("UP/DOWN"), status_text(" scroll   "), status_key("LEFT/RIGHT"), status_text(" prev/next record")],
             );
             return;
         }
@@ -743,20 +751,13 @@ impl ViewApp {
     }
 
     fn render_modal(&self, frame: &mut Frame<'_>) {
-        let area = centered_rect(80, 80, frame.area());
-        frame.render_widget(Clear, area);
+        let screen = frame.area();
 
-        let block = Block::default()
-            .title(Span::styled(" Log record ", Style::default().fg(Color::Black).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)))
-            .borders(Borders::ALL)
-            .border_type(BorderType::Double)
-            .border_style(Style::default().fg(Color::Indexed(30)).bg(Color::Gray))
-            .style(Style::default().fg(Color::Black).bg(Color::Gray));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        // Fixed width: 80% of screen. Height will be computed from content.
+        let popup_width = (screen.width * 80 / 100).max(20);
+        let inner_width = popup_width.saturating_sub(2); // minus left+right border
 
-        let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Length(1)]).split(inner);
-
+        // Compute info entries and column widths (independent of final height).
         let info_entries = if let Some(detail) = &self.selected_detail {
             render_modal_info_entries(detail)
         } else {
@@ -765,10 +766,39 @@ impl ViewApp {
         let key_width = info_entries.iter().map(|(key, _)| key.chars().count()).max().unwrap_or(4).max(4);
         let preferred_info_width =
             info_entries.iter().map(|(_, value)| (key_width + 2 + value.chars().count() + 1) as u16).max().unwrap_or((key_width + 3) as u16);
-        let max_info_width = chunks[0].width.saturating_div(2).max(16);
+        let max_info_width = inner_width.saturating_div(2).max(16);
         let info_width = preferred_info_width.min(max_info_width).max(16);
-        let divider_width = 1;
-        let message_width = chunks[0].width.saturating_sub(info_width).saturating_sub(divider_width);
+        let divider_width: u16 = 1;
+        let message_width = inner_width.saturating_sub(info_width).saturating_sub(divider_width);
+
+        // Measure content heights.
+        let right_lines = info_entries.len() as u16;
+        let message = self.modal_text.as_deref().unwrap_or("No record loaded.");
+        let left_lines = count_wrapped_lines(message, message_width as usize);
+        let body_height = right_lines.max(left_lines);
+
+        // Total: top border(1) + body + footer(1) + bottom border(1)
+        let desired_height = body_height + 3;
+        let max_height = screen.height * 80 / 100;
+        let popup_height = desired_height.min(max_height).max(5);
+
+        // Centre the popup on screen.
+        let x = screen.width.saturating_sub(popup_width) / 2;
+        let y = screen.height.saturating_sub(popup_height) / 2;
+        let area = Rect::new(x, y, popup_width, popup_height);
+        frame.render_widget(Clear, area);
+
+        // Draw the block with a neutral style first; we repaint the border cells below.
+        let block = Block::default()
+            .title(Span::styled(" Log record ", Style::default().fg(Color::Black).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(Color::Black).bg(Color::Gray));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Length(1)]).split(inner);
 
         let body = Layout::default()
             .direction(Direction::Horizontal)
@@ -776,22 +806,57 @@ impl ViewApp {
             .split(chunks[0]);
 
         let divider =
-            (0..body[1].height).map(|_| Line::from(Span::styled("│", Style::default().fg(Color::Indexed(30)).bg(Color::Gray)))).collect::<Vec<_>>();
-        frame.render_widget(Paragraph::new(divider).style(Style::default().bg(Color::Gray)), body[1]);
+            (0..body[1].height).map(|_| Line::from(Span::styled("│", Style::default().fg(Color::White).bg(Color::Indexed(30))))).collect::<Vec<_>>();
+        frame.render_widget(Paragraph::new(divider).style(Style::default().bg(Color::Indexed(30))), body[1]);
 
         let footer = if let Some(detail) = &self.selected_detail { render_modal_footer(detail) } else { render_modal_footer_placeholder() };
-        let message = self.modal_text.as_deref().unwrap_or("No record loaded.");
         let paragraph = Paragraph::new(message)
             .style(Style::default().fg(Color::Black).bg(Color::Gray))
             .scroll((self.modal_scroll, 0))
             .wrap(Wrap { trim: false });
         frame.render_widget(paragraph, body[0]);
 
+        // Scrollbar on the left panel — always visible.
+        {
+            let mut scrollbar_state =
+                ScrollbarState::new(left_lines as usize).position(self.modal_scroll as usize);
+            frame.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(Color::Black).bg(Color::Gray)),
+                body[0],
+                &mut scrollbar_state,
+            );
+        }
+
         let value_width = info_width.saturating_sub((key_width + 2 + 1) as u16) as usize;
         let info_lines = info_entries.into_iter().map(|(key, value)| modal_info_line(&key, value, key_width, value_width)).collect::<Vec<_>>();
-        let info = Paragraph::new(Text::from(info_lines)).style(Style::default().fg(Color::Black).bg(Color::Gray)).scroll((0, 0));
+        let info = Paragraph::new(Text::from(info_lines)).style(Style::default().fg(Color::White).bg(Color::Indexed(30))).scroll((0, 0));
         frame.render_widget(info, body[2]);
-        frame.render_widget(Paragraph::new(footer).style(Style::default().bg(Color::Indexed(30))), chunks[1]);
+        frame.render_widget(Paragraph::new(footer).style(Style::default().bg(Color::Blue)), chunks[1]);
+
+        // Repaint the double-frame border: grey side = black on grey, cyan side = white on cyan.
+        let split_x = body[1].x;
+        let grey_style = Style::default().fg(Color::Black).bg(Color::Gray);
+        let cyan_style = Style::default().fg(Color::White).bg(Color::Indexed(30));
+        let buf = frame.buffer_mut();
+        let top = area.y;
+        let bot = area.y + area.height.saturating_sub(1);
+        let left = area.x;
+        let right = area.x + area.width.saturating_sub(1);
+
+        // Top and bottom edges
+        for x in left..=right {
+            let s = if x >= split_x { cyan_style } else { grey_style };
+            buf[(x, top)].set_style(s);
+            buf[(x, bot)].set_style(s);
+        }
+        // Left edge (grey side)
+        for y in top..=bot {
+            buf[(left, y)].set_style(grey_style);
+        }
+        // Right edge (cyan side)
+        for y in top..=bot {
+            buf[(right, y)].set_style(cyan_style);
+        }
     }
 }
 
@@ -979,10 +1044,10 @@ fn render_modal_footer(detail: &DetailRecord) -> Line<'static> {
         footer_sep(),
         Span::styled(format_timestamp(detail.meta.ts_unix_ns), Style::default().fg(Color::White)),
         footer_sep(),
-        Span::styled(record_kind_label(detail.meta.record_type).to_string(), Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)),
+        Span::styled(record_kind_label(detail.meta.record_type).to_string(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         footer_sep(),
-        Span::styled(size_num, Style::default().fg(Color::Yellow)),
-        Span::styled(size_unit, Style::default().fg(Color::Black)),
+        Span::styled(size_num, Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+        Span::styled(size_unit, Style::default().fg(Color::White)),
     ])
 }
 
@@ -992,10 +1057,10 @@ fn render_modal_footer_placeholder() -> Line<'static> {
         footer_sep(),
         Span::styled("", Style::default().fg(Color::White)),
         footer_sep(),
-        Span::styled("", Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)),
+        Span::styled("", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         footer_sep(),
-        Span::styled("", Style::default().fg(Color::Yellow)),
-        Span::styled("", Style::default().fg(Color::Black)),
+        Span::styled("", Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+        Span::styled("", Style::default().fg(Color::White)),
     ])
 }
 
@@ -1046,7 +1111,7 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                     &mut resource_attr_omitted,
                     "resource",
                     &attr.key,
-                    format_any_value(attr.value.as_ref()),
+                    attr.value.as_ref(),
                 );
             }
         }
@@ -1078,7 +1143,7 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                         &mut record_attr_omitted,
                         "record",
                         &attr.key,
-                        format_any_value(attr.value.as_ref()),
+                        attr.value.as_ref(),
                     );
                 }
             }
@@ -1102,13 +1167,21 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     lines.push(("resource.attrs".to_string(), resource_attr_count.to_string()));
     lines.push(("record.attrs".to_string(), record_attr_count.to_string()));
     for (kind, key, value) in resource_attr_entries {
-        lines.push((format!("{kind}.{key}"), value));
+        if kind.is_empty() && key.is_empty() {
+            lines.push((String::new(), value));
+        } else {
+            lines.push((format!("{kind}.{key}"), value));
+        }
     }
     if resource_attr_omitted > 0 {
         lines.push(("resource.attrs.more".to_string(), format!("{resource_attr_omitted} not shown")));
     }
     for (kind, key, value) in record_attr_entries {
-        lines.push((format!("{kind}.{key}"), value));
+        if kind.is_empty() && key.is_empty() {
+            lines.push((String::new(), value));
+        } else {
+            lines.push((format!("{kind}.{key}"), value));
+        }
     }
     if record_attr_omitted > 0 {
         lines.push(("record.attrs.more".to_string(), format!("{record_attr_omitted} not shown")));
@@ -1123,24 +1196,89 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     lines
 }
 
-fn push_modal_attribute_entry(entries: &mut Vec<(String, String, String)>, omitted: &mut usize, kind: &str, key: &str, value: String) {
+fn push_modal_attribute_entry(
+    entries: &mut Vec<(String, String, String)>, omitted: &mut usize, kind: &str, key: &str, value: Option<&AnyValue>,
+) {
+    let Some(any) = value else {
+        if entries.len() < MODAL_ATTR_ENTRY_LIMIT_PER_KIND {
+            entries.push((kind.to_string(), key.to_string(), "null".to_string()));
+        } else {
+            *omitted += 1;
+        }
+        return;
+    };
+
+    // Expand arrays: first element on the key line, rest as continuation lines.
+    if let Some(Value::ArrayValue(array)) = &any.value {
+        let elements: Vec<String> = array.values.iter().map(|e| format_any_value(Some(e))).filter(|s| !s.is_empty()).collect();
+        if elements.is_empty() {
+            if entries.len() < MODAL_ATTR_ENTRY_LIMIT_PER_KIND {
+                entries.push((kind.to_string(), key.to_string(), "\x00N/A".to_string()));
+            } else {
+                *omitted += 1;
+            }
+        } else {
+            for (i, formatted) in elements.into_iter().enumerate() {
+                if entries.len() >= MODAL_ATTR_ENTRY_LIMIT_PER_KIND {
+                    *omitted += 1;
+                    continue;
+                }
+                if i == 0 {
+                    entries.push((kind.to_string(), key.to_string(), formatted));
+                } else {
+                    entries.push((String::new(), String::new(), formatted));
+                }
+            }
+        }
+        return;
+    }
+
     if entries.len() < MODAL_ATTR_ENTRY_LIMIT_PER_KIND {
-        entries.push((kind.to_string(), key.to_string(), value));
+        entries.push((kind.to_string(), key.to_string(), format_any_value(value)));
     } else {
         *omitted += 1;
     }
 }
 
 fn modal_info_line(key: &str, value: String, key_width: usize, value_width: usize) -> Line<'static> {
-    let value = trim_single_line(&value, value_width);
-    let (key_style, value_style) = if is_otlp_attribute_entry(key) {
-        if is_standard_otlp_attribute_entry(key) {
-            (Style::default().fg(Color::Indexed(136)), Style::default().fg(Color::Black))
+    let bg = Color::Indexed(30);
+
+    // Empty array → red "N/A" (checked before trim which would strip the sentinel).
+    if value == "\x00N/A" {
+        let key_style = if is_otlp_attribute_entry(key) && !is_standard_otlp_attribute_entry(key) {
+            Style::default().fg(Color::LightCyan).bg(bg).add_modifier(Modifier::BOLD)
         } else {
-            (Style::default().fg(Color::Blue), Style::default().fg(Color::LightBlue))
-        }
+            Style::default().fg(Color::LightYellow).bg(bg).add_modifier(Modifier::BOLD)
+        };
+        return Line::from(vec![
+            Span::styled(format!("{key:<width$}: ", width = key_width), key_style),
+            Span::styled("N/A", Style::default().fg(Color::Red).bg(bg).add_modifier(Modifier::BOLD)),
+        ]);
+    }
+
+    let value = trim_single_line(&value, value_width);
+
+    // Continuation line (array element after the first) — indent to value column.
+    if key.is_empty() {
+        let value_style = Style::default().fg(Color::White).bg(bg).add_modifier(Modifier::BOLD);
+        return Line::from(vec![
+            Span::styled(format!("{:<width$}  ", "", width = key_width), Style::default().bg(bg)),
+            Span::styled(value, value_style),
+        ]);
+    }
+
+    let (key_style, value_style) = if is_otlp_attribute_entry(key) && !is_standard_otlp_attribute_entry(key) {
+        // Custom attributes (esotrace.*): bold bright-cyan key, bold bright-white value
+        (
+            Style::default().fg(Color::LightCyan).bg(bg).add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::White).bg(bg).add_modifier(Modifier::BOLD),
+        )
     } else {
-        (Style::default().fg(Color::Indexed(136)), Style::default().fg(Color::Black))
+        // Standard keys + non-attribute entries: bold bright-yellow key, bright-white value
+        (
+            Style::default().fg(Color::LightYellow).bg(bg).add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::White).bg(bg),
+        )
     };
     Line::from(vec![Span::styled(format!("{key:<width$}: ", width = key_width), key_style), Span::styled(value, value_style)])
 }
@@ -1208,7 +1346,7 @@ fn is_standard_otlp_attribute_entry(key: &str) -> bool {
 }
 
 fn footer_sep() -> Span<'static> {
-    Span::styled(" | ", Style::default().fg(Color::Black))
+    Span::styled(" | ", Style::default().fg(Color::White))
 }
 
 fn format_size_parts(bytes: u64) -> (String, String) {
@@ -1248,6 +1386,19 @@ fn trim_single_line(input: &str, limit: usize) -> String {
         output.push_str("...");
     }
     output
+}
+
+/// Estimates the number of terminal lines a text occupies when soft-wrapped at `width`.
+fn count_wrapped_lines(text: &str, width: usize) -> u16 {
+    if width == 0 {
+        return 1;
+    }
+    let mut total: u16 = 0;
+    for line in text.split('\n') {
+        let chars = line.chars().count();
+        total += if chars == 0 { 1 } else { ((chars as u16).saturating_add(width as u16 - 1)) / width as u16 };
+    }
+    total.max(1)
 }
 
 fn fit_to_width(input: &str, width: usize) -> String {
