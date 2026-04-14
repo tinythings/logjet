@@ -467,18 +467,23 @@ fn plugin_protobuf_survives_spool_round_trip() {
             let body: String = (0..body_size).map(|i| (b'A' + (i % 26) as u8) as char).collect();
 
             let attrs = vec![
-                ("service.name".to_string(), format!("svc-{}", seq % 5)),
-                ("scope.name".to_string(), format!("scope-{}", seq % 3)),
-                ("stress.msg_type".to_string(), "12".to_string()),
-                ("stress.record_nr".to_string(), format!("{}", seq * 1000)),
+                ("service.name".to_string(), format!("svc-{}", seq % 5), 0),
+                ("scope.name".to_string(), format!("scope-{}", seq % 3), 0),
+                ("stress.msg_type".to_string(), "12".to_string(), 0),
+                ("stress.record_nr".to_string(), format!("{}", seq * 1000), 0),
             ];
-            let payload = crate::plugin::build_otlp_payload(
-                base_ts + seq,
-                9, // INFO
-                Some("INFO"),
-                &body,
-                &attrs,
-            );
+            let payload = crate::plugin::build_otlp_payload(crate::plugin::OtlpRecord {
+                ts: base_ts + seq,
+                severity: 9,
+                severity_text: Some("INFO"),
+                body: &body,
+                attrs: &attrs,
+                event_name: None,
+                service_name: None,
+                scope_name: None,
+                resource_attrs: &[],
+                scope_attrs: &[],
+            });
             // Sanity: must decode before storing.
             ExportLogsServiceRequest::decode(payload.as_slice()).unwrap_or_else(|e| panic!("seq={seq} pre-store decode failed: {e}"));
 
@@ -565,13 +570,18 @@ fn graceful_flush_recovers_all_lz4() {
 
 #[test]
 fn verify_otlp_payload_accepts_valid_plugin_payload() {
-    let payload = crate::plugin::build_otlp_payload(
-        1_700_000_000_000_000_123,
-        9,
-        Some("INFO"),
-        "hello from plugin",
-        &[("service.name".to_string(), "svc".to_string())],
-    );
+    let payload = crate::plugin::build_otlp_payload(crate::plugin::OtlpRecord {
+        ts: 1_700_000_000_000_000_123,
+        severity: 9,
+        severity_text: Some("INFO"),
+        body: "hello from plugin",
+        attrs: &[("service.name".to_string(), "svc".to_string(), 0)],
+        event_name: None,
+        service_name: None,
+        scope_name: None,
+        resource_attrs: &[],
+        scope_attrs: &[],
+    });
     let record = logjet::OwnedRecord { record_type: RecordType::Logs, seq: 1, ts_unix_ns: 1_700_000_000_000_000_123, payload };
 
     super::verify_otlp_payload(&record).unwrap();
@@ -588,13 +598,18 @@ fn verify_otlp_payload_rejects_invalid_log_payload() {
 
 #[test]
 fn inspect_reader_reports_invalid_otlp_payloads_without_block_errors() {
-    let valid_payload = crate::plugin::build_otlp_payload(
-        1_700_000_000_000_000_123,
-        9,
-        Some("INFO"),
-        "valid payload",
-        &[("service.name".to_string(), "svc".to_string())],
-    );
+    let valid_payload = crate::plugin::build_otlp_payload(crate::plugin::OtlpRecord {
+        ts: 1_700_000_000_000_000_123,
+        severity: 9,
+        severity_text: Some("INFO"),
+        body: "valid payload",
+        attrs: &[("service.name".to_string(), "svc".to_string(), 0)],
+        event_name: None,
+        service_name: None,
+        scope_name: None,
+        resource_attrs: &[],
+        scope_attrs: &[],
+    });
 
     let mut writer = LogjetWriter::with_config(Cursor::new(Vec::new()), WriterConfig { codec: logjet::Codec::Lz4, ..Default::default() });
     writer.push(RecordType::Logs, 1, 1_700_000_000_000_000_123, &valid_payload).unwrap();
