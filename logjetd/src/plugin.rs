@@ -17,10 +17,16 @@ use crate::protocol::WireRecord;
 
 // ── C ABI types mirroring liblogjet.h ───────────────────────────────────────
 
+#[allow(dead_code)]
+const LJ_ATTR_STRING: i32 = 0;
+const LJ_ATTR_INT: i32 = 1;
+const LJ_ATTR_ARRAY: i32 = 2;
+
 #[repr(C)]
 struct LjAttribute {
     key: *const c_char,
     value: *const c_char,
+    value_type: i32,
 }
 
 #[repr(C)]
@@ -31,6 +37,14 @@ struct LjLogRecord {
     body: *const c_char,
     attributes: *const LjAttribute,
     attributes_len: usize,
+    // Extended OTel fields (NULL = legacy flat mode)
+    event_name: *const c_char,
+    service_name: *const c_char,
+    scope_name: *const c_char,
+    resource_attrs: *const LjAttribute,
+    resource_attrs_len: usize,
+    scope_attrs: *const LjAttribute,
+    scope_attrs_len: usize,
 }
 
 /// Opaque plugin context. We never dereference it — just pass the pointer.
@@ -108,18 +122,7 @@ unsafe extern "C" fn on_record(user: *mut c_void, record: *const LjLogRecord) {
     let severity_text =
         if rec.severity_text.is_null() { None } else { Some(unsafe { CStr::from_ptr(rec.severity_text) }.to_string_lossy().into_owned()) };
 
-    let mut attrs = Vec::new();
-    if !rec.attributes.is_null() && rec.attributes_len > 0 {
-        let slice = unsafe { std::slice::from_raw_parts(rec.attributes, rec.attributes_len) };
-        for attr in slice {
-            if attr.key.is_null() || attr.value.is_null() {
-                continue;
-            }
-            let key = unsafe { CStr::from_ptr(attr.key) }.to_string_lossy().into_owned();
-            let val = unsafe { CStr::from_ptr(attr.value) }.to_string_lossy().into_owned();
-            attrs.push((key, val));
-        }
-    }
+    let attrs = unsafe { read_attrs(rec.attributes, rec.attributes_len) };
 
     let ts = if rec.timestamp_unix_ns != 0 {
         rec.timestamp_unix_ns
@@ -127,7 +130,26 @@ unsafe extern "C" fn on_record(user: *mut c_void, record: *const LjLogRecord) {
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
     };
 
-    let payload = build_otlp_payload(ts, rec.severity_number, severity_text.as_deref(), &body, &attrs);
+    // Extended OTel fields (NULL = legacy flat mode).
+    let event_name = unsafe { read_optional_str(rec.event_name) };
+    let service_name = unsafe { read_optional_str(rec.service_name) };
+    let scope_name = unsafe { read_optional_str(rec.scope_name) };
+    let resource_attrs = unsafe { read_attrs(rec.resource_attrs, rec.resource_attrs_len) };
+    let scope_attrs = unsafe { read_attrs(rec.scope_attrs, rec.scope_attrs_len) };
+
+    let payload = build_otlp_payload(OtlpRecord {
+        ts,
+        severity: rec.severity_number,
+        severity_text: severity_text.as_deref(),
+        body: &body,
+        attrs: &attrs,
+        event_name: event_name.as_deref(),
+        service_name: service_name.as_deref(),
+        scope_name: scope_name.as_deref(),
+        resource_attrs: &resource_attrs,
+        scope_attrs: &scope_attrs,
+    });
+
     let wire = WireRecord { record_type: logjet::RecordType::Logs, seq: ctx.next_seq.fetch_add(1, Ordering::Relaxed), ts_unix_ns: ts, payload };
 
     if let Err(err) = super::daemon::append_to_spool(&ctx.spool, wire) {
@@ -135,45 +157,102 @@ unsafe extern "C" fn on_record(user: *mut c_void, record: *const LjLogRecord) {
     }
 }
 
+/// Reads a NUL-terminated C string, returns None if the pointer is null.
+unsafe fn read_optional_str(ptr: *const c_char) -> Option<String> {
+    if ptr.is_null() { None } else { Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()) }
+}
+
+/// Reads an array of LjAttribute into owned (key, value, value_type) triples.
+unsafe fn read_attrs(ptr: *const LjAttribute, len: usize) -> Vec<(String, String, i32)> {
+    let mut out = Vec::new();
+    if !ptr.is_null() && len > 0 {
+        let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+        for attr in slice {
+            if attr.key.is_null() || attr.value.is_null() {
+                continue;
+            }
+            let key = unsafe { CStr::from_ptr(attr.key) }.to_string_lossy().into_owned();
+            let val = unsafe { CStr::from_ptr(attr.value) }.to_string_lossy().into_owned();
+            out.push((key, val, attr.value_type));
+        }
+    }
+    out
+}
+
+/// Input for OTLP payload construction.
+pub(crate) struct OtlpRecord<'a> {
+    pub ts: u64,
+    pub severity: i32,
+    pub severity_text: Option<&'a str>,
+    pub body: &'a str,
+    pub attrs: &'a [(String, String, i32)],
+    // Extended (all None = legacy flat mode)
+    pub event_name: Option<&'a str>,
+    pub service_name: Option<&'a str>,
+    pub scope_name: Option<&'a str>,
+    pub resource_attrs: &'a [(String, String, i32)],
+    pub scope_attrs: &'a [(String, String, i32)],
+}
+
 /// Encodes a single log record as an OTLP ExportLogsServiceRequest protobuf.
-pub(crate) fn build_otlp_payload(ts: u64, severity: i32, severity_text: Option<&str>, body: &str, attrs: &[(String, String)]) -> Vec<u8> {
+///
+/// When `service_name` / `scope_name` / `event_name` are provided, builds a
+/// spec-compliant OTLP structure with proper Resource and Scope. Otherwise
+/// falls back to a minimal flat-attribute wrapper.
+pub(crate) fn build_otlp_payload(rec: OtlpRecord<'_>) -> Vec<u8> {
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
     use opentelemetry_proto::tonic::common::v1::any_value::Value;
-    use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, ArrayValue, InstrumentationScope, KeyValue};
     use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
     use opentelemetry_proto::tonic::resource::v1::Resource;
     use prost::Message;
 
+    let to_kv = |(k, v, t): &(String, String, i32)| KeyValue {
+        key: k.clone(),
+        value: Some(match *t {
+            LJ_ATTR_INT => AnyValue { value: Some(Value::IntValue(v.parse::<i64>().unwrap_or(0))) },
+            LJ_ATTR_ARRAY => AnyValue {
+                value: Some(Value::ArrayValue(ArrayValue {
+                    values: v.split(',').map(|s| AnyValue { value: Some(Value::StringValue(s.to_string())) }).collect(),
+                })),
+            },
+            _ => AnyValue { value: Some(Value::StringValue(v.clone())) },
+        }),
+    };
+
     let record = LogRecord {
-        time_unix_nano: ts,
-        observed_time_unix_nano: ts,
-        severity_number: severity,
-        severity_text: severity_text.unwrap_or_default().to_string(),
-        body: Some(AnyValue { value: Some(Value::StringValue(body.to_string())) }),
-        attributes: attrs
-            .iter()
-            .map(|(k, v)| KeyValue { key: k.clone(), value: Some(AnyValue { value: Some(Value::StringValue(v.clone())) }) })
-            .collect(),
+        time_unix_nano: rec.ts,
+        observed_time_unix_nano: rec.ts,
+        severity_number: rec.severity,
+        severity_text: rec.severity_text.unwrap_or_default().to_string(),
+        body: Some(AnyValue { value: Some(Value::StringValue(rec.body.to_string())) }),
+        attributes: rec.attrs.iter().map(to_kv).collect(),
         dropped_attributes_count: 0,
         flags: 0,
         trace_id: Vec::new(),
         span_id: Vec::new(),
-        event_name: String::new(),
+        event_name: rec.event_name.unwrap_or_default().to_string(),
+    };
+
+    // Extended mode: proper Resource + Scope from plugin-provided fields.
+    let has_extended = rec.service_name.is_some() || rec.scope_name.is_some();
+
+    let mut resource_kv: Vec<KeyValue> = rec.resource_attrs.iter().map(to_kv).collect();
+    if let Some(svc) = rec.service_name {
+        resource_kv.insert(0, KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(svc.to_string())) }) });
+    }
+
+    let scope = InstrumentationScope {
+        name: if has_extended { rec.scope_name.unwrap_or_default().to_string() } else { "lj-ingest-plugin".to_string() },
+        version: String::new(),
+        attributes: rec.scope_attrs.iter().map(to_kv).collect(),
+        dropped_attributes_count: 0,
     };
 
     let request = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
-            resource: Some(Resource { attributes: Vec::new(), dropped_attributes_count: 0, entity_refs: Vec::new() }),
-            scope_logs: vec![ScopeLogs {
-                scope: Some(InstrumentationScope {
-                    name: "lj-ingest-plugin".to_string(),
-                    version: String::new(),
-                    attributes: Vec::new(),
-                    dropped_attributes_count: 0,
-                }),
-                log_records: vec![record],
-                schema_url: String::new(),
-            }],
+            resource: Some(Resource { attributes: resource_kv, dropped_attributes_count: 0, entity_refs: Vec::new() }),
+            scope_logs: vec![ScopeLogs { scope: Some(scope), log_records: vec![record], schema_url: String::new() }],
             schema_url: String::new(),
         }],
     };
