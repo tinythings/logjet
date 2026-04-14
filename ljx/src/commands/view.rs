@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ use ratatui::{Frame, Terminal};
 use crate::cli::ViewArgs;
 use crate::error::{Error, Result};
 use crate::input::InputHandle;
-use crate::predicate::{FilterMode, parse_filter_query};
+use crate::predicate::{FieldFilter, FilterMode, parse_filter_query};
 
 const SUMMARY_CACHE_LIMIT: usize = 256;
 const DETAIL_PREVIEW_BYTES: usize = 1024;
@@ -61,6 +61,7 @@ enum Focus {
     Search,
     List,
     Modal,
+    FieldFilter,
     SavePrompt,
     SaveError,
 }
@@ -103,6 +104,24 @@ impl ActiveScan {
     }
 }
 
+/// Distinct field values collected by the background catalog scan.
+struct FieldCatalog {
+    severities: Vec<String>,
+    services: Vec<String>,
+}
+
+/// UI state for the field-filter popup.
+struct FieldFilterState {
+    /// 0 = severity panel, 1 = services panel
+    panel: usize,
+    severity_cursor: usize,
+    service_cursor: usize,
+    severity_scroll: u16,
+    service_scroll: u16,
+    selected_severities: HashSet<String>,
+    selected_services: HashSet<String>,
+}
+
 struct ViewApp {
     input: PathBuf,
     hex_payload: bool,
@@ -123,10 +142,22 @@ struct ViewApp {
     save_filename: String,
     save_message: Option<String>,
     current_scan: Option<ActiveScan>,
+    field_catalog: Arc<std::sync::Mutex<Option<FieldCatalog>>>,
+    field_filter_state: Option<FieldFilterState>,
+    active_field_filter: FieldFilter,
 }
 
 impl ViewApp {
     fn new(args: ViewArgs) -> Result<Self> {
+        let catalog: Arc<std::sync::Mutex<Option<FieldCatalog>>> = Arc::new(std::sync::Mutex::new(None));
+        let catalog_bg = Arc::clone(&catalog);
+        let input_bg = args.input.clone();
+        thread::spawn(move || {
+            if let Ok(cat) = scan_field_catalog(&input_bg) {
+                *catalog_bg.lock().unwrap() = Some(cat);
+            }
+        });
+
         Ok(Self {
             input: args.input,
             hex_payload: args.hex_payload,
@@ -147,6 +178,9 @@ impl ViewApp {
             save_filename: String::new(),
             save_message: None,
             current_scan: None,
+            field_catalog: catalog,
+            field_filter_state: None,
+            active_field_filter: FieldFilter::default(),
         })
     }
 
@@ -175,6 +209,7 @@ impl ViewApp {
 
         match self.focus {
             Focus::Modal => self.handle_modal_key(key),
+            Focus::FieldFilter => self.handle_field_filter_key(key),
             Focus::SavePrompt => self.handle_save_prompt_key(key),
             Focus::SaveError => self.handle_save_error_key(),
             Focus::Search => self.handle_search_key(key),
@@ -308,6 +343,9 @@ impl ViewApp {
             KeyCode::Enter => {
                 self.open_modal()?;
             }
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                self.open_field_filter();
+            }
             _ => {}
         }
 
@@ -346,7 +384,8 @@ impl ViewApp {
         self.modal_text = None;
         self.applied_query = self.query_input.clone();
         self.focus = Focus::List;
-        let predicate = parse_filter_query(&self.applied_query, self.filter_mode)?;
+        let mut predicate = parse_filter_query(&self.applied_query, self.filter_mode)?;
+        predicate.field_filter = self.active_field_filter.clone();
 
         let (spool_path, spool_reader, spool_writer) = open_temp_spool_pair()?;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -548,6 +587,138 @@ impl ViewApp {
         Ok(())
     }
 
+    fn open_field_filter(&mut self) {
+        let catalog = self.field_catalog.lock().unwrap();
+        let Some(cat) = catalog.as_ref() else {
+            self.status = "Field catalog still scanning… try again in a moment".to_string();
+            return;
+        };
+        self.field_filter_state = Some(FieldFilterState {
+            panel: 0,
+            severity_cursor: 0,
+            service_cursor: 0,
+            severity_scroll: 0,
+            service_scroll: 0,
+            selected_severities: self.active_field_filter.severities.clone().unwrap_or_default(),
+            selected_services: self.active_field_filter.services.clone().unwrap_or_default(),
+        });
+        // Need to drop the lock before changing focus
+        let _ = cat;
+        drop(catalog);
+        self.focus = Focus::FieldFilter;
+    }
+
+    fn handle_field_filter_key(&mut self, key: KeyEvent) -> Result<bool> {
+        let catalog = self.field_catalog.lock().unwrap();
+        let Some(cat) = catalog.as_ref() else {
+            self.focus = Focus::List;
+            return Ok(false);
+        };
+        let sev_count = cat.severities.len();
+        let svc_count = cat.services.len();
+        let sev_list = cat.severities.clone();
+        let svc_list = cat.services.clone();
+        drop(catalog);
+
+        let Some(state) = &mut self.field_filter_state else {
+            self.focus = Focus::List;
+            return Ok(false);
+        };
+
+        // Visible rows per panel: popup is 70% height, minus borders(2), title(1 line inside panel), footer(1).
+        // We approximate with a safe default; the exact value depends on terminal size.
+        let screen_h = crossterm::terminal::size().map(|(_, h)| h).unwrap_or(40);
+        let popup_h = ((screen_h as u32 * 70 / 100) as u16).max(6);
+        let visible_rows = popup_h.saturating_sub(4) as usize; // borders + footer + panel title
+
+        match key.code {
+            KeyCode::Esc => {
+                self.field_filter_state = None;
+                self.focus = Focus::List;
+            }
+            KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+                state.panel = 1 - state.panel;
+            }
+            KeyCode::Up => {
+                if state.panel == 0 {
+                    state.severity_cursor = state.severity_cursor.saturating_sub(1);
+                } else {
+                    state.service_cursor = state.service_cursor.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if state.panel == 0 {
+                    if sev_count > 0 {
+                        state.severity_cursor = (state.severity_cursor + 1).min(sev_count - 1);
+                    }
+                } else if svc_count > 0 {
+                    state.service_cursor = (state.service_cursor + 1).min(svc_count - 1);
+                }
+            }
+            KeyCode::Char(' ') => {
+                if state.panel == 0 && state.severity_cursor < sev_count {
+                    let val = &sev_list[state.severity_cursor];
+                    if !state.selected_severities.remove(val) {
+                        state.selected_severities.insert(val.clone());
+                    }
+                } else if state.panel == 1 && state.service_cursor < svc_count {
+                    let val = &svc_list[state.service_cursor];
+                    if !state.selected_services.remove(val) {
+                        state.selected_services.insert(val.clone());
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                self.apply_field_filter();
+                return Ok(false);
+            }
+            _ => {}
+        }
+
+        // Keep scroll in sync with cursor (cursor_row = cursor + 1 for the title line).
+        if let Some(state) = &mut self.field_filter_state {
+            let sev_row = state.severity_cursor as u16 + 1;
+            if sev_row < state.severity_scroll {
+                state.severity_scroll = sev_row;
+            } else if sev_row >= state.severity_scroll + visible_rows as u16 {
+                state.severity_scroll = sev_row - visible_rows as u16 + 1;
+            }
+
+            let svc_row = state.service_cursor as u16 + 1;
+            if svc_row < state.service_scroll {
+                state.service_scroll = svc_row;
+            } else if svc_row >= state.service_scroll + visible_rows as u16 {
+                state.service_scroll = svc_row - visible_rows as u16 + 1;
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn apply_field_filter(&mut self) {
+        if let Some(state) = self.field_filter_state.take() {
+            self.active_field_filter = FieldFilter {
+                severities: if state.selected_severities.is_empty() { None } else { Some(state.selected_severities) },
+                services: if state.selected_services.is_empty() { None } else { Some(state.selected_services) },
+            };
+            self.focus = Focus::List;
+            self.status = if self.active_field_filter.is_empty() {
+                "Field filter cleared".to_string()
+            } else {
+                let parts: Vec<String> = [
+                    self.active_field_filter.severities.as_ref().map(|s| format!("severity: {}", s.iter().cloned().collect::<Vec<_>>().join(", "))),
+                    self.active_field_filter.services.as_ref().map(|s| format!("service: {}", s.iter().cloned().collect::<Vec<_>>().join(", "))),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                format!("Field filter: {}", parts.join(" | "))
+            };
+            // Re-scan with the new field filter
+            let _ = self.apply_filter();
+        }
+    }
+
     fn cancel_scan(&mut self) {
         if let Some(scan) = &self.current_scan {
             scan.cancel();
@@ -571,6 +742,8 @@ impl ViewApp {
 
         if self.focus == Focus::Modal {
             self.render_modal(frame);
+        } else if self.focus == Focus::FieldFilter {
+            self.render_field_filter(frame);
         } else if self.focus == Focus::SaveError {
             self.render_save_error(frame);
         } else if self.focus == Focus::SavePrompt {
@@ -858,6 +1031,132 @@ impl ViewApp {
             buf[(right, y)].set_style(cyan_style);
         }
     }
+
+    fn render_field_filter(&self, frame: &mut Frame<'_>) {
+        let catalog = self.field_catalog.lock().unwrap();
+        let Some(cat) = catalog.as_ref() else { return };
+        let Some(state) = &self.field_filter_state else { return };
+
+        let screen = frame.area();
+        let sev_count = cat.severities.len();
+        let svc_count = cat.services.len();
+        let body_height = sev_count.max(svc_count).max(1) as u16;
+        let popup_h = (body_height + 4).min(screen.height * 70 / 100).max(6); // borders + title + footer
+        let popup_w = (screen.width * 60 / 100).max(40);
+        let x = screen.width.saturating_sub(popup_w) / 2;
+        let y = screen.height.saturating_sub(popup_h) / 2;
+        let area = Rect::new(x, y, popup_w, popup_h);
+        frame.render_widget(Clear, area);
+
+        let block = Block::default()
+            .title(Span::styled(" Field Filter ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let panels = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1)));
+
+        // Severity panel
+        let sev_title_style = if state.panel == 0 {
+            Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let mut sev_lines: Vec<Line<'_>> = vec![Line::from(Span::styled("── Severity ──", sev_title_style))];
+        for (i, sev) in cat.severities.iter().enumerate() {
+            let checked = if state.selected_severities.contains(sev) { "▣" } else { "☐" };
+            let style = if state.panel == 0 && i == state.severity_cursor {
+                Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            sev_lines.push(Line::from(Span::styled(format!(" {checked} {sev}"), style)));
+        }
+        frame.render_widget(
+            Paragraph::new(sev_lines).style(Style::default().bg(Color::DarkGray)).scroll((state.severity_scroll, 0)),
+            panels[0],
+        );
+
+        // Services panel
+        let svc_title_style = if state.panel == 1 {
+            Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let mut svc_lines: Vec<Line<'_>> = vec![Line::from(Span::styled("── Services ──", svc_title_style))];
+        for (i, svc) in cat.services.iter().enumerate() {
+            let checked = if state.selected_services.contains(svc) { "▣" } else { "☐" };
+            let style = if state.panel == 1 && i == state.service_cursor {
+                Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            svc_lines.push(Line::from(Span::styled(format!(" {checked} {svc}"), style)));
+        }
+        frame.render_widget(
+            Paragraph::new(svc_lines).style(Style::default().bg(Color::DarkGray)).scroll((state.service_scroll, 0)),
+            panels[1],
+        );
+
+        // Footer
+        let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
+        let footer = Line::from(vec![
+            Span::styled("SPACE", Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" toggle  ", Style::default().fg(Color::White)),
+            Span::styled("TAB", Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" switch  ", Style::default().fg(Color::White)),
+            Span::styled("ENTER", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+            Span::styled(" apply  ", Style::default().fg(Color::White)),
+            Span::styled("ESC", Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)),
+            Span::styled(" cancel", Style::default().fg(Color::White)),
+        ]);
+        frame.render_widget(Paragraph::new(footer).style(Style::default().bg(Color::Blue)), footer_area);
+    }
+}
+
+/// Scans the logjet file in the background to collect distinct severity texts and service names.
+fn scan_field_catalog(input: &Path) -> Result<FieldCatalog> {
+    let handle = InputHandle::open(input)?;
+    let mut reader = LogjetReader::new(handle.into_buf_reader());
+    let mut severities = HashSet::new();
+    let mut services = HashSet::new();
+
+    while let Some(record) = reader.next_record()? {
+        if record.record_type != RecordType::Logs {
+            continue;
+        }
+        if let Ok(batch) = ExportLogsServiceRequest::decode(record.payload.as_slice()) {
+            for rl in &batch.resource_logs {
+                if let Some(res) = &rl.resource {
+                    for attr in &res.attributes {
+                        if attr.key == "service.name"
+                            && let Some(AnyValue { value: Some(Value::StringValue(s)) }) = &attr.value {
+                                services.insert(s.clone());
+                            }
+                    }
+                }
+                for sl in &rl.scope_logs {
+                    for lr in &sl.log_records {
+                        if !lr.severity_text.is_empty() {
+                            severities.insert(lr.severity_text.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut severities: Vec<_> = severities.into_iter().collect();
+    let mut services: Vec<_> = services.into_iter().collect();
+    severities.sort();
+    services.sort();
+    Ok(FieldCatalog { severities, services })
 }
 
 fn scan_matches(
@@ -1522,11 +1821,14 @@ fn status_help_spans(focus: Focus) -> Vec<Span<'static>> {
             status_key("ENTER"),
             status_text(" open  "),
             status_key("S"),
-            status_text(" save to file  "),
+            status_text(" save  "),
+            status_key("F"),
+            status_text(" field filter  "),
             status_key("UP/DOWN"),
             status_text(" navigate"),
         ],
         Focus::Modal => Vec::new(),
+        Focus::FieldFilter => Vec::new(),
         Focus::SavePrompt => Vec::new(),
         Focus::SaveError => Vec::new(),
     }
