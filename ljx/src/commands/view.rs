@@ -1095,22 +1095,23 @@ impl ViewApp {
         };
 
         let body_height = filtered_sev.len().max(filtered_svc.len()).max(1) as u16;
-        let popup_h = (body_height + 4).min(screen.height * 70 / 100).max(6);
+        let max_popup_h = screen.height * 60 / 100;
+        let popup_h = (body_height + 4).clamp(20, max_popup_h);
         let popup_w = (screen.width * 60 / 100).max(40);
         let x = screen.width.saturating_sub(popup_w) / 2;
-        let y = screen.height.saturating_sub(popup_h) / 2;
+        let y = screen.height * 20 / 100;
         let area = Rect::new(x, y, popup_w, popup_h);
         frame.render_widget(Clear, area);
 
-        // Title with search text.
+        // DOS-style inverted title: white bg, black text. Search text in yellow on teal.
         let title = if state.filter_text.is_empty() {
-            vec![Span::styled(" Field Filter ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD))]
+            vec![Span::styled(" Field Filter ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))]
         } else {
             vec![
-                Span::styled(" Field Filter ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" Field Filter ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
                 Span::styled(
                     format!(" [{}▏]", state.filter_text),
-                    Style::default().fg(Color::LightYellow).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::LightYellow).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD),
                 ),
             ]
         };
@@ -1120,7 +1121,7 @@ impl ViewApp {
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
-            .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+            .style(Style::default().fg(Color::Black).bg(Color::Indexed(30)));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -1129,59 +1130,61 @@ impl ViewApp {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1)));
 
-        // Severity panel
+        // Severity panel — left-aligned header, bold blue.
         let sev_title_style = if state.panel == 0 {
-            Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)
+            Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(Color::Blue)
         };
-        let mut sev_lines: Vec<Line<'_>> = vec![Line::from(Span::styled("── Severity ──", sev_title_style))];
+        let mut sev_lines: Vec<Line<'_>> = vec![Line::from(Span::styled(" Severity", sev_title_style))];
         for (i, sev) in filtered_sev.iter().enumerate() {
             let checked = if state.selected_severities.contains(*sev) { "▣" } else { "☐" };
             let style = if state.panel == 0 && i == state.severity_cursor {
-                Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)
+                Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(Color::Black)
             };
             sev_lines.push(Line::from(Span::styled(format!(" {checked} {sev}"), style)));
         }
         frame.render_widget(
-            Paragraph::new(sev_lines).style(Style::default().bg(Color::DarkGray)).scroll((state.severity_scroll, 0)),
+            Paragraph::new(sev_lines).style(Style::default().bg(Color::Indexed(30))).scroll((state.severity_scroll, 0)),
             panels[0],
         );
 
-        // Services panel
+        // Services panel — left-aligned header, bold blue.
         let svc_title_style = if state.panel == 1 {
-            Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)
+            Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(Color::Blue)
         };
-        let mut svc_lines: Vec<Line<'_>> = vec![Line::from(Span::styled("── Services ──", svc_title_style))];
+        let mut svc_lines: Vec<Line<'_>> = vec![Line::from(Span::styled(" Services", svc_title_style))];
         for (i, svc) in filtered_svc.iter().enumerate() {
             let checked = if state.selected_services.contains(*svc) { "▣" } else { "☐" };
             let style = if state.panel == 1 && i == state.service_cursor {
-                Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)
+                Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(Color::Black)
             };
             svc_lines.push(Line::from(Span::styled(format!(" {checked} {svc}"), style)));
         }
         frame.render_widget(
-            Paragraph::new(svc_lines).style(Style::default().bg(Color::DarkGray)).scroll((state.service_scroll, 0)),
+            Paragraph::new(svc_lines).style(Style::default().bg(Color::Indexed(30))).scroll((state.service_scroll, 0)),
             panels[1],
         );
 
-        // Footer
+        // DOS-blue status bar.
         let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
         let footer = Line::from(vec![
-            Span::styled("SPACE", Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
-            Span::styled(" toggle  ", Style::default().fg(Color::White)),
-            Span::styled("TAB", Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
-            Span::styled(" switch  ", Style::default().fg(Color::White)),
-            Span::styled("ENTER", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
-            Span::styled(" apply  ", Style::default().fg(Color::White)),
-            Span::styled("ESC", Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)),
-            Span::styled(" cancel", Style::default().fg(Color::White)),
+            Span::styled("SPACE", Style::default().fg(Color::LightYellow).bg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled(" toggle  ", Style::default().fg(Color::White).bg(Color::Blue)),
+            Span::styled("TAB", Style::default().fg(Color::LightYellow).bg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled(" switch  ", Style::default().fg(Color::White).bg(Color::Blue)),
+            Span::styled("ENTER", Style::default().fg(Color::LightYellow).bg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled(" apply  ", Style::default().fg(Color::White).bg(Color::Blue)),
+            Span::styled("ESC", Style::default().fg(Color::LightYellow).bg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled(" cancel  ", Style::default().fg(Color::White).bg(Color::Blue)),
+            Span::styled("type", Style::default().fg(Color::LightYellow).bg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled(" to search", Style::default().fg(Color::White).bg(Color::Blue)),
         ]);
         frame.render_widget(Paragraph::new(footer).style(Style::default().bg(Color::Blue)), footer_area);
     }
