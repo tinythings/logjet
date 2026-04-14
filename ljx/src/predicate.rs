@@ -1,5 +1,9 @@
+use std::collections::HashSet;
+
 use clap::{ArgGroup, Args, CommandFactory, FromArgMatches, Parser, ValueEnum};
 use logjet::{OwnedRecord, RecordType};
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use prost::Message;
 use regex::bytes::{Regex, RegexBuilder};
 
 use crate::error::{Error, Result};
@@ -8,6 +12,58 @@ use crate::error::{Error, Result};
 pub enum FilterMode {
     Strings,
     Regex,
+}
+
+/// Field-level filter: constrains records by OTLP severity and/or service name.
+#[derive(Debug, Clone, Default)]
+pub struct FieldFilter {
+    pub severities: Option<HashSet<String>>,
+    pub services: Option<HashSet<String>>,
+}
+
+impl FieldFilter {
+    pub fn is_empty(&self) -> bool {
+        self.severities.is_none() && self.services.is_none()
+    }
+
+    /// Checks whether an OTLP log payload matches the field filter.
+    pub fn matches_payload(&self, payload: &[u8]) -> bool {
+        if self.is_empty() {
+            return true;
+        }
+        let Ok(batch) = ExportLogsServiceRequest::decode(payload) else {
+            return true; // can't decode → don't filter out
+        };
+        for rl in &batch.resource_logs {
+            let service = rl.resource.as_ref().and_then(|r| {
+                r.attributes.iter().find(|a| a.key == "service.name").and_then(|a| {
+                    a.value.as_ref().and_then(|v| {
+                        if let Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s)) = &v.value {
+                            Some(s.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                })
+            });
+            if let Some(allowed) = &self.services
+                && let Some(svc) = service
+                && !allowed.contains(svc)
+            {
+                return false;
+            }
+            for sl in &rl.scope_logs {
+                for lr in &sl.log_records {
+                    if let Some(allowed) = &self.severities
+                        && !allowed.contains(&lr.severity_text)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -50,6 +106,7 @@ pub struct RecordPredicate {
     ts_min: Option<u64>,
     ts_max: Option<u64>,
     payload_matcher: Option<PayloadMatcher>,
+    pub field_filter: FieldFilter,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +132,7 @@ impl PredicateArgs {
             ts_min: self.ts_min,
             ts_max: self.ts_max,
             payload_matcher,
+            field_filter: FieldFilter::default(),
         })
     }
 }
@@ -140,6 +198,9 @@ impl RecordPredicate {
         if let Some(matcher) = &self.payload_matcher
             && !matcher.is_match(&record.payload)
         {
+            return false;
+        }
+        if !self.field_filter.matches_payload(&record.payload) {
             return false;
         }
 
