@@ -10,6 +10,8 @@ pub struct Config {
     pub ingest_tls: IngestTlsConfig,
     pub ingest_limits: IngestLimits,
     pub ingest_overload: IngestOverloadConfig,
+    /// Path to the ingest plugin shared library (.so). Required when protocol = plugin.
+    pub ingest_plugin_path: Option<PathBuf>,
     pub replay_addr: String,
     pub replay_max_clients: usize,
     pub replay_client_timeout_ms: u64,
@@ -27,6 +29,7 @@ pub enum IngestProtocol {
     Wire,
     OtlpHttp,
     OtlpGrpc,
+    Plugin,
 }
 
 #[derive(Debug, Clone)]
@@ -160,22 +163,22 @@ pub enum SeverityFloor {
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     output: Option<String>,
-    #[serde(rename = "buffer.size")]
-    buffer_size_kb: Option<u64>,
+    #[serde(rename = "buffer.size", default, deserialize_with = "deserialize_size_value")]
+    buffer_size: Option<String>,
     #[serde(rename = "buffer.messages")]
     buffer_messages: Option<usize>,
     #[serde(rename = "buffer.keep")]
     buffer_keep: Option<usize>,
     #[serde(rename = "file.path")]
     file_path: Option<PathBuf>,
-    #[serde(rename = "file.size")]
-    file_size_kb: Option<u64>,
+    #[serde(rename = "file.size", default, deserialize_with = "deserialize_size_value")]
+    file_size: Option<String>,
     #[serde(rename = "file.name")]
     file_name: Option<String>,
     #[serde(rename = "file.fsync")]
     file_fsync: Option<String>,
-    #[serde(rename = "file.max-bytes")]
-    file_max_bytes_kb: Option<u64>,
+    #[serde(rename = "file.max-bytes", default, deserialize_with = "deserialize_size_value")]
+    file_max_bytes: Option<String>,
     #[serde(rename = "file.codec")]
     file_codec: Option<String>,
     #[serde(rename = "file.block-alignment")]
@@ -204,6 +207,8 @@ struct RawConfig {
     ingest_priority_severity_floor: Option<String>,
     #[serde(rename = "ingest.overload-report-ms")]
     ingest_overload_report_ms: Option<u64>,
+    #[serde(rename = "ingest.plugin-path")]
+    ingest_plugin_path: Option<PathBuf>,
     #[serde(rename = "replay.listen")]
     replay_addr: Option<String>,
     #[serde(rename = "replay.max-clients")]
@@ -265,14 +270,14 @@ impl Config {
         } else if path == Path::new("/etc/logjet.conf") {
             RawConfig {
                 output: None,
-                buffer_size_kb: None,
+                buffer_size: None,
                 buffer_messages: None,
                 buffer_keep: None,
                 file_path: None,
-                file_size_kb: None,
+                file_size: None,
                 file_name: None,
                 file_fsync: None,
-                file_max_bytes_kb: None,
+                file_max_bytes: None,
                 file_codec: None,
                 file_block_alignment: None,
                 ingest_addr: None,
@@ -287,6 +292,7 @@ impl Config {
                 ingest_max_batches_per_second: None,
                 ingest_priority_severity_floor: None,
                 ingest_overload_report_ms: None,
+                ingest_plugin_path: None,
                 replay_addr: None,
                 replay_max_clients: None,
                 replay_client_timeout_ms: None,
@@ -324,8 +330,13 @@ impl Config {
             "wire" => IngestProtocol::Wire,
             "otlp-http" => IngestProtocol::OtlpHttp,
             "otlp-grpc" => IngestProtocol::OtlpGrpc,
+            "plugin" => IngestProtocol::Plugin,
             other => return Err(format!("invalid ingest protocol: {other}").into()),
         };
+        let ingest_plugin_path = raw.ingest_plugin_path;
+        if ingest_protocol == IngestProtocol::Plugin && ingest_plugin_path.is_none() {
+            return Err("ingest.plugin-path is required when ingest.protocol = plugin".into());
+        }
         let ingest_tls = IngestTlsConfig {
             enable: raw.ingest_tls_enable.unwrap_or(false),
             ca_file: raw.ingest_ca_file,
@@ -400,7 +411,9 @@ impl Config {
         let keep_messages = raw.buffer_keep.unwrap_or(0);
 
         let storage = match output.as_str() {
-            "buffer" => StorageConfig::Buffer(BufferConfig { limit: parse_buffer_limit(raw.buffer_size_kb, raw.buffer_messages)?, keep_messages }),
+            "buffer" => {
+                StorageConfig::Buffer(BufferConfig { limit: parse_buffer_limit(raw.buffer_size.as_deref(), raw.buffer_messages)?, keep_messages })
+            }
             "file" => {
                 let name = raw.file_name.unwrap_or_else(|| "bar.logjet".to_string());
                 let fsync = match raw.file_fsync.as_deref().unwrap_or("interval") {
@@ -415,13 +428,21 @@ impl Config {
                     "zstd" => logjet::Codec::Zstd,
                     other => return Err(format!("invalid file.codec: {other}").into()),
                 };
+                let segment_bytes = match raw.file_size.as_deref() {
+                    Some(s) => parse_human_size(s).map_err(|e| format!("file.size: {e}"))?,
+                    None => 100 * 1024, // default 100 KiB for backwards compat
+                };
+                let max_total = match raw.file_max_bytes.as_deref() {
+                    Some(s) => parse_human_size(s).map_err(|e| format!("file.max-bytes: {e}"))?,
+                    None => 0,
+                };
                 StorageConfig::File(FileConfig {
                     dir: raw.file_path.unwrap_or_else(|| PathBuf::from(".")),
                     name,
-                    segment_size_bytes: u64::try_from(kib_to_bytes(raw.file_size_kb.unwrap_or(100))?)?,
+                    segment_size_bytes: segment_bytes,
                     fsync,
                     codec,
-                    max_total_bytes: raw.file_max_bytes_kb.map(|kb| kb.saturating_mul(1024)).unwrap_or(0),
+                    max_total_bytes: max_total,
                     block_alignment: raw.file_block_alignment.unwrap_or(4096),
                 })
             }
@@ -434,6 +455,7 @@ impl Config {
             ingest_tls,
             ingest_limits,
             ingest_overload,
+            ingest_plugin_path,
             replay_addr,
             replay_max_clients,
             replay_client_timeout_ms,
@@ -459,17 +481,80 @@ fn parse_severity_floor(value: &str) -> Result<SeverityFloor, Box<dyn std::error
     }
 }
 
-fn kib_to_bytes(value: u64) -> Result<usize, Box<dyn std::error::Error>> {
-    let bytes = value.checked_mul(1024).ok_or("size overflow while converting KiB to bytes")?;
-    Ok(usize::try_from(bytes)?)
+/// Parses a human-readable size string into bytes.
+///
+/// Accepts:
+/// - Bare number → KiB (backwards compat with old configs)
+/// - Number + suffix (case-insensitive, optional space):
+///   `b`, `kb`, `kib`, `mb`, `mib`, `gb`, `gib`
+///
+/// Examples: `"100"` → 102400, `"5mb"` → 5000000, `"5mib"` → 5242880,
+///           `"1gb"` → 1000000000, `"512 kib"` → 524288
+fn parse_human_size(s: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    let s = s.trim();
+    // Split into numeric prefix and suffix.
+    let num_end = s.bytes().position(|b| b.is_ascii_alphabetic()).unwrap_or(s.len());
+    let num_str = s[..num_end].trim();
+    let suffix = s[num_end..].trim().to_ascii_lowercase();
+
+    let value: u64 = num_str.parse().map_err(|_| format!("invalid size number: {num_str:?}"))?;
+
+    let bytes = match suffix.as_str() {
+        "" => value.checked_mul(1024).ok_or("size overflow (bare number treated as KiB)")?,
+        "b" => value,
+        "kb" => value.checked_mul(1_000).ok_or("size overflow")?,
+        "kib" => value.checked_mul(1_024).ok_or("size overflow")?,
+        "mb" => value.checked_mul(1_000_000).ok_or("size overflow")?,
+        "mib" => value.checked_mul(1_048_576).ok_or("size overflow")?,
+        "gb" => value.checked_mul(1_000_000_000).ok_or("size overflow")?,
+        "gib" => value.checked_mul(1_073_741_824).ok_or("size overflow")?,
+        other => return Err(format!("unknown size suffix: {other:?} (use b, kb, kib, mb, mib, gb, gib)").into()),
+    };
+    Ok(bytes)
 }
 
-fn parse_buffer_limit(size_kib: Option<u64>, messages: Option<usize>) -> Result<BufferLimit, Box<dyn std::error::Error>> {
-    match (size_kib, messages) {
+/// Serde deserialiser that accepts both YAML numbers and strings for size fields.
+fn deserialize_size_value<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    use serde::de;
+
+    struct SizeVisitor;
+    impl<'de> de::Visitor<'de> for SizeVisitor {
+        type Value = Option<String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a size value like 100, \"5mb\", \"1gib\"")
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(Some((v as u64).to_string()))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+    }
+
+    deserializer.deserialize_any(SizeVisitor)
+}
+
+fn parse_buffer_limit(size: Option<&str>, messages: Option<usize>) -> Result<BufferLimit, Box<dyn std::error::Error>> {
+    match (size, messages) {
         (Some(_), Some(_)) => Err("buffer.size and buffer.messages conflict; set only one".into()),
-        (Some(size_kib), None) => Ok(BufferLimit::Bytes(kib_to_bytes(size_kib)?)),
+        (Some(s), None) => Ok(BufferLimit::Bytes(usize::try_from(parse_human_size(s).map_err(|e| format!("buffer.size: {e}"))?)?)),
         (None, Some(messages)) => Ok(BufferLimit::Messages(messages)),
-        (None, None) => Ok(BufferLimit::Bytes(kib_to_bytes(100)?)),
+        (None, None) => Ok(BufferLimit::Bytes(100 * 1024)),
     }
 }
 

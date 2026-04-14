@@ -64,6 +64,7 @@ pub fn build_message_request_for_service(sequence: u64, service_name: &str, seve
                     string_attr("host.name", "garage-rig"),
                 ],
                 dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
             }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
