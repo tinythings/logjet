@@ -221,8 +221,9 @@ fn dedup_residuals(groups: Vec<DedupGroup>, drain_opts: &DrainOpts) -> Vec<Dedup
             }
         }
 
-        // Skip Drain3 if too few residuals or < 5% of bucket.
-        if residuals.len() < 10 || (residuals.len() as f64 / bucket_total as f64) < 0.05 {
+        // Skip Drain3 only when there is nothing meaningful to cluster.
+        // Small buckets still benefit from the fuzzy pass in full mode.
+        if residuals.len() < 2 || bucket_total == 0 {
             result.extend(merged);
             result.extend(residuals);
             continue;
@@ -235,6 +236,7 @@ fn dedup_residuals(groups: Vec<DedupGroup>, drain_opts: &DrainOpts) -> Vec<Dedup
             max_children: 100,
             max_clusters: residuals.len() / 2,
             extra_delimiters: drain_opts.extra_delimiters.clone(),
+            ..DrainConfig::default()
         };
         let mut engine = Drain::new(cfg);
         let mut drain_groups: HashMap<i64, Vec<usize>> = HashMap::new();

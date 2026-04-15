@@ -22,11 +22,13 @@ pub struct DrainConfig {
     pub max_clusters: usize,
     /// Extra delimiters replaced with space before tokenising.
     pub extra_delimiters: Vec<String>,
+    /// Route numeric-bearing tokens through wildcard branches in the tree.
+    pub parametrize_numeric_tokens: bool,
 }
 
 impl Default for DrainConfig {
     fn default() -> Self {
-        Self { depth: 4, sim_th: 0.4, max_children: 100, max_clusters: 1000, extra_delimiters: Vec::new() }
+        Self { depth: 4, sim_th: 0.4, max_children: 100, max_clusters: 1000, extra_delimiters: Vec::new(), parametrize_numeric_tokens: true }
     }
 }
 
@@ -69,6 +71,7 @@ pub struct Drain {
     root: Node,
     extra_delimiters: Vec<String>,
     param_str: String,
+    parametrize_numeric_tokens: bool,
     clusters: HashMap<i64, LogCluster>,
     next_id: i64,
 }
@@ -84,6 +87,7 @@ impl Drain {
             root: Node::new(),
             extra_delimiters: cfg.extra_delimiters,
             param_str: "<*>".into(),
+            parametrize_numeric_tokens: cfg.parametrize_numeric_tokens,
             clusters: HashMap::with_capacity(cfg.max_clusters),
             next_id: 0,
         }
@@ -92,7 +96,10 @@ impl Drain {
     /// Feed a log message. Returns (cluster_id, is_new_cluster).
     pub fn add_log_message(&mut self, content: &str) -> (i64, bool) {
         let tokens = self.tokenise(content);
-        let matched = self.tree_search(&tokens);
+        let matched = self.tree_search(&tokens).or_else(|| {
+            let all_ids = self.get_cluster_ids_for_seq_len(tokens.len());
+            self.fast_match(&all_ids, &tokens, true)
+        });
 
         if let Some(cid) = matched {
             let cluster = self.clusters.get_mut(&cid).unwrap();
@@ -152,17 +159,17 @@ impl Drain {
             depth += 1;
         }
 
-        self.fast_match(&current.cluster_ids, tokens)
+        self.fast_match(&current.cluster_ids, tokens, false)
     }
 
-    fn fast_match(&self, candidate_ids: &[i64], tokens: &[String]) -> Option<i64> {
+    fn fast_match(&self, candidate_ids: &[i64], tokens: &[String], include_params: bool) -> Option<i64> {
         let mut best_sim = -1.0_f64;
         let mut best_param_count = -1_i64;
         let mut best_id: Option<i64> = None;
 
         for &cid in candidate_ids {
             let Some(cluster) = self.clusters.get(&cid) else { continue };
-            let (sim, param_count) = seq_distance(&cluster.template_tokens, tokens, &self.param_str);
+            let (sim, param_count) = seq_distance(&cluster.template_tokens, tokens, &self.param_str, include_params);
             if sim > best_sim || (sim == best_sim && param_count > best_param_count) {
                 best_sim = sim;
                 best_param_count = param_count;
@@ -201,9 +208,9 @@ impl Drain {
                 break;
             }
 
-            // parametrise_numeric_tokens is always false in our pipeline,
-            // so we skip the hasNumbers check entirely.
-            current = if node.children.contains_key(token.as_str()) {
+            current = if !node.children.contains_key(token.as_str()) && self.parametrize_numeric_tokens && has_numbers(token) {
+                node.children.entry(self.param_str.clone()).or_insert_with(Node::new) as *mut Node
+            } else if node.children.contains_key(token.as_str()) {
                 node.children.get_mut(token.as_str()).unwrap() as *mut Node
             } else if node.children.contains_key(&self.param_str) {
                 if (node.children.len() as i64) < self.max_children {
@@ -222,11 +229,18 @@ impl Drain {
             depth += 1;
         }
     }
+
+    fn get_cluster_ids_for_seq_len(&self, seq_len: usize) -> Vec<i64> {
+        let Some(current) = self.root.children.get(&seq_len.to_string()) else { return Vec::new() };
+        let mut out = Vec::new();
+        collect_cluster_ids(current, &mut out);
+        out
+    }
 }
 
 /// Compute similarity between a template and a token sequence.
 /// Returns (similarity_ratio, wildcard_param_count).
-fn seq_distance(template: &[String], tokens: &[String], param_str: &str) -> (f64, i64) {
+fn seq_distance(template: &[String], tokens: &[String], param_str: &str, include_params: bool) -> (f64, i64) {
     if template.len() != tokens.len() {
         return (0.0, 0);
     }
@@ -245,6 +259,10 @@ fn seq_distance(template: &[String], tokens: &[String], param_str: &str) -> (f64
         }
     }
 
+    if include_params {
+        sim_tokens += param_count;
+    }
+
     (sim_tokens as f64 / template.len() as f64, param_count)
 }
 
@@ -252,6 +270,17 @@ fn seq_distance(template: &[String], tokens: &[String], param_str: &str) -> (f64
 /// mismatches become `<*>`.
 fn create_template(seq1: &[String], seq2: &[String]) -> Vec<String> {
     seq2.iter().zip(seq1.iter()).map(|(t2, t1)| if t1 == t2 { t2.clone() } else { "<*>".into() }).collect()
+}
+
+fn has_numbers(token: &str) -> bool {
+    token.bytes().any(|b| b.is_ascii_digit())
+}
+
+fn collect_cluster_ids(node: &Node, out: &mut Vec<i64>) {
+    out.extend(node.cluster_ids.iter().copied());
+    for child in node.children.values() {
+        collect_cluster_ids(child, out);
+    }
 }
 
 #[cfg(test)]
