@@ -79,7 +79,7 @@ fn run_dedup(input_bytes: &[u8], mode: DedupMode) -> Vec<u8> {
 
     let mut out_buf = Vec::new();
     let mut writer = LogjetWriter::new(Cursor::new(&mut out_buf));
-    let opts = DedupOpts { mode, bucket_key: BucketKeyKind::Default };
+    let opts = DedupOpts { mode, bucket_key: BucketKeyKind::Default, drain: Default::default() };
     let _stats = crate::dedup::dedup(
         unpacked.records,
         unpacked.passthrough,
