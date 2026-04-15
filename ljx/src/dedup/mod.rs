@@ -4,10 +4,11 @@
 //! Stages in parentheses are only active in hash2/full modes.
 
 pub mod bucket;
-#[allow(dead_code)]
+pub mod canon;
 pub mod canon_freetext;
-#[allow(dead_code)]
 pub mod canon_json;
+pub mod canon_kv;
+pub mod detect;
 pub mod emit;
 pub mod exact;
 pub mod flat_record;
@@ -45,8 +46,6 @@ impl Default for DedupOpts {
 /// One collapsed group of records sharing the same dedup signature.
 #[derive(Debug, Clone)]
 pub struct DedupGroup {
-    /// Used by canon stage (ticket 2) to scope merges within a bucket.
-    #[allow(dead_code)]
     pub bucket_key: BucketKey,
     pub signature: u64,
     pub count: u64,
@@ -57,6 +56,10 @@ pub struct DedupGroup {
     pub exemplar_trace_ids: Vec<String>,
     /// Up to 3 span_id hex strings (first, middle, last).
     pub exemplar_span_ids: Vec<String>,
+    /// Canonical body form (set by stage 3, None in exact mode).
+    pub canonical_body: Option<String>,
+    /// Body shape label (set by stage 3, None in exact mode).
+    pub body_shape: Option<String>,
 }
 
 impl DedupGroup {
@@ -73,6 +76,8 @@ impl DedupGroup {
             last_seen_ns: first_seen,
             exemplar_trace_ids: vec![trace_hex],
             exemplar_span_ids: vec![span_hex],
+            canonical_body: None,
+            body_shape: None,
             representative: rec,
         }
     }
@@ -89,6 +94,17 @@ impl DedupGroup {
         }
         collect_exemplar(&mut self.exemplar_trace_ids, &rec.trace_id);
         collect_exemplar(&mut self.exemplar_span_ids, &rec.span_id);
+    }
+
+    /// Merge another group into this one (canon stage).
+    pub fn merge_group(&mut self, other: DedupGroup) {
+        self.count += other.count;
+        if other.first_seen_ns < self.first_seen_ns {
+            self.first_seen_ns = other.first_seen_ns;
+        }
+        if other.last_seen_ns > self.last_seen_ns {
+            self.last_seen_ns = other.last_seen_ns;
+        }
     }
 }
 
@@ -148,8 +164,13 @@ pub fn dedup(
     let buckets = bucket::group(records, opts.bucket_key);
     let groups = exact::dedup(buckets);
 
-    // TODO: hash2 (ticket 2) — canon stages
-    // TODO: full  (ticket 3) — drain residuals
+    let groups = if opts.mode >= DedupMode::Hash2 {
+        canon::canon_dedup(groups)
+    } else {
+        groups
+    };
+
+    // TODO: full (ticket 3) — drain residuals
 
     let mode_label = match opts.mode {
         DedupMode::Exact => "exact",

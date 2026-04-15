@@ -76,6 +76,12 @@ fn build_otlp_payload(group: &DedupGroup, mode_label: &str) -> Vec<u8> {
         "dedup.exemplar_span_ids",
         &group.exemplar_span_ids.join(","),
     );
+    if let Some(ref canon) = group.canonical_body {
+        push_attr_str(&mut attrs, "dedup.canonical_body", canon);
+    }
+    if let Some(ref shape) = group.body_shape {
+        push_attr_str(&mut attrs, "dedup.body_shape", shape);
+    }
 
     let lr = LogRecord {
         time_unix_nano: group.first_seen_ns,
