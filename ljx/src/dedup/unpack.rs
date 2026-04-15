@@ -7,8 +7,8 @@
 
 use logjet::{LogjetReader, OwnedRecord, RecordType};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
-use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::AnyValue;
+use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use prost::Message;
 use std::io::{Read, Seek};
 
@@ -44,54 +44,30 @@ pub fn unpack<R: Read + Seek>(reader: &mut LogjetReader<R>) -> Result<UnpackResu
 }
 
 /// Walk ResourceLogs → ScopeLogs → LogRecord, emit one FlatRecord per log.
-fn flatten_batch(
-    batch: &ExportLogsServiceRequest,
-    out: &mut Vec<FlatRecord>,
-) {
+fn flatten_batch(batch: &ExportLogsServiceRequest, out: &mut Vec<FlatRecord>) {
     for rl in &batch.resource_logs {
         let service_name = rl
             .resource
             .as_ref()
             .and_then(|r| {
-                r.attributes.iter().find(|a| a.key == "service.name").and_then(|a| {
-                    if let Some(AnyValue { value: Some(Value::StringValue(s)) }) = &a.value {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })
+                r.attributes
+                    .iter()
+                    .find(|a| a.key == "service.name")
+                    .and_then(|a| if let Some(AnyValue { value: Some(Value::StringValue(s)) }) = &a.value { Some(s.clone()) } else { None })
             })
             .unwrap_or_default();
 
-        let resource_attrs = rl
-            .resource
-            .as_ref()
-            .map(|r| r.attributes.clone())
-            .unwrap_or_default();
+        let resource_attrs = rl.resource.as_ref().map(|r| r.attributes.clone()).unwrap_or_default();
 
         for sl in &rl.scope_logs {
-            let scope_name = sl
-                .scope
-                .as_ref()
-                .map(|s| s.name.clone())
-                .unwrap_or_default();
-            let scope_attrs = sl
-                .scope
-                .as_ref()
-                .map(|s| s.attributes.clone())
-                .unwrap_or_default();
+            let scope_name = sl.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+            let scope_attrs = sl.scope.as_ref().map(|s| s.attributes.clone()).unwrap_or_default();
 
             for lr in &sl.log_records {
                 let body = lr
                     .body
                     .as_ref()
-                    .and_then(|b| {
-                        if let Some(Value::StringValue(s)) = &b.value {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    })
+                    .and_then(|b| if let Some(Value::StringValue(s)) = &b.value { Some(s.clone()) } else { None })
                     .unwrap_or_default();
 
                 let (code_filepath, code_lineno) = extract_source_location(&lr.attributes);
@@ -119,9 +95,7 @@ fn flatten_batch(
 }
 
 /// Extract code.filepath and code.lineno from OTel log record attributes.
-fn extract_source_location(
-    attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue],
-) -> (Option<String>, Option<i64>) {
+fn extract_source_location(attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue]) -> (Option<String>, Option<i64>) {
     let mut filepath = None;
     let mut lineno = None;
     for attr in attrs {

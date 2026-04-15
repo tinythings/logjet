@@ -17,20 +17,14 @@ use crate::dedup::{DedupGroup, DedupStats};
 use crate::error::Result;
 
 /// Write dedup groups + passthrough records to a .logjet file.
-pub fn write<W: Write>(
-    writer: &mut LogjetWriter<W>,
-    groups: &[DedupGroup],
-    passthrough: &[OwnedRecord],
-    mode_label: &str,
-) -> Result<DedupStats> {
+pub fn write<W: Write>(writer: &mut LogjetWriter<W>, groups: &[DedupGroup], passthrough: &[OwnedRecord], mode_label: &str) -> Result<DedupStats> {
     let total_records: u64 = groups.iter().map(|g| g.count).sum();
     let group_count = groups.len() as u64;
 
     // Build (ts, record_type, payload) tuples for all output records, sorted
     // by timestamp so the output is chronologically ordered. Fresh monotonic
     // seq avoids the writer's "sequence must be monotonic within block" rule.
-    let mut emit_records: Vec<(u64, RecordType, Vec<u8>)> =
-        Vec::with_capacity(groups.len() + passthrough.len());
+    let mut emit_records: Vec<(u64, RecordType, Vec<u8>)> = Vec::with_capacity(groups.len() + passthrough.len());
 
     for group in groups {
         let payload = build_otlp_payload(group, mode_label);
@@ -68,21 +62,9 @@ fn build_otlp_payload(group: &DedupGroup, mode_label: &str) -> Vec<u8> {
     push_attr_str(&mut attrs, "dedup.signature", &sig_hex);
     push_attr_i64(&mut attrs, "dedup.first_seen_ns", group.first_seen_ns as i64);
     push_attr_i64(&mut attrs, "dedup.last_seen_ns", group.last_seen_ns as i64);
-    push_attr_i64(
-        &mut attrs,
-        "dedup.time_span_ms",
-        ((group.last_seen_ns.saturating_sub(group.first_seen_ns)) / 1_000_000) as i64,
-    );
-    push_attr_str(
-        &mut attrs,
-        "dedup.exemplar_trace_ids",
-        &group.exemplar_trace_ids.join(","),
-    );
-    push_attr_str(
-        &mut attrs,
-        "dedup.exemplar_span_ids",
-        &group.exemplar_span_ids.join(","),
-    );
+    push_attr_i64(&mut attrs, "dedup.time_span_ms", ((group.last_seen_ns.saturating_sub(group.first_seen_ns)) / 1_000_000) as i64);
+    push_attr_str(&mut attrs, "dedup.exemplar_trace_ids", &group.exemplar_trace_ids.join(","));
+    push_attr_str(&mut attrs, "dedup.exemplar_span_ids", &group.exemplar_span_ids.join(","));
     if let Some(ref canon) = group.canonical_body {
         push_attr_str(&mut attrs, "dedup.canonical_body", canon);
     }
@@ -101,9 +83,7 @@ fn build_otlp_payload(group: &DedupGroup, mode_label: &str) -> Vec<u8> {
         observed_time_unix_nano: group.last_seen_ns,
         severity_number: rep.severity_number,
         severity_text: rep.severity_text.clone(),
-        body: Some(AnyValue {
-            value: Some(Value::StringValue(rep.body.clone())),
-        }),
+        body: Some(AnyValue { value: Some(Value::StringValue(rep.body.clone())) }),
         attributes: attrs,
         dropped_attributes_count: 0,
         flags: 0,
@@ -114,11 +94,7 @@ fn build_otlp_payload(group: &DedupGroup, mode_label: &str) -> Vec<u8> {
 
     let batch = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
-            resource: Some(Resource {
-                attributes: rep.resource_attrs.clone(),
-                dropped_attributes_count: 0,
-                entity_refs: Vec::new(),
-            }),
+            resource: Some(Resource { attributes: rep.resource_attrs.clone(), dropped_attributes_count: 0, entity_refs: Vec::new() }),
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
                     name: rep.scope_name.clone(),
@@ -136,19 +112,9 @@ fn build_otlp_payload(group: &DedupGroup, mode_label: &str) -> Vec<u8> {
 }
 
 fn push_attr_str(attrs: &mut Vec<KeyValue>, key: &str, val: &str) {
-    attrs.push(KeyValue {
-        key: key.to_string(),
-        value: Some(AnyValue {
-            value: Some(Value::StringValue(val.to_string())),
-        }),
-    });
+    attrs.push(KeyValue { key: key.to_string(), value: Some(AnyValue { value: Some(Value::StringValue(val.to_string())) }) });
 }
 
 fn push_attr_i64(attrs: &mut Vec<KeyValue>, key: &str, val: i64) {
-    attrs.push(KeyValue {
-        key: key.to_string(),
-        value: Some(AnyValue {
-            value: Some(Value::IntValue(val)),
-        }),
-    });
+    attrs.push(KeyValue { key: key.to_string(), value: Some(AnyValue { value: Some(Value::IntValue(val)) }) });
 }

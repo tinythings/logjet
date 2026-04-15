@@ -10,8 +10,8 @@ use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 
-use crate::dedup::{DedupMode, DedupOpts};
 use crate::dedup::flat_record::BucketKeyKind;
+use crate::dedup::{DedupMode, DedupOpts};
 
 fn make_log_record(body: &str, severity: i32, time_ns: u64) -> LogRecord {
     LogRecord {
@@ -80,13 +80,7 @@ fn run_dedup(input_bytes: &[u8], mode: DedupMode) -> Vec<u8> {
     let mut out_buf = Vec::new();
     let mut writer = LogjetWriter::new(Cursor::new(&mut out_buf));
     let opts = DedupOpts { mode, bucket_key: BucketKeyKind::Default, drain: Default::default() };
-    let _stats = crate::dedup::dedup(
-        unpacked.records,
-        unpacked.passthrough,
-        &mut writer,
-        &opts,
-    )
-    .unwrap();
+    let _stats = crate::dedup::dedup(unpacked.records, unpacked.passthrough, &mut writer, &opts).unwrap();
     writer.into_inner().unwrap();
     out_buf
 }
@@ -178,14 +172,7 @@ fn different_service_stays_separate() {
 
 #[test]
 fn timestamps_first_and_last_correct() {
-    let batch = make_batch(
-        "svc",
-        vec![
-            make_log_record("msg", 9, 500),
-            make_log_record("msg", 9, 100),
-            make_log_record("msg", 9, 900),
-        ],
-    );
+    let batch = make_batch("svc", vec![make_log_record("msg", 9, 500), make_log_record("msg", 9, 100), make_log_record("msg", 9, 900)]);
     let input = write_logjet(&[batch]);
     let output = run_dedup(&input, DedupMode::Exact);
 
@@ -250,10 +237,7 @@ fn empty_input_produces_empty_output() {
 
 #[test]
 fn dedup_stats_reduction_percentage() {
-    let stats = crate::dedup::DedupStats {
-        total_records: 100,
-        group_count: 25,
-    };
+    let stats = crate::dedup::DedupStats { total_records: 100, group_count: 25 };
     let pct = stats.reduction_pct();
     assert!((pct - 75.0).abs() < 0.01);
 }

@@ -1,15 +1,9 @@
+use crate::dedup::DedupGroup;
 use crate::dedup::canon::canon_dedup;
 use crate::dedup::flat_record::{BucketKey, FlatRecord};
-use crate::dedup::DedupGroup;
 
 fn make_group(body: &str, service: &str, severity: i32) -> DedupGroup {
-    let key = BucketKey {
-        service_name: service.into(),
-        severity_number: severity,
-        scope_name: None,
-        code_filepath: None,
-        code_lineno: None,
-    };
+    let key = BucketKey { service_name: service.into(), severity_number: severity, scope_name: None, code_filepath: None, code_lineno: None };
     let rec = FlatRecord {
         service_name: service.into(),
         severity_number: severity,
@@ -33,14 +27,8 @@ fn make_group(body: &str, service: &str, severity: i32) -> DedupGroup {
 #[test]
 fn canon_merges_near_duplicate_json() {
     // Two JSON bodies differing only by a large request ID.
-    let g1 = make_group(
-        r#"{"type":"actionResponse","requestId":123456,"code":200}"#,
-        "svc", 9,
-    );
-    let g2 = make_group(
-        r#"{"type":"actionResponse","requestId":789012,"code":200}"#,
-        "svc", 9,
-    );
+    let g1 = make_group(r#"{"type":"actionResponse","requestId":123456,"code":200}"#, "svc", 9);
+    let g2 = make_group(r#"{"type":"actionResponse","requestId":789012,"code":200}"#, "svc", 9);
     let result = canon_dedup(vec![g1, g2]);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].count, 2);
@@ -100,9 +88,7 @@ fn canon_respects_bucket_boundaries() {
 #[test]
 fn canon_fewer_groups_than_exact() {
     // 5 groups that are exact-different but canon-same.
-    let groups: Vec<_> = (0..5).map(|i: u64| {
-        make_group(&format!("request id={:08x} done", 0xdead0000_u64 + i), "svc", 9)
-    }).collect();
+    let groups: Vec<_> = (0..5).map(|i: u64| make_group(&format!("request id={:08x} done", 0xdead0000_u64 + i), "svc", 9)).collect();
     let result = canon_dedup(groups);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].count, 5);

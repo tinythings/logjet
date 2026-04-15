@@ -67,9 +67,7 @@ fn is_key_value(body: &str) -> bool {
 /// Strip `[PID:TID:FLAGS] source.ext:lineno:` prefix, return suffix.
 fn strip_source_prefix(body: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"^\[[\d:]+\]\s+\S+\.\w+:\d+:?\s*").expect("valid regex")
-    });
+    let re = RE.get_or_init(|| Regex::new(r"^\[[\d:]+\]\s+\S+\.\w+:\d+:?\s*").expect("valid regex"));
     let m = re.find(body)?;
     let suffix = body[m.end()..].to_string();
     if suffix.is_empty() {
