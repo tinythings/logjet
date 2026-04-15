@@ -145,6 +145,10 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
             cmd
         })?;
         wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 3))?;
+        // Let the bridge commit state after the collector accepted all 3.
+        // The mock increments count before sending HTTP 200, so the bridge
+        // hasn't written its state file yet when wait_until returns.
+        thread::sleep(Duration::from_millis(100));
     }
 
     for message in ["RESUME 004", "RESUME 005", "RESUME 006"] {

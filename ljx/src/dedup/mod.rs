@@ -6,6 +6,8 @@
 pub mod bucket;
 #[allow(dead_code)]
 pub mod canon_freetext;
+#[allow(dead_code)]
+pub mod canon_json;
 pub mod emit;
 pub mod exact;
 pub mod flat_record;
