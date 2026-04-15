@@ -43,6 +43,11 @@ pub fn detect(body: &str) -> Detected {
         return Detected { shape: BodyShape::Json, json_value: Some(val), stripped_suffix: None };
     }
 
+    // Prefix + JSON: non-JSON text before a valid JSON object/array payload.
+    if let Some(suffix) = strip_json_prefix(body) {
+        return Detected { shape: BodyShape::SourcePrefixed, json_value: None, stripped_suffix: Some(suffix) };
+    }
+
     // KeyValue: >= 2 word-boundary key=value pairs.
     if is_key_value(body) {
         return Detected { shape: BodyShape::KeyValue, json_value: None, stripped_suffix: None };
@@ -74,6 +79,29 @@ fn strip_source_prefix(body: &str) -> Option<String> {
         return None;
     }
     Some(suffix)
+}
+
+/// Strip any non-JSON prefix before a valid JSON object/array suffix.
+fn strip_json_prefix(body: &str) -> Option<String> {
+    let trimmed = body.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return None;
+    }
+
+    for (idx, ch) in body.char_indices() {
+        if !matches!(ch, '{' | '[') {
+            continue;
+        }
+        let suffix = body[idx..].trim_start();
+        if !(suffix.starts_with('{') || suffix.starts_with('[')) {
+            continue;
+        }
+        if serde_json::from_str::<Value>(suffix).is_ok() {
+            return Some(suffix.to_string());
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
