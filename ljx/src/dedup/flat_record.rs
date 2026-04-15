@@ -7,6 +7,8 @@
 /// Selects which fields form the bucket key for dedup grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BucketKeyKind {
+    /// Global: ignore bucket boundaries entirely.
+    Global,
     /// Default: (service_name, severity_number).
     Default,
     /// Adds instrumentation scope name.
@@ -37,7 +39,12 @@ impl BucketKey {
             BucketKeyKind::SourceLine | BucketKeyKind::ScopeAndSourceLine => (rec.code_filepath.clone(), rec.code_lineno),
             _ => (None, None),
         };
-        Self { service_name: rec.service_name.clone(), severity_number: rec.severity_number, scope_name, code_filepath, code_lineno }
+        match kind {
+            BucketKeyKind::Global => {
+                Self { service_name: String::new(), severity_number: 0, scope_name: None, code_filepath: None, code_lineno: None }
+            }
+            _ => Self { service_name: rec.service_name.clone(), severity_number: rec.severity_number, scope_name, code_filepath, code_lineno },
+        }
     }
 }
 

@@ -11,7 +11,7 @@ use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 
 use crate::dedup::flat_record::BucketKeyKind;
-use crate::dedup::{DedupMode, DedupOpts};
+use crate::dedup::{DedupMatchMode, DedupMode, DedupOpts};
 
 fn make_log_record(body: &str, severity: i32, time_ns: u64) -> LogRecord {
     LogRecord {
@@ -71,15 +71,15 @@ fn write_logjet(batches: &[ExportLogsServiceRequest]) -> Vec<u8> {
     buf
 }
 
-/// Run exact-mode dedup on raw logjet bytes, return output bytes.
-fn run_dedup(input_bytes: &[u8], mode: DedupMode) -> Vec<u8> {
+/// Run dedup on raw logjet bytes, return output bytes.
+fn run_dedup(input_bytes: &[u8], behavior: DedupMode, match_mode: DedupMatchMode) -> Vec<u8> {
     let cursor = Cursor::new(input_bytes);
     let mut reader = LogjetReader::new(cursor);
     let unpacked = crate::dedup::unpack::unpack(&mut reader).unwrap();
 
     let mut out_buf = Vec::new();
     let mut writer = LogjetWriter::new(Cursor::new(&mut out_buf));
-    let opts = DedupOpts { mode, bucket_key: BucketKeyKind::Default, drain: Default::default() };
+    let opts = DedupOpts { mode: behavior, match_mode, bucket_key: BucketKeyKind::Default, drain: Default::default() };
     let _stats = crate::dedup::dedup(unpacked.records, unpacked.passthrough, &mut writer, &opts).unwrap();
     writer.into_inner().unwrap();
     out_buf
@@ -135,7 +135,7 @@ fn exact_collapses_identical_bodies() {
         ],
     );
     let input = write_logjet(&[batch]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
     let groups = read_groups(&output);
 
     assert_eq!(groups.len(), 2);
@@ -150,7 +150,7 @@ fn different_severity_stays_separate() {
     let batch1 = make_batch("svc-a", vec![make_log_record("same placeholder", 5, 100)]);
     let batch2 = make_batch("svc-a", vec![make_log_record("same placeholder", 9, 200)]);
     let input = write_logjet(&[batch1, batch2]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
     let groups = read_groups(&output);
 
     // Same body but different severity → different buckets → 2 groups.
@@ -163,7 +163,7 @@ fn different_service_stays_separate() {
     let batch1 = make_batch("svc-a", vec![make_log_record("same placeholder", 9, 100)]);
     let batch2 = make_batch("svc-b", vec![make_log_record("same placeholder", 9, 200)]);
     let input = write_logjet(&[batch1, batch2]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
     let groups = read_groups(&output);
 
     assert_eq!(groups.len(), 2);
@@ -177,7 +177,7 @@ fn timestamps_first_and_last_correct() {
         vec![make_log_record("placeholder", 9, 500), make_log_record("placeholder", 9, 100), make_log_record("placeholder", 9, 900)],
     );
     let input = write_logjet(&[batch]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
 
     let cursor = Cursor::new(&output);
     let mut reader = LogjetReader::new(cursor);
@@ -212,7 +212,7 @@ fn passthrough_non_log_records() {
         writer.into_inner().unwrap();
     }
 
-    let output = run_dedup(&buf, DedupMode::Exact);
+    let output = run_dedup(&buf, DedupMode::Distinct, DedupMatchMode::Exact);
 
     // Should have 2 records out: 1 deduped log + 1 passthrough metrics.
     let cursor = Cursor::new(&output);
@@ -233,7 +233,7 @@ fn passthrough_non_log_records() {
 #[test]
 fn empty_input_produces_empty_output() {
     let input = write_logjet(&[]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
     let groups = read_groups(&output);
     assert!(groups.is_empty());
 }
@@ -252,7 +252,7 @@ fn full_mode_runs_drain3_for_small_residual_sets() {
         vec![make_log_record("error in section alpha at line 42", 9, 100), make_log_record("error in section beta at line 99", 9, 200)],
     );
     let input = write_logjet(&[batch]);
-    let output = run_dedup(&input, DedupMode::Full);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Full);
     let groups = read_groups(&output);
 
     assert_eq!(groups.len(), 1);
@@ -271,7 +271,7 @@ fn full_mode_merges_freetext_lines_that_only_change_small_integer() {
         ],
     );
     let input = write_logjet(&[batch]);
-    let output = run_dedup(&input, DedupMode::Full);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Full);
     let groups = read_groups(&output);
 
     assert_eq!(groups.len(), 1);
