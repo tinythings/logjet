@@ -24,14 +24,7 @@ pub enum TokenClass {
 
 /// Canonicalise a free-text body: split, classify each token, rejoin.
 pub fn canonicalise_freetext(body: &str) -> String {
-    body.split_whitespace()
-        .map(|t| match classify_token(t) {
-            TokenClass::Preserve => t.to_string(),
-            TokenClass::Replace(r) => r.to_string(),
-            TokenClass::Compound(s) => s,
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    body.split_whitespace().map(render_token).collect::<Vec<_>>().join(" ")
 }
 
 /// Classify a single whitespace-delimited token.
@@ -130,6 +123,16 @@ pub fn classify_token(token: &str) -> TokenClass {
     TokenClass::Preserve
 }
 
+fn render_token(token: &str) -> String {
+    let (core, suffix) = split_trailing_punct(token);
+    let rendered = match classify_token(core) {
+        TokenClass::Preserve => core.to_string(),
+        TokenClass::Replace(r) => r.to_string(),
+        TokenClass::Compound(s) => s,
+    };
+    format!("{rendered}{suffix}")
+}
+
 /// Walk char-by-char through a mixed alpha+digit token.
 ///
 /// Preserves alphabetic runs and frame characters. Replaces digit/hex
@@ -143,33 +146,43 @@ fn compound_mini_lexer(token: &str) -> TokenClass {
     while i < len {
         let b = bytes[i];
 
-        if b.is_ascii_alphabetic() || b == b'_' {
-            let start = i;
-            while i < len && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
-                i += 1;
-            }
-            out.push_str(&token[start..i]);
-        } else if is_frame_char(b) {
+        if is_frame_char(b) {
             out.push(b as char);
             i += 1;
         } else if b.is_ascii_hexdigit() {
             let start = i;
             let mut has_hex_alpha = false;
+            let mut has_digit = false;
             while i < len && bytes[i].is_ascii_hexdigit() {
                 if matches!(bytes[i], b'a'..=b'f' | b'A'..=b'F') {
                     has_hex_alpha = true;
+                }
+                if bytes[i].is_ascii_digit() {
+                    has_digit = true;
                 }
                 i += 1;
             }
             let run_len = i - start;
 
-            if has_hex_alpha && run_len >= 6 {
+            if has_hex_alpha && has_digit && run_len >= 8 {
                 out.push_str("_HEX_");
+            } else if b.is_ascii_alphabetic() {
+                i = start;
+                while i < len && bytes[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                out.push_str(&token[start..i]);
             } else if run_len >= 3 {
                 out.push_str("_N_");
             } else {
                 out.push_str(&token[start..i]);
             }
+        } else if b.is_ascii_alphabetic() {
+            let start = i;
+            while i < len && bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            out.push_str(&token[start..i]);
         } else {
             out.push(b as char);
             i += 1;
@@ -181,7 +194,12 @@ fn compound_mini_lexer(token: &str) -> TokenClass {
 
 /// Frame characters preserved verbatim by the mini-lexer.
 fn is_frame_char(b: u8) -> bool {
-    matches!(b, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'#' | b'=' | b'-' | b'.' | b',' | b':' | b'/' | b'@')
+    matches!(b, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'#' | b'=' | b'-' | b'.' | b',' | b':' | b'/' | b'@' | b'_')
+}
+
+fn split_trailing_punct(token: &str) -> (&str, &str) {
+    let end = token.trim_end_matches(|c: char| matches!(c, ',' | ';' | ':' | ')' | ']' | '}')).len();
+    token.split_at(end)
 }
 
 /// UUID: exactly 8-4-4-4-12 hex chars with dashes.
