@@ -239,7 +239,8 @@ pub(crate) fn build_otlp_payload(rec: OtlpRecord<'_>) -> Vec<u8> {
 
     let mut resource_kv: Vec<KeyValue> = rec.resource_attrs.iter().map(to_kv).collect();
     if let Some(svc) = rec.service_name {
-        resource_kv.insert(0, KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(svc.to_string())) }) });
+        resource_kv
+            .insert(0, KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(svc.to_string())) }) });
     }
 
     let scope = InstrumentationScope {

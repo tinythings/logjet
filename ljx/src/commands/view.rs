@@ -21,10 +21,11 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use ratatui::{Frame, Terminal};
 
 use crate::cli::ViewArgs;
+use crate::dedup::DedupMode;
 use crate::error::{Error, Result};
 use crate::input::InputHandle;
 use crate::predicate::{FieldFilter, FilterMode, parse_filter_query};
@@ -64,6 +65,8 @@ enum Focus {
     FieldFilter,
     SavePrompt,
     SaveError,
+    DedupPrompt,
+    DedupProgress,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,6 +89,47 @@ enum ScanUpdate {
     Batch(Vec<EntryMeta>),
     Finished { scanned: u64, matched: u64 },
     Failed(String),
+}
+
+#[derive(Debug, Clone)]
+enum DedupUpdate {
+    Progress(f64),
+    Done { total: u64, groups: u64, pct: f64 },
+    Failed(String),
+}
+
+impl DedupMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Hash2 => "hash2",
+            Self::Full => "full",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Exact => "byte-identical bodies only",
+            Self::Hash2 => "canonical body grouping",
+            Self::Full => "hash2 plus Drain3 residuals",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Exact => Self::Hash2,
+            Self::Hash2 => Self::Full,
+            Self::Full => Self::Exact,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Exact => Self::Full,
+            Self::Hash2 => Self::Exact,
+            Self::Full => Self::Hash2,
+        }
+    }
 }
 
 struct ActiveScan {
@@ -147,6 +191,11 @@ struct ViewApp {
     field_catalog: Arc<std::sync::Mutex<Option<FieldCatalog>>>,
     field_filter_state: Option<FieldFilterState>,
     active_field_filter: FieldFilter,
+    dedup_filename: String,
+    dedup_mode: DedupMode,
+    dedup_output_path: Option<PathBuf>,
+    dedup_rx: Option<Receiver<DedupUpdate>>,
+    dedup_progress: f64,
 }
 
 impl ViewApp {
@@ -184,12 +233,18 @@ impl ViewApp {
             field_catalog: catalog,
             field_filter_state: None,
             active_field_filter: FieldFilter::default(),
+            dedup_filename: String::new(),
+            dedup_mode: DedupMode::Hash2,
+            dedup_output_path: None,
+            dedup_rx: None,
+            dedup_progress: 0.0,
         })
     }
 
     fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         loop {
             self.drain_scan_updates()?;
+            self.drain_dedup_updates();
             terminal.draw(|frame| self.render(frame))?;
 
             if event::poll(TICK_RATE)? {
@@ -215,6 +270,8 @@ impl ViewApp {
             Focus::FieldFilter => self.handle_field_filter_key(key),
             Focus::SavePrompt => self.handle_save_prompt_key(key),
             Focus::SaveError => self.handle_save_error_key(),
+            Focus::DedupPrompt => self.handle_dedup_prompt_key(key),
+            Focus::DedupProgress => Ok(false),
             Focus::Search => self.handle_search_key(key),
             Focus::List => self.handle_list_key(key),
         }
@@ -322,6 +379,9 @@ impl ViewApp {
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 self.open_save_prompt()?;
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                self.open_dedup_prompt();
             }
             KeyCode::Up => {
                 self.move_selection(-1)?;
@@ -672,13 +732,15 @@ impl ViewApp {
             KeyCode::Char(' ') => {
                 if state.panel == 0 {
                     if let Some(&val) = filtered_sev.get(state.severity_cursor)
-                        && !state.selected_severities.remove(val) {
-                            state.selected_severities.insert(val.clone());
-                        }
-                } else if let Some(&val) = filtered_svc.get(state.service_cursor)
-                    && !state.selected_services.remove(val) {
-                        state.selected_services.insert(val.clone());
+                        && !state.selected_severities.remove(val)
+                    {
+                        state.selected_severities.insert(val.clone());
                     }
+                } else if let Some(&val) = filtered_svc.get(state.service_cursor)
+                    && !state.selected_services.remove(val)
+                {
+                    state.selected_services.insert(val.clone());
+                }
             }
             KeyCode::Char(c) => {
                 state.filter_text.push(c);
@@ -775,6 +837,115 @@ impl ViewApp {
         }
     }
 
+    fn open_dedup_prompt(&mut self) {
+        let stem = self.input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+        self.dedup_filename = format!("{stem}-dedup.logjet");
+        self.dedup_mode = DedupMode::Hash2;
+        self.focus = Focus::DedupPrompt;
+    }
+
+    fn handle_dedup_prompt_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Enter => {
+                let filename = self.dedup_filename.clone();
+                if !filename.is_empty() {
+                    self.start_dedup(&filename, self.dedup_mode);
+                }
+                Ok(false)
+            }
+            KeyCode::Esc => {
+                self.focus = Focus::List;
+                Ok(false)
+            }
+            KeyCode::Left | KeyCode::Up => {
+                self.dedup_mode = self.dedup_mode.prev();
+                Ok(false)
+            }
+            KeyCode::Right | KeyCode::Down | KeyCode::Tab => {
+                self.dedup_mode = self.dedup_mode.next();
+                Ok(false)
+            }
+            KeyCode::Backspace => {
+                self.dedup_filename.pop();
+                Ok(false)
+            }
+            KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.dedup_filename.push(c);
+                Ok(false)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn start_dedup(&mut self, filename: &str, mode: DedupMode) {
+        let input_path = self.input.clone();
+        let output_dir = self.input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let output_path = output_dir.join(filename);
+        let (tx, rx) = mpsc::channel();
+        self.dedup_rx = Some(rx);
+        self.dedup_output_path = Some(output_path.clone());
+        self.dedup_progress = 0.0;
+        self.focus = Focus::DedupProgress;
+
+        thread::spawn(move || {
+            let run = || -> std::result::Result<crate::dedup::DedupStats, String> {
+                tx.send(DedupUpdate::Progress(0.1)).ok();
+                let input = crate::input::InputHandle::open(&input_path).map_err(|e| e.to_string())?;
+                let mut reader = LogjetReader::new(input.into_buf_reader());
+                let unpacked = crate::dedup::unpack::unpack(&mut reader).map_err(|e| e.to_string())?;
+                tx.send(DedupUpdate::Progress(0.3)).ok();
+
+                let out_file = File::create(&output_path).map_err(|e| e.to_string())?;
+                let mut writer = LogjetWriter::new(BufWriter::new(out_file));
+                tx.send(DedupUpdate::Progress(0.5)).ok();
+
+                let opts = crate::dedup::DedupOpts { mode, ..crate::dedup::DedupOpts::default() };
+                let stats = crate::dedup::dedup(unpacked.records, unpacked.passthrough, &mut writer, &opts).map_err(|e| e.to_string())?;
+
+                tx.send(DedupUpdate::Progress(0.9)).ok();
+                let mut out = writer.into_inner().map_err(|e| e.to_string())?;
+                out.flush().map_err(|e| e.to_string())?;
+                Ok(stats)
+            };
+            match run() {
+                Ok(stats) => {
+                    let _ = tx.send(DedupUpdate::Done { total: stats.total_records, groups: stats.group_count, pct: stats.reduction_pct() });
+                }
+                Err(e) => {
+                    let _ = tx.send(DedupUpdate::Failed(e));
+                }
+            }
+        });
+    }
+
+    fn drain_dedup_updates(&mut self) {
+        let Some(rx) = &self.dedup_rx else { return };
+        while let Ok(update) = rx.try_recv() {
+            match update {
+                DedupUpdate::Progress(p) => self.dedup_progress = p,
+                DedupUpdate::Done { total, groups, pct } => {
+                    self.dedup_progress = 1.0;
+                    self.dedup_rx = None;
+                    let msg = format!("Dedup: {total} → {groups} ({pct:.1}% reduction)");
+                    if let Some(path) = self.dedup_output_path.take() {
+                        let _ = self.switch_to_file(path);
+                    } else {
+                        self.focus = Focus::List;
+                    }
+                    self.status = msg;
+                    return;
+                }
+                DedupUpdate::Failed(e) => {
+                    self.status = format!("Dedup failed: {e}");
+                    self.dedup_rx = None;
+                    self.dedup_output_path = None;
+                    self.focus = Focus::List;
+                    return;
+                }
+            }
+        }
+    }
+
     fn render(&mut self, frame: &mut Frame<'_>) {
         let areas = Layout::default()
             .direction(Direction::Vertical)
@@ -798,6 +969,10 @@ impl ViewApp {
             self.render_save_error(frame);
         } else if self.focus == Focus::SavePrompt {
             self.render_save_prompt(frame);
+        } else if self.focus == Focus::DedupPrompt {
+            self.render_dedup_prompt(frame);
+        } else if self.focus == Focus::DedupProgress {
+            self.render_dedup_progress(frame);
         }
     }
 
@@ -896,7 +1071,16 @@ impl ViewApp {
                 area.x,
                 y,
                 area.width,
-                &[status_key("ESC"), status_text(" close   "), status_key("UP/DOWN"), status_text(" scroll   "), status_key("LEFT/RIGHT"), status_text(" prev/next   "), status_key("I"), status_text(" info panel")],
+                &[
+                    status_key("ESC"),
+                    status_text(" close   "),
+                    status_key("UP/DOWN"),
+                    status_text(" scroll   "),
+                    status_key("LEFT/RIGHT"),
+                    status_text(" prev/next   "),
+                    status_key("I"),
+                    status_text(" info panel"),
+                ],
             );
             return;
         }
@@ -906,6 +1090,27 @@ impl ViewApp {
         }
         if self.focus == Focus::SaveError {
             draw_status_spans(buf, area.x, y, area.width, &[status_text("Press any key to return")]);
+            return;
+        }
+        if self.focus == Focus::DedupPrompt {
+            draw_status_spans(
+                buf,
+                area.x,
+                y,
+                area.width,
+                &[
+                    status_key("LEFT/RIGHT"),
+                    status_text(" mode   "),
+                    status_key("ENTER"),
+                    status_text(" start   "),
+                    status_key("ESC"),
+                    status_text(" cancel"),
+                ],
+            );
+            return;
+        }
+        if self.focus == Focus::DedupProgress {
+            draw_status_spans(buf, area.x, y, area.width, &[status_text("Deduplicating…")]);
             return;
         }
 
@@ -986,11 +1191,7 @@ impl ViewApp {
             let wrap_width = inner_width.saturating_sub(1) as usize; // -1 for scrollbar
             let wrapped = smart_wrap(message, wrap_width);
             let left_lines = wrapped.lines().count() as u16;
-            let info_lines = if let Some(detail) = &self.selected_detail {
-                render_modal_info_entries(detail).len() as u16
-            } else {
-                0
-            };
+            let info_lines = if let Some(detail) = &self.selected_detail { render_modal_info_entries(detail).len() as u16 } else { 0 };
             let min_height = info_lines + 3;
             let desired_height = left_lines + 3;
             let max_height = screen.height * 80 / 100;
@@ -1012,9 +1213,7 @@ impl ViewApp {
 
             let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Length(1)]).split(inner);
 
-            let paragraph = Paragraph::new(wrapped.as_str())
-                .style(Style::default().fg(Color::Black).bg(Color::Gray))
-                .scroll((self.modal_scroll, 0));
+            let paragraph = Paragraph::new(wrapped.as_str()).style(Style::default().fg(Color::Black).bg(Color::Gray)).scroll((self.modal_scroll, 0));
             frame.render_widget(paragraph, chunks[0]);
 
             // Scrollbar
@@ -1083,15 +1282,12 @@ impl ViewApp {
         frame.render_widget(Paragraph::new(divider).style(Style::default().bg(Color::Indexed(30))), body[1]);
 
         let footer = if let Some(detail) = &self.selected_detail { render_modal_footer(detail) } else { render_modal_footer_placeholder() };
-        let paragraph = Paragraph::new(wrapped.as_str())
-            .style(Style::default().fg(Color::Black).bg(Color::Gray))
-            .scroll((self.modal_scroll, 0));
+        let paragraph = Paragraph::new(wrapped.as_str()).style(Style::default().fg(Color::Black).bg(Color::Gray)).scroll((self.modal_scroll, 0));
         frame.render_widget(paragraph, body[0]);
 
         // Scrollbar on the left panel — always visible.
         {
-            let mut scrollbar_state =
-                ScrollbarState::new(left_lines as usize).position(self.modal_scroll as usize);
+            let mut scrollbar_state = ScrollbarState::new(left_lines as usize).position(self.modal_scroll as usize);
             frame.render_stateful_widget(
                 Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(Color::Black).bg(Color::Gray)),
                 body[0],
@@ -1188,11 +1384,8 @@ impl ViewApp {
             .split(Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1)));
 
         // Severity panel — left-aligned header, bold blue.
-        let sev_title_style = if state.panel == 0 {
-            Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Blue)
-        };
+        let sev_title_style =
+            if state.panel == 0 { Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Blue) };
         let mut sev_lines: Vec<Line<'_>> = vec![Line::from(Span::styled(" Severity", sev_title_style))];
         for (i, sev) in filtered_sev.iter().enumerate() {
             let checked = if state.selected_severities.contains(*sev) { "▣" } else { "☐" };
@@ -1203,17 +1396,11 @@ impl ViewApp {
             };
             sev_lines.push(Line::from(Span::styled(format!(" {checked} {sev}"), style)));
         }
-        frame.render_widget(
-            Paragraph::new(sev_lines).style(Style::default().bg(Color::Indexed(30))).scroll((state.severity_scroll, 0)),
-            panels[0],
-        );
+        frame.render_widget(Paragraph::new(sev_lines).style(Style::default().bg(Color::Indexed(30))).scroll((state.severity_scroll, 0)), panels[0]);
 
         // Services panel — left-aligned header, bold blue.
-        let svc_title_style = if state.panel == 1 {
-            Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Blue)
-        };
+        let svc_title_style =
+            if state.panel == 1 { Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Blue) };
         let mut svc_lines: Vec<Line<'_>> = vec![Line::from(Span::styled(" Services", svc_title_style))];
         for (i, svc) in filtered_svc.iter().enumerate() {
             let checked = if state.selected_services.contains(*svc) { "▣" } else { "☐" };
@@ -1224,10 +1411,7 @@ impl ViewApp {
             };
             svc_lines.push(Line::from(Span::styled(format!(" {checked} {svc}"), style)));
         }
-        frame.render_widget(
-            Paragraph::new(svc_lines).style(Style::default().bg(Color::Indexed(30))).scroll((state.service_scroll, 0)),
-            panels[1],
-        );
+        frame.render_widget(Paragraph::new(svc_lines).style(Style::default().bg(Color::Indexed(30))).scroll((state.service_scroll, 0)), panels[1]);
 
         // DOS-blue status bar.
         let footer_area = Rect::new(inner.x, inner.y + inner.height.saturating_sub(1), inner.width, 1);
@@ -1244,6 +1428,106 @@ impl ViewApp {
             Span::styled(" to search", Style::default().fg(Color::White).bg(Color::Blue)),
         ]);
         frame.render_widget(Paragraph::new(footer).style(Style::default().bg(Color::Blue)), footer_area);
+    }
+
+    fn render_dedup_prompt(&self, frame: &mut Frame<'_>) {
+        let area = centered_rect(52, 12, frame.area());
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(Span::styled(" Deduplicate ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(Style::default().fg(Color::White).bg(Color::Gray))
+            .style(Style::default().fg(Color::Black).bg(Color::Gray));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let label = "Output: ";
+        let input_width = inner.width.saturating_sub(label.chars().count() as u16 + 2);
+        let row = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(label, Style::default().fg(Color::Black).bg(Color::Gray)),
+                Span::styled(fit_to_width(&self.dedup_filename, input_width as usize), Style::default().fg(Color::Black).bg(Color::White)),
+            ])),
+            row,
+        );
+        let cursor_x = row
+            .x
+            .saturating_add(label.chars().count() as u16)
+            .saturating_add(1)
+            .saturating_add(self.dedup_filename.chars().count() as u16)
+            .min(row.x.saturating_add(label.chars().count() as u16 + input_width));
+        frame.set_cursor_position((cursor_x, row.y));
+
+        let mode_row = Rect { x: inner.x, y: inner.y.saturating_add(2), width: inner.width, height: 1 };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Mode:   ", Style::default().fg(Color::Black).bg(Color::Gray)),
+                Span::styled(self.dedup_mode.label(), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  {}", self.dedup_mode.description()), Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+            ])),
+            mode_row,
+        );
+
+        // Footer hint
+        let hint_y = inner.y.saturating_add(4).min(inner.y + inner.height.saturating_sub(1));
+        let hint_area = Rect { x: inner.x, y: hint_y, width: inner.width, height: 1 };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("←/→", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
+                Span::styled(" mode   ", Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+                Span::styled("ENTER", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
+                Span::styled(" start   ", Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+                Span::styled("ESC", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
+                Span::styled(" cancel", Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+            ])),
+            hint_area,
+        );
+    }
+
+    fn render_dedup_progress(&self, frame: &mut Frame<'_>) {
+        let area = centered_rect(52, 10, frame.area());
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(Span::styled(" Deduplicating… ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(Style::default().fg(Color::White).bg(Color::Gray))
+            .style(Style::default().fg(Color::Black).bg(Color::Gray));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let pct = (self.dedup_progress * 100.0).min(100.0);
+        let label = format!("{pct:.0}%");
+        let gauge = Gauge::default()
+            .gauge_style(Style::default().fg(Color::Indexed(28)).bg(Color::White))
+            .label(Span::styled(label, Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)))
+            .ratio(self.dedup_progress.clamp(0.0, 1.0));
+        let bar_area = Rect { x: inner.x + 1, y: inner.y + 1, width: inner.width.saturating_sub(2), height: 1 };
+        frame.render_widget(gauge, bar_area);
+    }
+
+    fn switch_to_file(&mut self, path: PathBuf) -> Result<()> {
+        self.cancel_scan();
+        if let Some(scan) = self.current_scan.take() {
+            drop(scan.spool_reader);
+            let _ = std::fs::remove_file(scan.spool_path);
+        }
+        self.input = path;
+
+        // Re-launch background field catalog scan for the new file.
+        let catalog_bg = Arc::clone(&self.field_catalog);
+        let input_bg = self.input.clone();
+        *self.field_catalog.lock().unwrap() = None;
+        thread::spawn(move || {
+            if let Ok(cat) = scan_field_catalog(&input_bg) {
+                *catalog_bg.lock().unwrap() = Some(cat);
+            }
+        });
+
+        self.query_input.clear();
+        self.apply_filter()
     }
 }
 
@@ -1263,9 +1547,10 @@ fn scan_field_catalog(input: &Path) -> Result<FieldCatalog> {
                 if let Some(res) = &rl.resource {
                     for attr in &res.attributes {
                         if attr.key == "service.name"
-                            && let Some(AnyValue { value: Some(Value::StringValue(s)) }) = &attr.value {
-                                services.insert(s.clone());
-                            }
+                            && let Some(AnyValue { value: Some(Value::StringValue(s)) }) = &attr.value
+                        {
+                            services.insert(s.clone());
+                        }
                     }
                 }
                 for sl in &rl.scope_logs {
@@ -1532,13 +1817,7 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                 {
                     service_names.push(service.clone());
                 }
-                push_modal_attribute_entry(
-                    &mut resource_attr_entries,
-                    &mut resource_attr_omitted,
-                    "resource",
-                    &attr.key,
-                    attr.value.as_ref(),
-                );
+                push_modal_attribute_entry(&mut resource_attr_entries, &mut resource_attr_omitted, "resource", &attr.key, attr.value.as_ref());
             }
         }
 
@@ -1564,13 +1843,7 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                     span_ids += 1;
                 }
                 for attr in &record.attributes {
-                    push_modal_attribute_entry(
-                        &mut record_attr_entries,
-                        &mut record_attr_omitted,
-                        "record",
-                        &attr.key,
-                        attr.value.as_ref(),
-                    );
+                    push_modal_attribute_entry(&mut record_attr_entries, &mut record_attr_omitted, "record", &attr.key, attr.value.as_ref());
                 }
             }
         }
@@ -1622,9 +1895,7 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     lines
 }
 
-fn push_modal_attribute_entry(
-    entries: &mut Vec<(String, String, String)>, omitted: &mut usize, kind: &str, key: &str, value: Option<&AnyValue>,
-) {
+fn push_modal_attribute_entry(entries: &mut Vec<(String, String, String)>, omitted: &mut usize, kind: &str, key: &str, value: Option<&AnyValue>) {
     let Some(any) = value else {
         if entries.len() < MODAL_ATTR_ENTRY_LIMIT_PER_KIND {
             entries.push((kind.to_string(), key.to_string(), "null".to_string()));
@@ -1701,10 +1972,7 @@ fn modal_info_line(key: &str, value: String, key_width: usize, value_width: usiz
         )
     } else {
         // Standard keys + non-attribute entries: bold bright-yellow key, bright-white value
-        (
-            Style::default().fg(Color::LightYellow).bg(bg).add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::White).bg(bg),
-        )
+        (Style::default().fg(Color::LightYellow).bg(bg).add_modifier(Modifier::BOLD), Style::default().fg(Color::White).bg(bg))
     };
     Line::from(vec![Span::styled(format!("{key:<width$}: ", width = key_width), key_style), Span::styled(value, value_style)])
 }
@@ -1987,15 +2255,14 @@ fn status_help_spans(focus: Focus) -> Vec<Span<'static>> {
             status_text(" open  "),
             status_key("S"),
             status_text(" save  "),
+            status_key("D"),
+            status_text(" dedup  "),
             status_key("F"),
             status_text(" field filter  "),
             status_key("UP/DOWN"),
             status_text(" navigate"),
         ],
-        Focus::Modal => Vec::new(),
-        Focus::FieldFilter => Vec::new(),
-        Focus::SavePrompt => Vec::new(),
-        Focus::SaveError => Vec::new(),
+        Focus::Modal | Focus::FieldFilter | Focus::SavePrompt | Focus::SaveError | Focus::DedupPrompt | Focus::DedupProgress => Vec::new(),
     }
 }
 

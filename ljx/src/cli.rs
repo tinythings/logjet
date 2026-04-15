@@ -55,6 +55,39 @@ pub enum Command {
     Stats(StatsArgs),
     #[command(name = "view", alias = "cat", about = "Interactively browse filtered records in a terminal UI")]
     View(ViewArgs),
+    #[command(about = "Deduplicate log records, collapsing identical or similar bodies")]
+    Dedup(DedupArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DedupArgs {
+    #[arg(value_name = "INPUT", help = "Input .logjet file or - for stdin")]
+    pub input: PathBuf,
+
+    #[arg(short, long, value_name = "OUTPUT", help = "Output .logjet file or - for stdout")]
+    pub output: PathBuf,
+
+    #[arg(long, value_enum, default_value_t = DedupModeArg::Hash2)]
+    pub mode: DedupModeArg,
+
+    #[arg(long, value_name = "KEYS", help = "Comma-separated bucket extensions: scope, source_line")]
+    pub bucket_by: Option<String>,
+
+    #[arg(long, value_name = "FLOAT", help = "Drain3 similarity threshold (full mode only) [default: 0.7]")]
+    pub sim_th: Option<f64>,
+
+    #[arg(long, value_name = "INT", help = "Drain3 prefix tree depth (full mode only) [default: 3]")]
+    pub drain_depth: Option<i64>,
+
+    #[arg(long, value_name = "DELIMS", help = "Drain3 extra delimiters, comma-separated (full mode only)")]
+    pub extra_delimiters: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum DedupModeArg {
+    Exact,
+    Hash2,
+    Full,
 }
 
 #[derive(Debug, Clone, Args)]
