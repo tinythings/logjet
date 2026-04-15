@@ -29,6 +29,8 @@ static ALWAYS_NORMALISE: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "size",
         "length",
         "len",
+        "task",
+        "tasks",
         "count",
         "total",
         "num",
