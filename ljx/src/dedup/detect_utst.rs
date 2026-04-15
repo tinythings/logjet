@@ -63,6 +63,15 @@ fn generic_prefix_with_json_suffix() {
 }
 
 #[test]
+fn bracketed_prefix_with_json_suffix() {
+    let d = detect(r#"[111:222:333] {"requestId":0,"kind":"fake_response","statusCode":299}"#);
+    assert_eq!(d.shape, BodyShape::SourcePrefixed);
+    let suffix = d.stripped_suffix.unwrap();
+    assert!(suffix.starts_with('{'));
+    assert!(suffix.contains("\"requestId\":0"));
+}
+
+#[test]
 fn source_prefixed_empty_suffix_falls_through() {
     // Only prefix, no actual body content after it.
     let d = detect("[111:222] fake.cpp:1: ");

@@ -84,7 +84,7 @@ fn strip_source_prefix(body: &str) -> Option<String> {
 /// Strip any non-JSON prefix before a valid JSON object/array suffix.
 fn strip_json_prefix(body: &str) -> Option<String> {
     let trimmed = body.trim_start();
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+    if trimmed.starts_with('{') {
         return None;
     }
 
