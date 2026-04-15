@@ -55,6 +55,30 @@ pub enum Command {
     Stats(StatsArgs),
     #[command(name = "view", alias = "cat", about = "Interactively browse filtered records in a terminal UI")]
     View(ViewArgs),
+    #[command(about = "Deduplicate log records, collapsing identical or similar bodies")]
+    Dedup(DedupArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DedupArgs {
+    #[arg(value_name = "INPUT", help = "Input .logjet file or - for stdin")]
+    pub input: PathBuf,
+
+    #[arg(short, long, value_name = "OUTPUT", help = "Output .logjet file or - for stdout")]
+    pub output: PathBuf,
+
+    #[arg(long, value_enum, default_value_t = DedupModeArg::Hash2)]
+    pub mode: DedupModeArg,
+
+    #[arg(long, value_name = "KEYS", help = "Comma-separated bucket extensions: scope, source_line")]
+    pub bucket_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum DedupModeArg {
+    Exact,
+    Hash2,
+    Full,
 }
 
 #[derive(Debug, Clone, Args)]
