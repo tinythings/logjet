@@ -2,28 +2,28 @@ use crate::dedup::canon_kv::canonicalise_kv;
 
 #[test]
 fn keys_preserved_values_normalised() {
-    let input = "dispatcher=D0110 ignore count=45782 route=48574a68";
+    let input = "worker=F0110 ignore count=45782 route=deadbeef";
     let canon = canonicalise_kv(input);
-    assert_eq!(canon, "dispatcher=D_N_ ignore count=_N_ route=_HEX_");
+    assert_eq!(canon, "worker=F_N_ ignore count=_N_ route=_HEX_");
 }
 
 #[test]
 fn bare_words_classified() {
-    let input = "status=ok Notifying listeners";
+    let input = "status=ok Placeholder tokens";
     let canon = canonicalise_kv(input);
-    assert_eq!(canon, "status=ok Notifying listeners");
+    assert_eq!(canon, "status=ok Placeholder tokens");
 }
 
 #[test]
 fn value_with_uuid() {
-    let input = "id=48574a68-40f7-4b2a-9c3d-1234567890ab level=3";
+    let input = "id=aaaaaaaa-bbbb-4ccc-9ddd-eeeeeeeeeeee level=3";
     let canon = canonicalise_kv(input);
     assert_eq!(canon, "id=_UUID_ level=3");
 }
 
 #[test]
 fn value_with_ip() {
-    let input = "host=192.168.1.1 port=8080";
+    let input = "host=10.23.45.67 port=8080";
     let canon = canonicalise_kv(input);
     assert_eq!(canon, "host=_IPV4_ port=_N_");
 }
@@ -44,4 +44,11 @@ fn multiple_equals_in_value() {
     // Key is "filter", value is "a=b=c" (compound with alpha).
     assert!(canon.starts_with("filter="));
     assert!(canon.contains("level=5"));
+}
+
+#[test]
+fn small_numeric_counters_and_ids_are_normalised() {
+    let input = "[FakeDispatcher::trace_metric]: agentID=117, max_queue_size_seen=10";
+    let canon = canonicalise_kv(input);
+    assert_eq!(canon, "[FakeDispatcher::trace_metric]: agentID=_N_, max_queue_size_seen=_N_");
 }

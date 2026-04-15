@@ -128,10 +128,10 @@ fn exact_collapses_identical_bodies() {
     let batch = make_batch(
         "svc-a",
         vec![
-            make_log_record("hello world", 9, 100),
-            make_log_record("hello world", 9, 200),
-            make_log_record("hello world", 9, 300),
-            make_log_record("different msg", 9, 400),
+            make_log_record("placeholder event", 9, 100),
+            make_log_record("placeholder event", 9, 200),
+            make_log_record("placeholder event", 9, 300),
+            make_log_record("different placeholder", 9, 400),
         ],
     );
     let input = write_logjet(&[batch]);
@@ -139,16 +139,16 @@ fn exact_collapses_identical_bodies() {
     let groups = read_groups(&output);
 
     assert_eq!(groups.len(), 2);
-    let hello = groups.iter().find(|(b, _)| b == "hello world").unwrap();
+    let hello = groups.iter().find(|(b, _)| b == "placeholder event").unwrap();
     assert_eq!(hello.1, 3);
-    let diff = groups.iter().find(|(b, _)| b == "different msg").unwrap();
+    let diff = groups.iter().find(|(b, _)| b == "different placeholder").unwrap();
     assert_eq!(diff.1, 1);
 }
 
 #[test]
 fn different_severity_stays_separate() {
-    let batch1 = make_batch("svc-a", vec![make_log_record("same body", 5, 100)]);
-    let batch2 = make_batch("svc-a", vec![make_log_record("same body", 9, 200)]);
+    let batch1 = make_batch("svc-a", vec![make_log_record("same placeholder", 5, 100)]);
+    let batch2 = make_batch("svc-a", vec![make_log_record("same placeholder", 9, 200)]);
     let input = write_logjet(&[batch1, batch2]);
     let output = run_dedup(&input, DedupMode::Exact);
     let groups = read_groups(&output);
@@ -160,8 +160,8 @@ fn different_severity_stays_separate() {
 
 #[test]
 fn different_service_stays_separate() {
-    let batch1 = make_batch("svc-a", vec![make_log_record("same body", 9, 100)]);
-    let batch2 = make_batch("svc-b", vec![make_log_record("same body", 9, 200)]);
+    let batch1 = make_batch("svc-a", vec![make_log_record("same placeholder", 9, 100)]);
+    let batch2 = make_batch("svc-b", vec![make_log_record("same placeholder", 9, 200)]);
     let input = write_logjet(&[batch1, batch2]);
     let output = run_dedup(&input, DedupMode::Exact);
     let groups = read_groups(&output);
@@ -172,7 +172,10 @@ fn different_service_stays_separate() {
 
 #[test]
 fn timestamps_first_and_last_correct() {
-    let batch = make_batch("svc", vec![make_log_record("msg", 9, 500), make_log_record("msg", 9, 100), make_log_record("msg", 9, 900)]);
+    let batch = make_batch(
+        "svc",
+        vec![make_log_record("placeholder", 9, 500), make_log_record("placeholder", 9, 100), make_log_record("placeholder", 9, 900)],
+    );
     let input = write_logjet(&[batch]);
     let output = run_dedup(&input, DedupMode::Exact);
 
@@ -199,13 +202,13 @@ fn timestamps_first_and_last_correct() {
 #[test]
 fn passthrough_non_log_records() {
     // Write a log batch + a metrics record.
-    let batch = make_batch("svc", vec![make_log_record("msg", 9, 100)]);
+    let batch = make_batch("svc", vec![make_log_record("placeholder", 9, 100)]);
     let mut buf = Vec::new();
     {
         let mut writer = LogjetWriter::new(Cursor::new(&mut buf));
         let log_payload = batch.encode_to_vec();
         writer.push(RecordType::Logs, 0, 1000, &log_payload).unwrap();
-        writer.push(RecordType::Metrics, 1, 1001, b"metrics-payload").unwrap();
+        writer.push(RecordType::Metrics, 1, 1001, b"fake-metrics-payload").unwrap();
         writer.into_inner().unwrap();
     }
 
@@ -219,7 +222,7 @@ fn passthrough_non_log_records() {
     while let Some(rec) = reader.next_record().unwrap() {
         count += 1;
         if rec.record_type == RecordType::Metrics {
-            assert_eq!(rec.payload, b"metrics-payload");
+            assert_eq!(rec.payload, b"fake-metrics-payload");
             saw_metrics = true;
         }
     }
@@ -240,4 +243,18 @@ fn dedup_stats_reduction_percentage() {
     let stats = crate::dedup::DedupStats { total_records: 100, group_count: 25 };
     let pct = stats.reduction_pct();
     assert!((pct - 75.0).abs() < 0.01);
+}
+
+#[test]
+fn full_mode_runs_drain3_for_small_residual_sets() {
+    let batch = make_batch(
+        "svc-a",
+        vec![make_log_record("error in section alpha at line 42", 9, 100), make_log_record("error in section beta at line 99", 9, 200)],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Full);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].1, 2);
 }

@@ -120,3 +120,68 @@ fn exact_duplicate_increments_size() {
     let cluster = drain.clusters().values().next().unwrap();
     assert_eq!(cluster.size, 3);
 }
+
+#[test]
+fn numeric_first_token_uses_wildcard_branch() {
+    let cfg = DrainConfig::default();
+    let mut drain = Drain::new(cfg);
+
+    drain.add_log_message("req123 error in module route update");
+    drain.add_log_message("req456 error in module route update");
+
+    assert_eq!(drain.clusters().len(), 1);
+    let cluster = drain.clusters().values().next().unwrap();
+    assert_eq!(cluster.template(), "<*> error in module route update");
+}
+
+#[test]
+fn numeric_middle_token_uses_wildcard_branch() {
+    let cfg = DrainConfig::default();
+    let mut drain = Drain::new(cfg);
+
+    drain.add_log_message("route 123 failed in module alpha");
+    drain.add_log_message("route 456 failed in module alpha");
+
+    assert_eq!(drain.clusters().len(), 1);
+    let cluster = drain.clusters().values().next().unwrap();
+    assert_eq!(cluster.template(), "route <*> failed in module alpha");
+}
+
+#[test]
+fn fallback_search_recovers_when_tree_path_misses() {
+    let cfg = DrainConfig { sim_th: 0.7, ..DrainConfig::default() };
+    let mut drain = Drain::new(cfg);
+
+    drain.add_log_message("alpha error in module route update");
+    drain.add_log_message("beta error in module route update");
+
+    assert_eq!(drain.clusters().len(), 1);
+    let cluster = drain.clusters().values().next().unwrap();
+    assert_eq!(cluster.template(), "<*> error in module route update");
+}
+
+#[test]
+fn fallback_search_still_merges_when_numeric_parametrization_is_disabled() {
+    let cfg = DrainConfig { sim_th: 0.7, parametrize_numeric_tokens: false, ..DrainConfig::default() };
+    let mut drain = Drain::new(cfg);
+
+    drain.add_log_message("req123 error in module route update");
+    drain.add_log_message("req456 error in module route update");
+
+    assert_eq!(drain.clusters().len(), 1);
+    let cluster = drain.clusters().values().next().unwrap();
+    assert_eq!(cluster.template(), "<*> error in module route update");
+}
+
+#[test]
+fn extra_delimiters_split_kv_like_messages() {
+    let cfg = DrainConfig { extra_delimiters: vec!["=".into(), ",".into()], ..DrainConfig::default() };
+    let mut drain = Drain::new(cfg);
+
+    drain.add_log_message("agentID=117, max_queue_size_seen=10");
+    drain.add_log_message("agentID=257, max_queue_size_seen=8");
+
+    assert_eq!(drain.clusters().len(), 1);
+    let cluster = drain.clusters().values().next().unwrap();
+    assert_eq!(cluster.template(), "agentID <*> max_queue_size_seen <*>");
+}
