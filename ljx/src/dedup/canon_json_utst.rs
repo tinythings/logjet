@@ -35,36 +35,36 @@ fn normalise_key_no_substring_match() {
 
 #[test]
 fn short_alpha_preserved() {
-    let input = r#"{"type":"actionResponse","status":"error"}"#;
+    let input = r#"{"kind":"fakeResponse","status":"placeholder"}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
-    assert!(canon.contains("\"actionResponse\""));
-    assert!(canon.contains("\"error\""));
+    assert!(canon.contains("\"fakeResponse\""));
+    assert!(canon.contains("\"placeholder\""));
 }
 
 #[test]
 fn long_string_replaced() {
-    let input = r#"{"msg":"this is a very long message that exceeds forty characters easily yes"}"#;
+    let input = r#"{"msg":"this is a very long placeholder string that exceeds forty chars"}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains("\"_\""));
 }
 
 #[test]
 fn string_with_digits_replaced() {
-    let input = r#"{"id":"abc123def"}"#;
+    let input = r#"{"id":"fake123value"}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains("\"_\""));
 }
 
 #[test]
 fn uuid_string_replaced() {
-    let input = r#"{"trace":"48574a68-40f7-4b2a-9c3d-1234567890ab"}"#;
+    let input = r#"{"trace":"aaaaaaaa-bbbb-4ccc-9ddd-eeeeeeeeeeee"}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains("\"_UUID_\""));
 }
 
 #[test]
 fn path_string_replaced() {
-    let input = r#"{"file":"/data/vendor/archive"}"#;
+    let input = r#"{"file":"/fake/root/archive"}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains("\"_PATH_\""));
 }
@@ -145,6 +145,14 @@ fn denylist_with_underscore_key() {
     assert!(canon.contains(":0"));
 }
 
+#[test]
+fn tasks_counter_is_normalised() {
+    let input = r#"{"method":"fakeAction","msg":"No change in placeholder","tasks":8}"#;
+    let canon = canonicalise_json_to_string(input).unwrap();
+    assert!(canon.contains("\"tasks\":0"));
+    assert!(!canon.contains("\"tasks\":8"));
+}
+
 // Bool + null
 
 #[test]
@@ -175,7 +183,7 @@ fn scalar_array_collapsed() {
 
 #[test]
 fn object_array_collapsed_with_shape() {
-    let input = r#"{"items":[{"name":"a","value":1},{"name":"b","value":2}]}"#;
+    let input = r#"{"items":[{"name":"fake_a","value":1},{"name":"fake_b","value":2}]}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains("__arr"));
     assert!(canon.contains("object"));
@@ -186,7 +194,7 @@ fn object_array_collapsed_with_shape() {
 
 #[test]
 fn mixed_array_collapsed() {
-    let input = r#"{"data":[1,{"key":"val"}]}"#;
+    let input = r#"{"data":[1,{"key":"fake"}]}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains("mixed"));
 }
@@ -223,7 +231,7 @@ fn nested_denylist_uses_immediate_key() {
 
 #[test]
 fn keys_never_touched() {
-    let input = r#"{"my_special_key":"val","Another-Key":123}"#;
+    let input = r#"{"my_special_key":"fake","Another-Key":123}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains("my_special_key"));
     assert!(canon.contains("Another-Key"));
@@ -233,7 +241,7 @@ fn keys_never_touched() {
 
 #[test]
 fn invalid_json_returns_none() {
-    assert!(canonicalise_json_to_string("not json at all").is_none());
+    assert!(canonicalise_json_to_string("plain placeholder text").is_none());
     assert!(canonicalise_json_to_string("{broken").is_none());
 }
 
@@ -242,11 +250,11 @@ fn invalid_json_returns_none() {
 #[test]
 fn automotive_json_body() {
     let input = json!({
-        "type": "actionResponse",
-        "requestId": 4917575253552093804_u64,
-        "actionId": "48574a68-40f7-4b2a-9c3d-1234567890ab",
+        "type": "fakeResponse",
+        "requestId": 4_917_575_253_552_093_804_u64,
+        "actionId": "aaaaaaaa-bbbb-4ccc-9ddd-eeeeeeeeeeee",
         "statusCode": 200,
-        "items": [{"name": "route", "distance": 14500}],
+        "items": [{"name": "fake_route", "distance": 14500}],
         "active": true,
         "error": null
     });
@@ -257,8 +265,8 @@ fn automotive_json_body() {
     assert!(canon.contains("\"requestId\""));
     assert!(canon.contains("\"statusCode\""));
 
-    // "type": "actionResponse" — short alpha → preserved.
-    assert!(canon.contains("\"actionResponse\""));
+    // "type": "fakeResponse" — short alpha → preserved.
+    assert!(canon.contains("\"fakeResponse\""));
 
     // "requestId" in denylist → 0.
     // "statusCode" 200 < 1000, not in denylist → preserved.
