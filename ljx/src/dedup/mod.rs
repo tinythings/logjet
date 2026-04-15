@@ -2,6 +2,46 @@
 //!
 //! OTel-native: unpack → bucket → exact → (canon) → (drain) → emit.
 //! Stages in parentheses are only active in hash2/full modes.
+//!
+//! Dedup semantics note
+//! --------------------
+//!
+//! We want to expose two user-facing dedup behaviours:
+//!
+//! 1. `distinct`
+//!    Collapse duplicate records across the whole selected dataset.
+//!    Record order does not matter. If the same message shape appears at
+//!    the start and the end of the file, it should still become one group.
+//!
+//! 2. `collapse`
+//!    Collapse repeated records only in a local burst / nearby sense.
+//!    The same message may reappear later as a new group after the burst
+//!    has ended.
+//!
+//! These behaviour modes are separate from the matching stack. The
+//! matching stack stays:
+//!
+//! - exact body equality
+//! - canonicalisation (`canon`)
+//! - optional Drain3 fallback on remaining residuals
+//!
+//! In other words, `distinct` is not byte-for-byte SQL `DISTINCT` over the
+//! original body string. It is "distinct over the dedup signature" after
+//! the selected normalisation stages have run.
+//!
+//! Frozen decisions for the first implementation:
+//!
+//! - `distinct` is whole-selection, not adjacency-based.
+//! - `distinct` is global by default: it should ignore current
+//!   service/severity bucket boundaries unless a later explicit override is
+//!   introduced.
+//! - `collapse` is local/burst-oriented and should keep conservative safety
+//!   boundaries such as service/severity unless we later add a looser mode.
+//! - both behaviours may use canon and Drain3; the difference is scope, not
+//!   whether normalisation exists.
+//! - emitted metadata should make both behaviour and matcher visible, for
+//!   example `distinct/canon`, `distinct/drain3`, `collapse/canon`, or
+//!   `collapse/drain3`.
 
 pub mod bucket;
 pub mod canon;
@@ -17,9 +57,37 @@ pub mod unpack;
 
 use flat_record::{BucketKey, BucketKeyKind, FlatRecord};
 
-/// Deduplication aggressiveness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// User-facing dedup behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DedupMode {
+    /// Collapse duplicates across the whole selected dataset.
+    Distinct,
+    /// Collapse duplicates only in a local burst / nearby sense.
+    Collapse,
+}
+
+/// Bucket policy implied by the user-facing dedup behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DedupBucketPolicy {
+    /// Ignore service/severity bucket boundaries and group globally.
+    Global,
+    /// Respect the configured bucket key.
+    Requested,
+}
+
+impl DedupMode {
+    /// Frozen bucket policy for the first implementation.
+    pub fn bucket_policy(self) -> DedupBucketPolicy {
+        match self {
+            Self::Distinct => DedupBucketPolicy::Global,
+            Self::Collapse => DedupBucketPolicy::Requested,
+        }
+    }
+}
+
+/// Matching aggressiveness inside the selected dedup behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DedupMatchMode {
     /// Stage 2 only: collapse byte-identical bodies.
     Exact,
     /// Stages 2 + 3: canonicalise then hash.
@@ -32,6 +100,7 @@ pub enum DedupMode {
 #[derive(Debug, Clone)]
 pub struct DedupOpts {
     pub mode: DedupMode,
+    pub match_mode: DedupMatchMode,
     pub bucket_key: BucketKeyKind,
     pub drain: DrainOpts,
 }
@@ -52,7 +121,7 @@ impl Default for DrainOpts {
 
 impl Default for DedupOpts {
     fn default() -> Self {
-        Self { mode: DedupMode::Hash2, bucket_key: BucketKeyKind::Default, drain: DrainOpts::default() }
+        Self { mode: DedupMode::Distinct, match_mode: DedupMatchMode::Hash2, bucket_key: BucketKeyKind::Default, drain: DrainOpts::default() }
     }
 }
 
@@ -173,17 +242,24 @@ impl DedupStats {
 pub fn dedup(
     records: Vec<FlatRecord>, passthrough: Vec<logjet::OwnedRecord>, output: &mut logjet::LogjetWriter<impl std::io::Write>, opts: &DedupOpts,
 ) -> crate::error::Result<DedupStats> {
-    let buckets = bucket::group(records, opts.bucket_key);
+    let bucket_key = match opts.mode.bucket_policy() {
+        DedupBucketPolicy::Global => BucketKeyKind::Global,
+        DedupBucketPolicy::Requested => opts.bucket_key,
+    };
+    let buckets = bucket::group(records, bucket_key);
     let groups = exact::dedup(buckets);
 
-    let groups = if opts.mode >= DedupMode::Hash2 { canon::canon_dedup(groups) } else { groups };
+    let groups = if opts.match_mode >= DedupMatchMode::Hash2 { canon::canon_dedup(groups) } else { groups };
 
-    let groups = if opts.mode >= DedupMode::Full { dedup_residuals(groups, &opts.drain) } else { groups };
+    let groups = if opts.match_mode >= DedupMatchMode::Full { dedup_residuals(groups, &opts.drain) } else { groups };
 
-    let mode_label = match opts.mode {
-        DedupMode::Exact => "exact",
-        DedupMode::Hash2 => "hash2",
-        DedupMode::Full => "full",
+    let mode_label = match (opts.mode, opts.match_mode) {
+        (DedupMode::Distinct, DedupMatchMode::Exact) => "distinct/exact",
+        (DedupMode::Distinct, DedupMatchMode::Hash2) => "distinct/canon",
+        (DedupMode::Distinct, DedupMatchMode::Full) => "distinct/full",
+        (DedupMode::Collapse, DedupMatchMode::Exact) => "collapse/exact",
+        (DedupMode::Collapse, DedupMatchMode::Hash2) => "collapse/canon",
+        (DedupMode::Collapse, DedupMatchMode::Full) => "collapse/full",
     };
 
     emit::write(output, &groups, &passthrough, mode_label)

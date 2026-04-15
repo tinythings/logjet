@@ -25,7 +25,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, Paragraph, Scro
 use ratatui::{Frame, Terminal};
 
 use crate::cli::ViewArgs;
-use crate::dedup::DedupMode;
+use crate::dedup::DedupMatchMode;
 use crate::error::{Error, Result};
 use crate::input::InputHandle;
 use crate::predicate::{FieldFilter, FilterMode, parse_filter_query};
@@ -98,7 +98,7 @@ enum DedupUpdate {
     Failed(String),
 }
 
-impl DedupMode {
+impl DedupMatchMode {
     fn label(self) -> &'static str {
         match self {
             Self::Exact => "exact",
@@ -192,7 +192,7 @@ struct ViewApp {
     field_filter_state: Option<FieldFilterState>,
     active_field_filter: FieldFilter,
     dedup_filename: String,
-    dedup_mode: DedupMode,
+    dedup_mode: DedupMatchMode,
     dedup_output_path: Option<PathBuf>,
     dedup_rx: Option<Receiver<DedupUpdate>>,
     dedup_progress: f64,
@@ -234,7 +234,7 @@ impl ViewApp {
             field_filter_state: None,
             active_field_filter: FieldFilter::default(),
             dedup_filename: String::new(),
-            dedup_mode: DedupMode::Hash2,
+            dedup_mode: DedupMatchMode::Hash2,
             dedup_output_path: None,
             dedup_rx: None,
             dedup_progress: 0.0,
@@ -840,7 +840,7 @@ impl ViewApp {
     fn open_dedup_prompt(&mut self) {
         let stem = self.input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
         self.dedup_filename = format!("{stem}-dedup.logjet");
-        self.dedup_mode = DedupMode::Hash2;
+        self.dedup_mode = DedupMatchMode::Hash2;
         self.focus = Focus::DedupPrompt;
     }
 
@@ -877,7 +877,7 @@ impl ViewApp {
         }
     }
 
-    fn start_dedup(&mut self, filename: &str, mode: DedupMode) {
+    fn start_dedup(&mut self, filename: &str, mode: DedupMatchMode) {
         let input_path = self.input.clone();
         let output_dir = self.input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
         let output_path = output_dir.join(filename);
@@ -899,7 +899,8 @@ impl ViewApp {
                 let mut writer = LogjetWriter::new(BufWriter::new(out_file));
                 tx.send(DedupUpdate::Progress(0.5)).ok();
 
-                let opts = crate::dedup::DedupOpts { mode, ..crate::dedup::DedupOpts::default() };
+                let opts =
+                    crate::dedup::DedupOpts { mode: crate::dedup::DedupMode::Distinct, match_mode: mode, ..crate::dedup::DedupOpts::default() };
                 let stats = crate::dedup::dedup(unpacked.records, unpacked.passthrough, &mut writer, &opts).map_err(|e| e.to_string())?;
 
                 tx.send(DedupUpdate::Progress(0.9)).ok();
