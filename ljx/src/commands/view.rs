@@ -986,9 +986,15 @@ impl ViewApp {
             let wrap_width = inner_width.saturating_sub(1) as usize; // -1 for scrollbar
             let wrapped = smart_wrap(message, wrap_width);
             let left_lines = wrapped.lines().count() as u16;
+            let info_lines = if let Some(detail) = &self.selected_detail {
+                render_modal_info_entries(detail).len() as u16
+            } else {
+                0
+            };
+            let min_height = info_lines + 3;
             let desired_height = left_lines + 3;
             let max_height = screen.height * 80 / 100;
-            let popup_height = desired_height.min(max_height).max(5);
+            let popup_height = desired_height.max(min_height).min(max_height).max(5);
 
             let x = screen.width.saturating_sub(popup_width) / 2;
             let y = screen.height.saturating_sub(popup_height) / 2;
