@@ -6,11 +6,11 @@ use logjet::{LogjetReader, LogjetWriter};
 
 use crate::cli::{DedupArgs, DedupModeArg};
 use crate::dedup::flat_record::BucketKeyKind;
-use crate::dedup::{self, DedupMode, DedupOpts, DrainOpts};
+use crate::dedup::{self, DedupMatchMode, DedupMode, DedupOpts, DrainOpts};
 use crate::error::Result;
 use crate::input::{InputHandle, open_output};
 
-impl From<DedupModeArg> for DedupMode {
+impl From<DedupModeArg> for DedupMatchMode {
     fn from(value: DedupModeArg) -> Self {
         match value {
             DedupModeArg::Exact => Self::Exact,
@@ -27,7 +27,7 @@ pub fn run(args: DedupArgs) -> Result<()> {
         depth: args.drain_depth.unwrap_or(3),
         extra_delimiters: args.extra_delimiters.as_ref().map(|s| s.split(',').map(String::from).collect()).unwrap_or_default(),
     };
-    let opts = DedupOpts { mode: args.mode.into(), bucket_key, drain };
+    let opts = DedupOpts { mode: DedupMode::Distinct, match_mode: args.mode.into(), bucket_key, drain };
 
     let input = InputHandle::open(&args.input)?;
     let mut reader = LogjetReader::new(input.into_buf_reader());
