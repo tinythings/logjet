@@ -72,6 +72,15 @@ pub struct DedupArgs {
 
     #[arg(long, value_name = "KEYS", help = "Comma-separated bucket extensions: scope, source_line")]
     pub bucket_by: Option<String>,
+
+    #[arg(long, value_name = "FLOAT", help = "Drain3 similarity threshold (full mode only) [default: 0.7]")]
+    pub sim_th: Option<f64>,
+
+    #[arg(long, value_name = "INT", help = "Drain3 prefix tree depth (full mode only) [default: 3]")]
+    pub drain_depth: Option<i64>,
+
+    #[arg(long, value_name = "DELIMS", help = "Drain3 extra delimiters, comma-separated (full mode only)")]
+    pub extra_delimiters: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

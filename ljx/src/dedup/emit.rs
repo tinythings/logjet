@@ -57,7 +57,14 @@ fn build_otlp_payload(group: &DedupGroup, mode_label: &str) -> Vec<u8> {
 
     let mut attrs = rep.record_attrs.clone();
     push_attr_i64(&mut attrs, "dedup.count", group.count as i64);
-    push_attr_str(&mut attrs, "dedup.mode", mode_label);
+    let effective_mode = if group.drain3_template.is_some() {
+        "full/drain3"
+    } else if mode_label == "full" {
+        "full/canon"
+    } else {
+        mode_label
+    };
+    push_attr_str(&mut attrs, "dedup.mode", effective_mode);
     push_attr_str(&mut attrs, "dedup.signature", &sig_hex);
     push_attr_i64(&mut attrs, "dedup.first_seen_ns", group.first_seen_ns as i64);
     push_attr_i64(&mut attrs, "dedup.last_seen_ns", group.last_seen_ns as i64);
@@ -81,6 +88,12 @@ fn build_otlp_payload(group: &DedupGroup, mode_label: &str) -> Vec<u8> {
     }
     if let Some(ref shape) = group.body_shape {
         push_attr_str(&mut attrs, "dedup.body_shape", shape);
+    }
+    if let Some(ref template) = group.drain3_template {
+        push_attr_str(&mut attrs, "dedup.drain3_template", template);
+    }
+    if let Some(cid) = group.drain3_cluster_id {
+        push_attr_i64(&mut attrs, "dedup.drain3_cluster_id", cid);
     }
 
     let lr = LogRecord {

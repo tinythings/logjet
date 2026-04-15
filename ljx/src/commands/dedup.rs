@@ -5,7 +5,7 @@ use std::io::Write;
 use logjet::{LogjetReader, LogjetWriter};
 
 use crate::cli::{DedupArgs, DedupModeArg};
-use crate::dedup::{self, DedupMode, DedupOpts};
+use crate::dedup::{self, DedupMode, DedupOpts, DrainOpts};
 use crate::dedup::flat_record::BucketKeyKind;
 use crate::error::Result;
 use crate::input::{InputHandle, open_output};
@@ -22,9 +22,18 @@ impl From<DedupModeArg> for DedupMode {
 
 pub fn run(args: DedupArgs) -> Result<()> {
     let bucket_key = parse_bucket_by(&args.bucket_by)?;
+    let drain = DrainOpts {
+        sim_th: args.sim_th.unwrap_or(0.7),
+        depth: args.drain_depth.unwrap_or(3),
+        extra_delimiters: args.extra_delimiters
+            .as_ref()
+            .map(|s| s.split(',').map(String::from).collect())
+            .unwrap_or_default(),
+    };
     let opts = DedupOpts {
         mode: args.mode.into(),
         bucket_key,
+        drain,
     };
 
     let input = InputHandle::open(&args.input)?;
