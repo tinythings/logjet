@@ -37,6 +37,7 @@ Documented command set:
 - `view`
 - `split`
 - `join`
+- `dedup`
 
 Current implementation status for release `0.1`:
 
@@ -154,6 +155,65 @@ Potential validation:
 
 - sequence continuity checks
 - timestamp monotonicity checks
+
+## `ljx dedup`
+
+Deduplicate log records by collapsing identical or structurally similar bodies.
+
+Three modes, each building on the previous:
+
+- `exact` -- collapse records with byte-identical bodies within the same bucket.
+- `hash2` (default) -- canonicalise bodies (normalise numbers, IDs, paths, timestamps),
+  then collapse records sharing the same canonical form.
+- `full` -- after hash2, run Drain3 template mining on remaining singletons to catch
+  near-duplicates that differ by alphabetic tokens.
+
+Records are partitioned into buckets by `(service.name, severity_number)` before any
+dedup. No stage ever merges records across buckets.
+
+Intended examples:
+
+```text
+ljx dedup telemetry.logjet -o deduped.logjet
+ljx dedup telemetry.logjet -o deduped.logjet --mode=exact
+ljx dedup telemetry.logjet -o deduped.logjet --mode=full
+ljx dedup telemetry.logjet -o deduped.logjet --bucket-by=scope
+ljx dedup telemetry.logjet -o deduped.logjet --mode=full --sim-th=0.8
+```
+
+Each output record represents a group of collapsed inputs. The original body from the
+first-seen record is preserved. Dedup metadata is added as attributes:
+
+- `dedup.count` -- number of records collapsed into this group
+- `dedup.mode` -- which stage produced the group (`exact`, `hash2`, `full/canon`, `full/drain3`)
+- `dedup.signature` -- hex hash identifying the group
+- `dedup.canonical_body` -- normalised body form (hash2 and full modes)
+- `dedup.body_shape` -- detected body type (`json`, `kv`, `prefixed`, `freetext`)
+- `dedup.first_seen_ns`, `dedup.last_seen_ns` -- timestamp range of the group
+- `dedup.time_span_ms` -- duration the pattern was active
+- `dedup.exemplar_trace_ids`, `dedup.exemplar_span_ids` -- up to 3 trace/span IDs for RCA
+- `dedup.drain3_template` -- Drain3 template with `<*>` wildcards (full mode only)
+- `dedup.drain3_cluster_id` -- Drain3 cluster ID (full mode only)
+
+Non-log records (metrics, traces) pass through unchanged.
+
+Bucket extensions via `--bucket-by`:
+
+- `scope` -- add `instrumentation_scope.name` to the bucket key
+- `source_line` -- add `code.filepath` + `code.lineno` to the bucket key
+
+Drain3-specific options (full mode only):
+
+- `--sim-th` -- similarity threshold, 0.0 to 1.0 (default 0.7)
+- `--drain-depth` -- prefix tree depth (default 3)
+- `--extra-delimiters` -- comma-separated extra token delimiters
+
+Expected properties:
+
+- output is valid `.logjet`
+- non-log records preserved in original order
+- deterministic for exact and hash2 modes (same input, same output)
+- full mode is order-dependent (Drain3 produces different templates for different input orders)
 
 ## Implementation Notes
 
