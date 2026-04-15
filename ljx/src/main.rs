@@ -1,5 +1,6 @@
 mod cli;
 mod commands;
+mod dedup;
 mod error;
 mod input;
 mod predicate;
@@ -27,5 +28,6 @@ fn run() -> Result<()> {
         Command::Count(args) => commands::count::run(args),
         Command::Stats(args) => commands::stats::run(args),
         Command::View(args) => commands::view::run(args),
+        Command::Dedup(args) => commands::dedup::run(args),
     }
 }

@@ -1,4 +1,5 @@
 pub mod count;
+pub mod dedup;
 pub mod filter;
 pub mod join;
 pub mod split;

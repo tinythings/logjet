@@ -1,0 +1,76 @@
+//! `ljx dedup` command: run the dedup pipeline on a .logjet file.
+
+use std::io::Write;
+
+use logjet::{LogjetReader, LogjetWriter};
+
+use crate::cli::{DedupArgs, DedupModeArg};
+use crate::dedup::{self, DedupMode, DedupOpts};
+use crate::dedup::flat_record::BucketKeyKind;
+use crate::error::Result;
+use crate::input::{InputHandle, open_output};
+
+impl From<DedupModeArg> for DedupMode {
+    fn from(value: DedupModeArg) -> Self {
+        match value {
+            DedupModeArg::Exact => Self::Exact,
+            DedupModeArg::Hash2 => Self::Hash2,
+            DedupModeArg::Full => Self::Full,
+        }
+    }
+}
+
+pub fn run(args: DedupArgs) -> Result<()> {
+    let bucket_key = parse_bucket_by(&args.bucket_by)?;
+    let opts = DedupOpts {
+        mode: args.mode.into(),
+        bucket_key,
+    };
+
+    let input = InputHandle::open(&args.input)?;
+    let mut reader = LogjetReader::new(input.into_buf_reader());
+    let unpacked = dedup::unpack::unpack(&mut reader)?;
+
+    let output = open_output(&args.output)?;
+    let mut writer = LogjetWriter::new(output);
+
+    let stats = dedup::dedup(
+        unpacked.records,
+        unpacked.passthrough,
+        &mut writer,
+        &opts,
+    )?;
+
+    let mut out = writer.into_inner()?;
+    out.flush()?;
+
+    eprintln!(
+        "{} records → {} groups ({:.1}% reduction)",
+        stats.total_records,
+        stats.group_count,
+        stats.reduction_pct(),
+    );
+    Ok(())
+}
+
+fn parse_bucket_by(bucket_by: &Option<String>) -> Result<BucketKeyKind> {
+    let Some(val) = bucket_by else {
+        return Ok(BucketKeyKind::Default);
+    };
+    let parts: Vec<&str> = val.split(',').map(str::trim).collect();
+    let has_scope = parts.contains(&"scope");
+    let has_source = parts.contains(&"source_line");
+    for &p in &parts {
+        if p != "scope" && p != "source_line" {
+            return Err(crate::error::Error::Usage(format!(
+                "unknown --bucket-by value: {p:?} (valid: scope, source_line)"
+            )));
+        }
+    }
+    Ok(match (has_scope, has_source) {
+        (true, true) => BucketKeyKind::ScopeAndSourceLine,
+        (true, false) => BucketKeyKind::Scope,
+        (false, true) => BucketKeyKind::SourceLine,
+        (false, false) => BucketKeyKind::Default,
+    })
+}
