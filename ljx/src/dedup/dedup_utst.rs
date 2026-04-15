@@ -258,3 +258,22 @@ fn full_mode_runs_drain3_for_small_residual_sets() {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].1, 2);
 }
+
+#[test]
+fn full_mode_merges_freetext_lines_that_only_change_small_integer() {
+    let batch = make_batch(
+        "svc-a",
+        vec![
+            make_log_record("lapsed time is 2", 9, 100),
+            make_log_record("lapsed time is 3", 9, 200),
+            make_log_record("lapsed time is 4", 9, 300),
+            make_log_record("lapsed time is 5", 9, 400),
+        ],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Full);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].1, 4);
+}
