@@ -14,14 +14,35 @@ use serde_json::{Value, json};
 /// Matched after `normalise_key()` (lowercase, stripped of `_`, `-`, `.`).
 static ALWAYS_NORMALISE: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     HashSet::from([
-        "requestid", "reqid", "pathid", "routeid", "sessionid",
-        "correlationid", "traceid", "spanid", "messageid",
-        "offset", "position", "cursor",
-        "size", "length", "len",
-        "count", "total", "num",
-        "timestamp", "time", "epoch", "ts",
-        "duration", "elapsed", "latency",
-        "port", "pid", "tid", "threadid",
+        "requestid",
+        "reqid",
+        "pathid",
+        "routeid",
+        "sessionid",
+        "correlationid",
+        "traceid",
+        "spanid",
+        "messageid",
+        "offset",
+        "position",
+        "cursor",
+        "size",
+        "length",
+        "len",
+        "count",
+        "total",
+        "num",
+        "timestamp",
+        "time",
+        "epoch",
+        "ts",
+        "duration",
+        "elapsed",
+        "latency",
+        "port",
+        "pid",
+        "tid",
+        "threadid",
     ])
 });
 
@@ -92,12 +113,7 @@ fn canonicalise_string(s: &str) -> String {
     }
 
     // Long or contains digits/hex/dots/dashes/slashes → variable.
-    if s.len() > 40
-        || s.bytes().any(|b| b.is_ascii_digit())
-        || s.contains('.')
-        || s.contains('-')
-        || s.contains('/')
-    {
+    if s.len() > 40 || s.bytes().any(|b| b.is_ascii_digit()) || s.contains('.') || s.contains('-') || s.contains('/') {
         return "_".into();
     }
 
@@ -150,12 +166,13 @@ fn canonicalise_array(arr: &[Value]) -> Value {
 
     // First element is object? Extract shape from it.
     if first.is_object()
-        && let Some(map) = first.as_object() {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let shape: Vec<&str> = keys.iter().map(|k| k.as_str()).collect();
-            return json!({"__arr": "object", "__shape": shape});
-        }
+        && let Some(map) = first.as_object()
+    {
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        let shape: Vec<&str> = keys.iter().map(|k| k.as_str()).collect();
+        return json!({"__arr": "object", "__shape": shape});
+    }
 
     // Mixed.
     json!({"__arr": "mixed"})
@@ -192,9 +209,7 @@ fn looks_like_uuid(s: &str) -> bool {
         && b[13] == b'-'
         && b[18] == b'-'
         && b[23] == b'-'
-        && b.iter().enumerate().all(|(i, &c)| {
-            matches!(i, 8 | 13 | 18 | 23) || c.is_ascii_hexdigit()
-        })
+        && b.iter().enumerate().all(|(i, &c)| matches!(i, 8 | 13 | 18 | 23) || c.is_ascii_hexdigit())
 }
 
 #[cfg(test)]

@@ -8,11 +8,11 @@ use std::collections::HashMap;
 
 use xxhash_rust::xxh3::xxh3_64;
 
+use crate::dedup::DedupGroup;
 use crate::dedup::canon_freetext::canonicalise_freetext;
 use crate::dedup::canon_json::canonicalise_json_to_string;
 use crate::dedup::canon_kv::canonicalise_kv;
 use crate::dedup::detect::{BodyShape, detect};
-use crate::dedup::DedupGroup;
 
 /// Canonicalise and merge groups. Groups in different buckets never merge.
 pub fn canon_dedup(mut groups: Vec<DedupGroup>) -> Vec<DedupGroup> {
@@ -59,17 +59,13 @@ fn canonicalise_body(body: &str) -> (String, String) {
                 (canonicalise_freetext(body), "freetext".into())
             }
         }
-        BodyShape::KeyValue => {
-            (canonicalise_kv(body), "kv".into())
-        }
+        BodyShape::KeyValue => (canonicalise_kv(body), "kv".into()),
         BodyShape::SourcePrefixed => {
             let suffix = detected.stripped_suffix.as_deref().unwrap_or(body);
             let (canon, inner_shape) = canonicalise_body(suffix);
             (canon, format!("prefixed/{inner_shape}"))
         }
-        BodyShape::FreeText => {
-            (canonicalise_freetext(body), "freetext".into())
-        }
+        BodyShape::FreeText => (canonicalise_freetext(body), "freetext".into()),
     }
 }
 

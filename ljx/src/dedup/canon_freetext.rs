@@ -72,10 +72,9 @@ pub fn classify_token(token: &str) -> TokenClass {
     }
 
     // Hex with 0x/0X prefix.
-    if len > 2 && (bytes[0] == b'0') && (bytes[1] == b'x' || bytes[1] == b'X')
-        && bytes[2..].iter().all(|b| b.is_ascii_hexdigit()) {
-            return TokenClass::Replace("_HEX_");
-        }
+    if len > 2 && (bytes[0] == b'0') && (bytes[1] == b'x' || bytes[1] == b'X') && bytes[2..].iter().all(|b| b.is_ascii_hexdigit()) {
+        return TokenClass::Replace("_HEX_");
+    }
 
     // ISO8601 timestamp (only regex in the classifier).
     if has_digit && has_dash && len >= 19 && is_iso8601(token) {
@@ -89,20 +88,15 @@ pub fn classify_token(token: &str) -> TokenClass {
 
     // Long bare hex: 8+ hex chars, nothing else.
     // Pure-digit strings fall through to the integer checks below.
-    if len >= 8 && bytes.iter().all(|b| b.is_ascii_hexdigit())
-        && bytes.iter().any(|b| matches!(b, b'a'..=b'f' | b'A'..=b'F')) {
-            return TokenClass::Replace("_HEX_");
-        }
+    if len >= 8 && bytes.iter().all(|b| b.is_ascii_hexdigit()) && bytes.iter().any(|b| matches!(b, b'a'..=b'f' | b'A'..=b'F')) {
+        return TokenClass::Replace("_HEX_");
+    }
 
     // Quoted string: checked before pure-alpha because quotes lack
     // digits/colons/dots and the shortcut below would swallow them.
     if is_quoted(bytes) {
         let inner_len = len.saturating_sub(2);
-        return if inner_len > 16 {
-            TokenClass::Replace("\"_\"")
-        } else {
-            TokenClass::Preserve
-        };
+        return if inner_len > 16 { TokenClass::Replace("\"_\"") } else { TokenClass::Preserve };
     }
 
     // Pure alpha (no digits, no colon, no dot). Most common case.
@@ -187,11 +181,7 @@ fn compound_mini_lexer(token: &str) -> TokenClass {
 
 /// Frame characters preserved verbatim by the mini-lexer.
 fn is_frame_char(b: u8) -> bool {
-    matches!(
-        b,
-        b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'#' | b'='
-            | b'-' | b'.' | b',' | b':' | b'/' | b'@'
-    )
+    matches!(b, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'#' | b'=' | b'-' | b'.' | b',' | b':' | b'/' | b'@')
 }
 
 /// UUID: exactly 8-4-4-4-12 hex chars with dashes.
@@ -203,13 +193,7 @@ fn is_uuid(b: &[u8]) -> bool {
         && b[13] == b'-'
         && b[18] == b'-'
         && b[23] == b'-'
-        && b.iter().enumerate().all(|(i, &c)| {
-            if i == 8 || i == 13 || i == 18 || i == 23 {
-                true
-            } else {
-                c.is_ascii_hexdigit()
-            }
-        })
+        && b.iter().enumerate().all(|(i, &c)| if i == 8 || i == 13 || i == 18 || i == 23 { true } else { c.is_ascii_hexdigit() })
 }
 
 /// IPv6: 7+ groups of hex separated by ':'.
@@ -218,9 +202,7 @@ fn is_ipv6(token: &str) -> bool {
     if groups.len() < 7 {
         return false;
     }
-    groups.iter().all(|g| {
-        g.is_empty() || (g.len() <= 4 && g.bytes().all(|b| b.is_ascii_hexdigit()))
-    })
+    groups.iter().all(|g| g.is_empty() || (g.len() <= 4 && g.bytes().all(|b| b.is_ascii_hexdigit())))
 }
 
 /// MAC address: 6 groups of exactly 2 hex chars separated by ':'.
@@ -246,20 +228,13 @@ fn is_ipv4(token: &str) -> bool {
     if groups.len() != 4 {
         return false;
     }
-    groups.iter().all(|g| {
-        !g.is_empty()
-            && g.len() <= 3
-            && g.bytes().all(|b| b.is_ascii_digit())
-            && g.parse::<u16>().is_ok_and(|n| n <= 255)
-    })
+    groups.iter().all(|g| !g.is_empty() && g.len() <= 3 && g.bytes().all(|b| b.is_ascii_digit()) && g.parse::<u16>().is_ok_and(|n| n <= 255))
 }
 
 /// ISO8601 timestamp. Only regex in the whole classifier.
 fn is_iso8601(token: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}").expect("valid regex")
-    });
+    let re = RE.get_or_init(|| Regex::new(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}").expect("valid regex"));
     re.is_match(token)
 }
 
@@ -287,8 +262,7 @@ fn is_quoted(b: &[u8]) -> bool {
     if b.len() < 2 {
         return false;
     }
-    (b[0] == b'"' && b[b.len() - 1] == b'"')
-        || (b[0] == b'\'' && b[b.len() - 1] == b'\'')
+    (b[0] == b'"' && b[b.len() - 1] == b'"') || (b[0] == b'\'' && b[b.len() - 1] == b'\'')
 }
 
 #[cfg(test)]
