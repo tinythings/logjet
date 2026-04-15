@@ -83,7 +83,7 @@ fn normalise_key(key: &str) -> String {
 }
 
 fn split_trailing_punct(token: &str) -> (&str, &str) {
-    let end = token.trim_end_matches(|c: char| matches!(c, ',' | ';' | ':' | ')' | ']' | '}')).len();
+    let end = token.trim_end_matches([',', ';', ':', ')', ']', '}']).len();
     token.split_at(end)
 }
 
