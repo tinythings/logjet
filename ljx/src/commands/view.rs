@@ -1592,9 +1592,9 @@ impl ViewApp {
         let pct = (self.dedup_progress * 100.0).min(100.0);
         let label = self.dedup_completion_message.clone().unwrap_or_else(|| format!("{pct:.0}%"));
         let label_style = if self.dedup_completion_message.is_some() {
-            Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)
+            Style::default().fg(Color::LightYellow).bg(Color::Indexed(28)).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)
+            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
         };
         let gauge = Gauge::default()
             .gauge_style(Style::default().fg(Color::Indexed(28)).bg(Color::White))
@@ -1903,12 +1903,15 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     let mut severities = Vec::new();
     let mut event_names = Vec::new();
     let mut resource_attr_count = 0usize;
+    let mut scope_attr_count = 0usize;
     let mut record_attr_count = 0usize;
     let mut trace_ids = 0usize;
     let mut span_ids = 0usize;
     let mut resource_attr_entries = Vec::new();
+    let mut scope_attr_entries = Vec::new();
     let mut record_attr_entries = Vec::new();
     let mut resource_attr_omitted = 0usize;
+    let mut scope_attr_omitted = 0usize;
     let mut record_attr_omitted = 0usize;
 
     for resource_logs in &batch.resource_logs {
@@ -1932,6 +1935,12 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
                 && !scopes.iter().any(|existing| existing == &scope.name)
             {
                 scopes.push(scope.name.clone());
+            }
+            if let Some(scope) = &scope_logs.scope {
+                scope_attr_count += scope.attributes.len();
+                for attr in &scope.attributes {
+                    push_modal_attribute_entry(&mut scope_attr_entries, &mut scope_attr_omitted, "scope", &attr.key, attr.value.as_ref());
+                }
             }
             for record in &scope_logs.log_records {
                 record_attr_count += record.attributes.len();
@@ -1969,6 +1978,7 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
         lines.push(("event".to_string(), event_names.join(", ")));
     }
     lines.push(("resource.attrs".to_string(), resource_attr_count.to_string()));
+    lines.push(("scope.attrs".to_string(), scope_attr_count.to_string()));
     lines.push(("record.attrs".to_string(), record_attr_count.to_string()));
     for (kind, key, value) in resource_attr_entries {
         if kind.is_empty() && key.is_empty() {
@@ -1979,6 +1989,16 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     }
     if resource_attr_omitted > 0 {
         lines.push(("resource.attrs.more".to_string(), format!("{resource_attr_omitted} not shown")));
+    }
+    for (kind, key, value) in scope_attr_entries {
+        if kind.is_empty() && key.is_empty() {
+            lines.push((String::new(), value));
+        } else {
+            lines.push((format!("{kind}.{key}"), value));
+        }
+    }
+    if scope_attr_omitted > 0 {
+        lines.push(("scope.attrs.more".to_string(), format!("{scope_attr_omitted} not shown")));
     }
     for (kind, key, value) in record_attr_entries {
         if kind.is_empty() && key.is_empty() {
@@ -2099,7 +2119,9 @@ fn format_any_value(value: Option<&AnyValue>) -> String {
 }
 
 fn is_otlp_attribute_entry(key: &str) -> bool {
-    (key.starts_with("resource.") && key != "resource.attrs") || (key.starts_with("record.") && key != "record.attrs")
+    (key.starts_with("resource.") && key != "resource.attrs")
+        || (key.starts_with("scope.") && key != "scope.attrs")
+        || (key.starts_with("record.") && key != "record.attrs")
 }
 
 fn is_standard_otlp_attribute_entry(key: &str) -> bool {
