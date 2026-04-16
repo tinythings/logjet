@@ -1,5 +1,5 @@
 use super::{
-    DedupUpdate, DetailRecord, EntryMeta, Focus, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, ViewApp, create_temp_path, extract_otlp_log_message,
+    DedupUpdate, DetailRecord, EntryMeta, ExportField, Focus, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, ViewApp, create_temp_path, extract_otlp_log_message,
     format_summary, open_temp_spool_pair, read_spool_record, render_modal_info_entries, render_modal_message, text_preview, write_spool_record,
 };
 use crate::cli::ViewArgs;
@@ -12,6 +12,7 @@ use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, Key
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
+use serde_json::Value as JsonValue;
 use std::fs::File;
 use std::io::BufWriter;
 use std::sync::mpsc;
@@ -278,6 +279,62 @@ fn write_test_logjet(path: &std::path::Path, bodies: &[&str]) {
     inner.flush().expect("flush");
 }
 
+fn write_test_logjet_rows(path: &std::path::Path, rows: &[(&str, &[&str], &str)]) {
+    let file = File::create(path).expect("create input logjet");
+    let mut writer = LogjetWriter::new(BufWriter::new(file));
+
+    for (i, (body, channel, event_name)) in rows.iter().enumerate() {
+        let batch = ExportLogsServiceRequest {
+            resource_logs: vec![ResourceLogs {
+                resource: Some(Resource {
+                    attributes: vec![KeyValue {
+                        key: "service.name".to_string(),
+                        value: Some(AnyValue { value: Some(Value::StringValue("fake-service".to_string())) }),
+                    }],
+                    dropped_attributes_count: 0,
+                    entity_refs: Vec::new(),
+                }),
+                scope_logs: vec![ScopeLogs {
+                    scope: Some(InstrumentationScope {
+                        name: "fake-scope".to_string(),
+                        version: String::new(),
+                        attributes: vec![KeyValue {
+                            key: "esotrace.channel".to_string(),
+                            value: Some(AnyValue {
+                                value: Some(Value::ArrayValue(opentelemetry_proto::tonic::common::v1::ArrayValue {
+                                    values: channel.iter().map(|part| AnyValue { value: Some(Value::StringValue((*part).to_string())) }).collect(),
+                                })),
+                            }),
+                        }],
+                        dropped_attributes_count: 0,
+                    }),
+                    log_records: vec![LogRecord {
+                        time_unix_nano: (i as u64 + 1) * 100,
+                        observed_time_unix_nano: (i as u64 + 1) * 100,
+                        severity_number: 9,
+                        severity_text: "INFO".to_string(),
+                        body: Some(AnyValue { value: Some(Value::StringValue((*body).to_string())) }),
+                        attributes: Vec::new(),
+                        dropped_attributes_count: 0,
+                        flags: 0,
+                        trace_id: Vec::new(),
+                        span_id: Vec::new(),
+                        event_name: (*event_name).to_string(),
+                    }],
+                    schema_url: String::new(),
+                }],
+                schema_url: String::new(),
+            }],
+        };
+        let payload = batch.encode_to_vec();
+        writer.push(RecordType::Logs, i as u64 + 1, (i as u64 + 1) * 100, &payload).expect("write row");
+    }
+
+    let mut inner = writer.into_inner().expect("into inner");
+    use std::io::Write;
+    inner.flush().expect("flush");
+}
+
 fn read_first_log_record(path: &std::path::Path) -> LogRecord {
     let bytes = std::fs::read(path).expect("read output file");
     let cursor = std::io::Cursor::new(bytes);
@@ -297,6 +354,25 @@ fn find_attr_str(record: &LogRecord, key: &str) -> Option<String> {
         Some(AnyValue { value: Some(Value::StringValue(s)) }) => Some(s.clone()),
         _ => None,
     })
+}
+
+fn wait_for_scan(app: &mut ViewApp) {
+    for _ in 0..100 {
+        app.drain_scan_updates().expect("drain scan");
+        if app.current_scan.as_ref().map(|scan| scan.finished).unwrap_or(false) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("scan did not finish in time");
+}
+
+fn read_ndjson(path: &std::path::Path) -> Vec<JsonValue> {
+    std::fs::read_to_string(path)
+        .expect("read ndjson")
+        .lines()
+        .map(|line| serde_json::from_str::<JsonValue>(line).expect("parse ndjson line"))
+        .collect()
 }
 
 #[test]
@@ -418,6 +494,128 @@ fn dedup_progress_enter_opens_output_and_sets_status() {
     assert!(app.status.contains("10 records → 2 groups (80.0% reduction)"));
     assert_eq!(app.input, output);
     assert!(app.dedup_completion_message.is_none());
+
+    let _ = std::fs::remove_file(input);
+    let _ = std::fs::remove_file(output);
+}
+
+#[test]
+fn export_prompt_defaults_to_json_and_all() {
+    let input = create_temp_path().unwrap();
+    write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "esotrace.log.utf8")]);
+
+    let mut app = make_view_app(input.clone());
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+    app.open_export_prompt().unwrap();
+
+    assert!(matches!(app.focus, Focus::ExportPrompt));
+    assert!(app.export_filename.ends_with(".json"));
+    assert_eq!(app.export_range, "all");
+
+    let _ = std::fs::remove_file(input);
+}
+
+#[test]
+fn export_prompt_supports_cursor_navigation_and_mid_string_editing() {
+    let input = create_temp_path().unwrap();
+    write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "esotrace.log.utf8")]);
+
+    let mut app = make_view_app(input.clone());
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+    app.open_export_prompt().unwrap();
+
+    app.export_field = ExportField::Range;
+    app.export_range = "all".to_string();
+    app.export_range_cursor = 1;
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Delete)).unwrap();
+    assert_eq!(app.export_range, "al");
+    assert_eq!(app.export_range_cursor, 1);
+
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Left)).unwrap();
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Char('c'))).unwrap();
+    assert_eq!(app.export_range, "cal");
+    assert_eq!(app.export_range_cursor, 1);
+
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::End)).unwrap();
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Char('l'))).unwrap();
+    assert_eq!(app.export_range, "call");
+
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Home)).unwrap();
+    assert_eq!(app.export_range_cursor, 0);
+
+    let _ = std::fs::remove_file(input);
+}
+
+#[test]
+fn export_selection_accepts_all_amount_and_range() {
+    assert_eq!(super::parse_export_selection("all", 50, 0).unwrap(), (0, 50));
+    assert_eq!(super::parse_export_selection("aLl", 50, 0).unwrap(), (0, 50));
+    assert_eq!(super::parse_export_selection("a", 50, 0).unwrap(), (0, 50));
+    assert_eq!(super::parse_export_selection("current", 50, 7).unwrap(), (7, 8));
+    assert_eq!(super::parse_export_selection("CuRrEnT", 50, 7).unwrap(), (7, 8));
+    assert_eq!(super::parse_export_selection("c", 50, 7).unwrap(), (7, 8));
+    assert_eq!(super::parse_export_selection("0", 50, 7).unwrap(), (7, 8));
+    assert_eq!(super::parse_export_selection("3", 50, 0).unwrap(), (0, 3));
+    assert_eq!(super::parse_export_selection("2-4", 50, 0).unwrap(), (1, 4));
+}
+
+#[test]
+fn export_current_results_writes_ndjson_from_filtered_view() {
+    let input = create_temp_path().unwrap();
+    let output = input.parent().unwrap().join("export-out.json");
+    write_test_logjet_rows(
+        &input,
+        &[
+            ("first gps", &["AndroidGeoLocationListener"], "esotrace.log.utf8"),
+            ("second gps", &["AndroidGeoLocationListener"], "esotrace.log.utf8"),
+            ("third gps", &["AndroidGeoLocationListener"], "esotrace.log.utf8"),
+        ],
+    );
+
+    let mut app = make_view_app(input.clone());
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+    app.export_filename = "export-out.json".to_string();
+    app.export_range = "2-3".to_string();
+    app.export_current_results().unwrap();
+
+    let docs = read_ndjson(&output);
+    assert_eq!(docs.len(), 2);
+    assert_eq!(docs[0]["body"], "second gps");
+    assert_eq!(docs[0]["event_name"], "esotrace.log.utf8");
+    assert_eq!(docs[0]["esotrace_channel"][0], "AndroidGeoLocationListener");
+    assert_eq!(docs[1]["body"], "third gps");
+
+    let _ = std::fs::remove_file(input);
+    let _ = std::fs::remove_file(output);
+}
+
+#[test]
+fn export_current_results_can_export_selected_row_only() {
+    let input = create_temp_path().unwrap();
+    let output = input.parent().unwrap().join("export-current.json");
+    write_test_logjet_rows(
+        &input,
+        &[
+            ("first gps", &["AndroidGeoLocationListener"], "esotrace.log.utf8"),
+            ("second gps", &["AndroidGeoLocationListener"], "esotrace.log.utf8"),
+            ("third gps", &["AndroidGeoLocationListener"], "esotrace.log.utf8"),
+        ],
+    );
+
+    let mut app = make_view_app(input.clone());
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+    app.selected = 1;
+    app.export_filename = "export-current.json".to_string();
+    app.export_range = "current".to_string();
+    app.export_current_results().unwrap();
+
+    let docs = read_ndjson(&output);
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0]["body"], "second gps");
 
     let _ = std::fs::remove_file(input);
     let _ = std::fs::remove_file(output);

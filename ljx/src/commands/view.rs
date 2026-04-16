@@ -23,6 +23,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use ratatui::{Frame, Terminal};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::cli::ViewArgs;
 use crate::dedup::{DedupMatchMode, DedupMode};
@@ -65,8 +66,16 @@ enum Focus {
     FieldFilter,
     SavePrompt,
     SaveError,
+    ExportPrompt,
+    ExportError,
     DedupPrompt,
     DedupProgress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportField {
+    Filename,
+    Range,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -213,7 +222,14 @@ struct ViewApp {
     selected_detail: Option<DetailRecord>,
     modal_text: Option<String>,
     save_filename: String,
+    save_filename_cursor: usize,
     save_message: Option<String>,
+    export_filename: String,
+    export_filename_cursor: usize,
+    export_range: String,
+    export_range_cursor: usize,
+    export_field: ExportField,
+    export_message: Option<String>,
     current_scan: Option<ActiveScan>,
     field_catalog: Arc<std::sync::Mutex<Option<FieldCatalog>>>,
     field_filter_state: Option<FieldFilterState>,
@@ -259,7 +275,14 @@ impl ViewApp {
             selected_detail: None,
             modal_text: None,
             save_filename: String::new(),
+            save_filename_cursor: 0,
             save_message: None,
+            export_filename: String::new(),
+            export_filename_cursor: 0,
+            export_range: "all".to_string(),
+            export_range_cursor: 3,
+            export_field: ExportField::Filename,
+            export_message: None,
             current_scan: None,
             field_catalog: catalog,
             field_filter_state: None,
@@ -305,6 +328,8 @@ impl ViewApp {
             Focus::FieldFilter => self.handle_field_filter_key(key),
             Focus::SavePrompt => self.handle_save_prompt_key(key),
             Focus::SaveError => self.handle_save_error_key(),
+            Focus::ExportPrompt => self.handle_export_prompt_key(key),
+            Focus::ExportError => self.handle_export_error_key(),
             Focus::DedupPrompt => self.handle_dedup_prompt_key(key),
             Focus::DedupProgress => self.handle_dedup_progress_key(key),
             Focus::Search => self.handle_search_key(key),
@@ -388,13 +413,29 @@ impl ViewApp {
                 self.save_current_results()?;
             }
             KeyCode::Backspace => {
-                self.save_filename.pop();
+                delete_char_before(&mut self.save_filename, &mut self.save_filename_cursor);
+            }
+            KeyCode::Delete => {
+                delete_char_at(&mut self.save_filename, self.save_filename_cursor);
+            }
+            KeyCode::Left => {
+                self.save_filename_cursor = self.save_filename_cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                self.save_filename_cursor = (self.save_filename_cursor + 1).min(char_count(&self.save_filename));
+            }
+            KeyCode::Home => {
+                self.save_filename_cursor = 0;
+            }
+            KeyCode::End => {
+                self.save_filename_cursor = char_count(&self.save_filename);
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.save_filename.clear();
+                self.save_filename_cursor = 0;
             }
             KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.save_filename.push(ch);
+                insert_char_at(&mut self.save_filename, &mut self.save_filename_cursor, ch);
             }
             _ => {}
         }
@@ -407,6 +448,70 @@ impl ViewApp {
         Ok(false)
     }
 
+    fn handle_export_prompt_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Esc => {
+                self.focus = Focus::List;
+                self.export_message = None;
+            }
+            KeyCode::Enter => {
+                self.export_current_results()?;
+            }
+            KeyCode::Tab | KeyCode::Up | KeyCode::Down => {
+                self.export_field = match self.export_field {
+                    ExportField::Filename => ExportField::Range,
+                    ExportField::Range => ExportField::Filename,
+                };
+            }
+            KeyCode::Backspace => match self.export_field {
+                ExportField::Filename => delete_char_before(&mut self.export_filename, &mut self.export_filename_cursor),
+                ExportField::Range => delete_char_before(&mut self.export_range, &mut self.export_range_cursor),
+            },
+            KeyCode::Delete => match self.export_field {
+                ExportField::Filename => delete_char_at(&mut self.export_filename, self.export_filename_cursor),
+                ExportField::Range => delete_char_at(&mut self.export_range, self.export_range_cursor),
+            },
+            KeyCode::Left => match self.export_field {
+                ExportField::Filename => self.export_filename_cursor = self.export_filename_cursor.saturating_sub(1),
+                ExportField::Range => self.export_range_cursor = self.export_range_cursor.saturating_sub(1),
+            },
+            KeyCode::Right => match self.export_field {
+                ExportField::Filename => self.export_filename_cursor = (self.export_filename_cursor + 1).min(char_count(&self.export_filename)),
+                ExportField::Range => self.export_range_cursor = (self.export_range_cursor + 1).min(char_count(&self.export_range)),
+            },
+            KeyCode::Home => match self.export_field {
+                ExportField::Filename => self.export_filename_cursor = 0,
+                ExportField::Range => self.export_range_cursor = 0,
+            },
+            KeyCode::End => match self.export_field {
+                ExportField::Filename => self.export_filename_cursor = char_count(&self.export_filename),
+                ExportField::Range => self.export_range_cursor = char_count(&self.export_range),
+            },
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => match self.export_field {
+                ExportField::Filename => {
+                    self.export_filename.clear();
+                    self.export_filename_cursor = 0;
+                }
+                ExportField::Range => {
+                    self.export_range.clear();
+                    self.export_range_cursor = 0;
+                }
+            },
+            KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => match self.export_field {
+                ExportField::Filename => insert_char_at(&mut self.export_filename, &mut self.export_filename_cursor, ch),
+                ExportField::Range => insert_char_at(&mut self.export_range, &mut self.export_range_cursor, ch),
+            },
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn handle_export_error_key(&mut self) -> Result<bool> {
+        self.focus = Focus::ExportPrompt;
+        self.export_message = None;
+        Ok(false)
+    }
+
     fn handle_list_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Tab => {
@@ -414,6 +519,9 @@ impl ViewApp {
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 self.open_save_prompt()?;
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                self.open_export_prompt()?;
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 self.open_dedup_prompt();
@@ -536,7 +644,32 @@ impl ViewApp {
         if self.save_filename.is_empty() {
             self.save_filename = "filtered.logjet".to_string();
         }
+        self.save_filename_cursor = char_count(&self.save_filename);
         self.focus = Focus::SavePrompt;
+        Ok(())
+    }
+
+    fn open_export_prompt(&mut self) -> Result<()> {
+        let Some(scan) = &self.current_scan else {
+            self.status = "No active scan to export.".to_string();
+            return Ok(());
+        };
+        if !scan.finished {
+            self.status = "Wait for the scan to finish before exporting.".to_string();
+            return Ok(());
+        }
+        self.export_message = None;
+        if self.export_filename.is_empty() {
+            let stem = self.input.file_stem().and_then(|s| s.to_str()).unwrap_or("export");
+            self.export_filename = format!("{stem}.json");
+        }
+        if self.export_range.is_empty() {
+            self.export_range = "all".to_string();
+        }
+        self.export_filename_cursor = char_count(&self.export_filename);
+        self.export_range_cursor = char_count(&self.export_range);
+        self.export_field = ExportField::Filename;
+        self.focus = Focus::ExportPrompt;
         Ok(())
     }
 
@@ -580,6 +713,62 @@ impl ViewApp {
         self.focus = Focus::List;
         self.save_message = None;
         self.status = format!("Saved {} records to {}", self.entries.len(), output_path.display());
+        Ok(())
+    }
+
+    fn export_current_results(&mut self) -> Result<()> {
+        let filename = self.export_filename.trim();
+        if filename.is_empty() {
+            self.export_message = Some("Filename must not be empty.".to_string());
+            return Ok(());
+        }
+        if filename.contains('/') {
+            self.export_message = Some("Filename must not contain path separators.".to_string());
+            return Ok(());
+        }
+        if self.input == Path::new("-") {
+            self.export_message = Some("Cannot infer output directory when input is stdin.".to_string());
+            return Ok(());
+        }
+
+        let Some(scan) = &mut self.current_scan else {
+            self.export_message = Some("No scan data to export.".to_string());
+            return Ok(());
+        };
+
+        let selected = parse_export_selection(&self.export_range, self.entries.len(), self.selected).map_err(Error::Usage);
+        let (start, end) = match selected {
+            Ok(range) => range,
+            Err(err) => {
+                self.export_message = Some(err.to_string());
+                self.focus = Focus::ExportError;
+                return Ok(());
+            }
+        };
+
+        let output_dir = self.input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let output_path = output_dir.join(filename);
+        if output_path == self.input || output_path.exists() {
+            self.export_message = Some(format!("File {filename} already exist"));
+            self.focus = Focus::ExportError;
+            return Ok(());
+        }
+
+        let mut out = OpenOptions::new().write(true).create_new(true).open(&output_path)?;
+        let mut exported = 0usize;
+        for meta in self.entries[start..end].iter().copied() {
+            let detail = read_spool_record(&mut scan.spool_reader, meta)?;
+            for object in export_ndjson_objects(&detail) {
+                serde_json::to_writer(&mut out, &object).map_err(|e| Error::Usage(e.to_string()))?;
+                out.write_all(b"\n")?;
+                exported += 1;
+            }
+        }
+        out.flush()?;
+
+        self.focus = Focus::List;
+        self.export_message = None;
+        self.status = format!("Exported {exported} row(s) to {}", output_path.display());
         Ok(())
     }
 
@@ -1046,8 +1235,12 @@ impl ViewApp {
             self.render_field_filter(frame);
         } else if self.focus == Focus::SaveError {
             self.render_save_error(frame);
+        } else if self.focus == Focus::ExportError {
+            self.render_export_error(frame);
         } else if self.focus == Focus::SavePrompt {
             self.render_save_prompt(frame);
+        } else if self.focus == Focus::ExportPrompt {
+            self.render_export_prompt(frame);
         } else if self.focus == Focus::DedupPrompt {
             self.render_dedup_prompt(frame);
         } else if self.focus == Focus::DedupProgress {
@@ -1171,6 +1364,27 @@ impl ViewApp {
             draw_status_spans(buf, area.x, y, area.width, &[status_text("Press any key to return")]);
             return;
         }
+        if self.focus == Focus::ExportPrompt {
+            draw_status_spans(
+                buf,
+                area.x,
+                y,
+                area.width,
+                &[
+                    status_key("TAB"),
+                    status_text(" next field   "),
+                    status_key("ENTER"),
+                    status_text(" export   "),
+                    status_key("ESC"),
+                    status_text(" cancel"),
+                ],
+            );
+            return;
+        }
+        if self.focus == Focus::ExportError {
+            draw_status_spans(buf, area.x, y, area.width, &[status_text("Press any key to return")]);
+            return;
+        }
         if self.focus == Focus::DedupPrompt {
             draw_status_spans(
                 buf,
@@ -1231,8 +1445,7 @@ impl ViewApp {
         let cursor_x = row
             .x
             .saturating_add(label.chars().count() as u16)
-            .saturating_add(1)
-            .saturating_add(self.save_filename.chars().count() as u16)
+            .saturating_add(self.save_filename_cursor as u16)
             .min(row.x.saturating_add(label.chars().count() as u16 + input_width));
         let cursor_y = row.y;
         frame.set_cursor_position((cursor_x, cursor_y));
@@ -1250,6 +1463,101 @@ impl ViewApp {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         if let Some(message) = &self.save_message {
+            frame.render_widget(
+                Paragraph::new(render_save_error_message(message)).style(Style::default().bg(Color::Red)).wrap(Wrap { trim: false }),
+                inner,
+            );
+        }
+    }
+
+    fn render_export_prompt(&self, frame: &mut Frame<'_>) {
+        let area = centered_rect(58, 14, frame.area());
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(Span::styled(" Export NDJSON ", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Plain)
+            .border_style(Style::default().fg(Color::White).bg(Color::Gray))
+            .style(Style::default().fg(Color::Black).bg(Color::Gray));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let filename_label = "Filename: ";
+        let filename_width = inner.width.saturating_sub(filename_label.chars().count() as u16 + 2);
+        let filename_row = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
+        let filename_style = if self.export_field == ExportField::Filename {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default().fg(Color::Black).bg(Color::Indexed(250))
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(filename_label, Style::default().fg(Color::Black).bg(Color::Gray)),
+                Span::styled(fit_to_width(&self.export_filename, filename_width as usize), filename_style),
+            ])),
+            filename_row,
+        );
+
+        let range_label = "Range:    ";
+        let range_width = inner.width.saturating_sub(range_label.chars().count() as u16 + 2);
+        let range_row = Rect { x: inner.x, y: inner.y.saturating_add(2), width: inner.width, height: 1 };
+        let range_style = if self.export_field == ExportField::Range {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default().fg(Color::Black).bg(Color::Indexed(250))
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(range_label, Style::default().fg(Color::Black).bg(Color::Gray)),
+                Span::styled(fit_to_width(&self.export_range, range_width as usize), range_style),
+            ])),
+            range_row,
+        );
+
+        let hint_row = Rect { x: inner.x, y: inner.y.saturating_add(5), width: inner.width, height: 3 };
+        frame.render_widget(
+            Paragraph::new(Text::from(vec![
+                Line::from("Range accepts:"),
+                Line::from("  a / all  |  c / current / 0  |  N  |  N-N"),
+                Line::from("Uses the current filtered view order."),
+            ]))
+            .style(Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+            hint_row,
+        );
+
+        let (cursor_x, cursor_y) = match self.export_field {
+            ExportField::Filename => {
+                let x = filename_row
+                    .x
+                    .saturating_add(filename_label.chars().count() as u16)
+                    .saturating_add(self.export_filename_cursor as u16)
+                    .min(filename_row.x.saturating_add(filename_label.chars().count() as u16 + filename_width));
+                (x, filename_row.y)
+            }
+            ExportField::Range => {
+                let x = range_row
+                    .x
+                    .saturating_add(range_label.chars().count() as u16)
+                    .saturating_add(self.export_range_cursor as u16)
+                    .min(range_row.x.saturating_add(range_label.chars().count() as u16 + range_width));
+                (x, range_row.y)
+            }
+        };
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
+
+    fn render_export_error(&self, frame: &mut Frame<'_>) {
+        let area = centered_rect(42, 12, frame.area());
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(Span::styled(" Export Error ", Style::default().fg(Color::Red).bg(Color::White).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(Style::default().fg(Color::White).bg(Color::Red))
+            .style(Style::default().fg(Color::White).bg(Color::Red));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        if let Some(message) = &self.export_message {
             frame.render_widget(
                 Paragraph::new(render_save_error_message(message)).style(Style::default().bg(Color::Red)).wrap(Wrap { trim: false }),
                 inner,
@@ -2020,6 +2328,153 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     lines
 }
 
+fn parse_export_selection(input: &str, total: usize, selected: usize) -> std::result::Result<(usize, usize), String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Range must not be empty.".to_string());
+    }
+    if trimmed.eq_ignore_ascii_case("all") || trimmed.eq_ignore_ascii_case("a") {
+        return Ok((0, total));
+    }
+    if trimmed.eq_ignore_ascii_case("current") || trimmed.eq_ignore_ascii_case("c") || trimmed == "0" {
+        if total == 0 {
+            return Ok((0, 0));
+        }
+        let current = selected.min(total.saturating_sub(1));
+        return Ok((current, current + 1));
+    }
+    if let Some((start, end)) = trimmed.split_once('-') {
+        let start = start.trim().parse::<usize>().map_err(|_| "Invalid range start.".to_string())?;
+        let end = end.trim().parse::<usize>().map_err(|_| "Invalid range end.".to_string())?;
+        if start == 0 || end == 0 {
+            return Err("Range is 1-based; values must be >= 1.".to_string());
+        }
+        if start > end {
+            return Err("Range start must be <= end.".to_string());
+        }
+        if start > total {
+            return Ok((total, total));
+        }
+        return Ok((start - 1, end.min(total)));
+    }
+
+    let amount = trimmed.parse::<usize>().map_err(|_| "Range must be all/a, current/c/0, N, or N-N.".to_string())?;
+    if amount == 0 {
+        return Err("Amount must be >= 1.".to_string());
+    }
+    Ok((0, amount.min(total)))
+}
+
+fn char_count(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn char_to_byte_idx(text: &str, char_idx: usize) -> usize {
+    text.char_indices().nth(char_idx).map(|(idx, _)| idx).unwrap_or(text.len())
+}
+
+fn insert_char_at(text: &mut String, cursor: &mut usize, ch: char) {
+    let idx = char_to_byte_idx(text, *cursor);
+    text.insert(idx, ch);
+    *cursor += 1;
+}
+
+fn delete_char_before(text: &mut String, cursor: &mut usize) {
+    if *cursor == 0 {
+        return;
+    }
+    let end = char_to_byte_idx(text, *cursor);
+    let start = char_to_byte_idx(text, cursor.saturating_sub(1));
+    text.replace_range(start..end, "");
+    *cursor = cursor.saturating_sub(1);
+}
+
+fn delete_char_at(text: &mut String, cursor: usize) {
+    if cursor >= char_count(text) {
+        return;
+    }
+    let start = char_to_byte_idx(text, cursor);
+    let end = char_to_byte_idx(text, cursor + 1);
+    text.replace_range(start..end, "");
+}
+
+fn export_ndjson_objects(detail: &DetailRecord) -> Vec<JsonValue> {
+    if detail.meta.record_type != RecordType::Logs {
+        let mut obj = JsonMap::new();
+        obj.insert("record_type".to_string(), JsonValue::String(record_kind_label(detail.meta.record_type).to_string()));
+        obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(detail.meta.ts_unix_ns)));
+        obj.insert("payload".to_string(), JsonValue::String(String::from_utf8_lossy(&detail.payload).to_string()));
+        return vec![JsonValue::Object(obj)];
+    }
+
+    let Ok(batch) = ExportLogsServiceRequest::decode(detail.payload.as_slice()) else {
+        let mut obj = JsonMap::new();
+        obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(detail.meta.ts_unix_ns)));
+        obj.insert("payload".to_string(), JsonValue::String(String::from_utf8_lossy(&detail.payload).to_string()));
+        return vec![JsonValue::Object(obj)];
+    };
+
+    let mut out = Vec::new();
+    for resource_logs in &batch.resource_logs {
+        let resource_attrs = resource_logs.resource.as_ref().map(|r| &r.attributes).map(Vec::as_slice).unwrap_or(&[]);
+        for scope_logs in &resource_logs.scope_logs {
+            let scope_attrs = scope_logs.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]);
+            for record in &scope_logs.log_records {
+                let mut obj = JsonMap::new();
+                obj.insert(
+                    "body".to_string(),
+                    JsonValue::String(record.body.as_ref().map(|v| format_any_value(Some(v))).filter(|s| !s.is_empty()).unwrap_or_default()),
+                );
+                obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.time_unix_nano.max(detail.meta.ts_unix_ns))));
+                if !record.event_name.is_empty() {
+                    obj.insert("event_name".to_string(), JsonValue::String(record.event_name.clone()));
+                }
+                flatten_otlp_attrs_into_json(&mut obj, resource_attrs);
+                flatten_otlp_attrs_into_json(&mut obj, scope_attrs);
+                flatten_otlp_attrs_into_json(&mut obj, &record.attributes);
+                out.push(JsonValue::Object(obj));
+            }
+        }
+    }
+    out
+}
+
+fn flatten_otlp_attrs_into_json(target: &mut JsonMap<String, JsonValue>, attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue]) {
+    for attr in attrs {
+        let key = attr.key.replace('.', "_");
+        if target.contains_key(&key) {
+            continue;
+        }
+        let Some(value) = attr.value.as_ref() else {
+            continue;
+        };
+        if let Some(json) = any_value_to_json(value) {
+            target.insert(key, json);
+        }
+    }
+}
+
+fn any_value_to_json(value: &AnyValue) -> Option<JsonValue> {
+    match &value.value {
+        Some(Value::StringValue(text)) => Some(JsonValue::String(text.clone())),
+        Some(Value::BoolValue(flag)) => Some(JsonValue::Bool(*flag)),
+        Some(Value::IntValue(number)) => Some(JsonValue::Number((*number).into())),
+        Some(Value::DoubleValue(number)) => serde_json::Number::from_f64(*number).map(JsonValue::Number),
+        Some(Value::BytesValue(bytes)) => Some(JsonValue::String(format!("<{} bytes>", bytes.len()))),
+        Some(Value::ArrayValue(array)) => Some(JsonValue::Array(array.values.iter().filter_map(any_value_to_json).collect())),
+        Some(Value::KvlistValue(map)) => {
+            let mut obj = JsonMap::new();
+            for item in &map.values {
+                if let Some(inner) = item.value.as_ref().and_then(any_value_to_json) {
+                    obj.insert(item.key.clone().replace('.', "_"), inner);
+                }
+            }
+            Some(JsonValue::Object(obj))
+        }
+        None => None,
+    }
+}
+
 fn push_modal_attribute_entry(entries: &mut Vec<(String, String, String)>, omitted: &mut usize, kind: &str, key: &str, value: Option<&AnyValue>) {
     let Some(any) = value else {
         if entries.len() < MODAL_ATTR_ENTRY_LIMIT_PER_KIND {
@@ -2382,6 +2837,8 @@ fn status_help_spans(focus: Focus) -> Vec<Span<'static>> {
             status_text(" open  "),
             status_key("S"),
             status_text(" save  "),
+            status_key("E"),
+            status_text(" export  "),
             status_key("D"),
             status_text(" dedup  "),
             status_key("F"),
@@ -2389,7 +2846,14 @@ fn status_help_spans(focus: Focus) -> Vec<Span<'static>> {
             status_key("UP/DOWN"),
             status_text(" navigate"),
         ],
-        Focus::Modal | Focus::FieldFilter | Focus::SavePrompt | Focus::SaveError | Focus::DedupPrompt | Focus::DedupProgress => Vec::new(),
+        Focus::Modal
+        | Focus::FieldFilter
+        | Focus::SavePrompt
+        | Focus::SaveError
+        | Focus::ExportPrompt
+        | Focus::ExportError
+        | Focus::DedupPrompt
+        | Focus::DedupProgress => Vec::new(),
     }
 }
 
