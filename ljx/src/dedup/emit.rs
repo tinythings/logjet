@@ -48,17 +48,15 @@ pub fn write<W: Write>(writer: &mut LogjetWriter<W>, groups: &[DedupGroup], pass
 fn build_otlp_payload(group: &DedupGroup, mode_label: &str) -> Vec<u8> {
     let rep = &group.representative;
     let sig_hex = format!("{:016x}", group.signature);
+    let meta = dedup_metadata(mode_label, group.drain3_template.is_some());
 
     let mut attrs = rep.record_attrs.clone();
     push_attr_i64(&mut attrs, "dedup.count", group.count as i64);
-    let effective_mode = if group.drain3_template.is_some() {
-        "full/drain3"
-    } else if mode_label == "full" {
-        "full/canon"
-    } else {
-        mode_label
-    };
-    push_attr_str(&mut attrs, "dedup.mode", effective_mode);
+    push_attr_str(&mut attrs, "dedup.mode", &meta.effective_mode);
+    push_attr_str(&mut attrs, "dedup.behaviour", meta.behaviour);
+    push_attr_str(&mut attrs, "dedup.matcher", meta.matcher);
+    push_attr_str(&mut attrs, "dedup.scope", meta.scope);
+    push_attr_str(&mut attrs, "dedup.window", meta.window);
     push_attr_str(&mut attrs, "dedup.signature", &sig_hex);
     push_attr_i64(&mut attrs, "dedup.first_seen_ns", group.first_seen_ns as i64);
     push_attr_i64(&mut attrs, "dedup.last_seen_ns", group.last_seen_ns as i64);
@@ -109,6 +107,38 @@ fn build_otlp_payload(group: &DedupGroup, mode_label: &str) -> Vec<u8> {
         }],
     };
     batch.encode_to_vec()
+}
+
+struct DedupMetadata<'a> {
+    effective_mode: String,
+    behaviour: &'a str,
+    matcher: &'a str,
+    scope: &'a str,
+    window: &'a str,
+}
+
+fn dedup_metadata(mode_label: &str, used_drain3: bool) -> DedupMetadata<'_> {
+    let (behaviour, base_matcher) = mode_label.split_once('/').unwrap_or((mode_label, "exact"));
+    let matcher = if used_drain3 && base_matcher == "full" {
+        "drain3"
+    } else if base_matcher == "full" {
+        "canon"
+    } else {
+        base_matcher
+    };
+    let effective_mode = format!("{behaviour}/{matcher}");
+    let scope = match behaviour {
+        "distinct" => "global",
+        "collapse" => "bucketed",
+        _ => "unknown",
+    };
+    let window = match behaviour {
+        "distinct" => "whole-selection",
+        "collapse" => "consecutive-run",
+        _ => "unknown",
+    };
+
+    DedupMetadata { effective_mode, behaviour, matcher, scope, window }
 }
 
 fn push_attr_str(attrs: &mut Vec<KeyValue>, key: &str, val: &str) {
