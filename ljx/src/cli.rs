@@ -55,7 +55,7 @@ pub enum Command {
     Stats(StatsArgs),
     #[command(name = "view", alias = "cat", about = "Interactively browse filtered records in a terminal UI")]
     View(ViewArgs),
-    #[command(about = "Deduplicate log records, collapsing identical or similar bodies")]
+    #[command(about = "Deduplicate log records across the whole selection or collapse nearby bursts")]
     Dedup(DedupArgs),
 }
 
@@ -67,26 +67,36 @@ pub struct DedupArgs {
     #[arg(short, long, value_name = "OUTPUT", help = "Output .logjet file or - for stdout")]
     pub output: PathBuf,
 
-    #[arg(long, value_enum, default_value_t = DedupModeArg::Hash2)]
-    pub mode: DedupModeArg,
+    #[arg(long, value_enum, default_value_t = DedupBehaviorArg::Distinct, help = "Dedup behavior: distinct across the whole selection, or collapse nearby bursts")]
+    pub mode: DedupBehaviorArg,
 
-    #[arg(long, value_name = "KEYS", help = "Comma-separated bucket extensions: scope, source_line")]
+    #[arg(long = "match", alias = "matcher", value_enum, default_value_t = DedupMatchArg::Canon, help = "Matcher level inside the selected mode: exact, canon, or full")]
+    pub matcher: DedupMatchArg,
+
+    #[arg(long, value_name = "KEYS", help = "Comma-separated bucket extensions: scope, source_line (used by collapse mode)")]
     pub bucket_by: Option<String>,
 
-    #[arg(long, value_name = "FLOAT", help = "Drain3 similarity threshold (full mode only) [default: 0.7]")]
+    #[arg(long, value_name = "FLOAT", help = "Drain3 similarity threshold (full match only) [default: 0.7]")]
     pub sim_th: Option<f64>,
 
-    #[arg(long, value_name = "INT", help = "Drain3 prefix tree depth (full mode only) [default: 3]")]
+    #[arg(long, value_name = "INT", help = "Drain3 prefix tree depth (full match only) [default: 3]")]
     pub drain_depth: Option<i64>,
 
-    #[arg(long, value_name = "DELIMS", help = "Drain3 extra delimiters, comma-separated (full mode only)")]
+    #[arg(long, value_name = "DELIMS", help = "Drain3 extra delimiters, comma-separated (full match only)")]
     pub extra_delimiters: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum DedupModeArg {
+pub enum DedupBehaviorArg {
+    Distinct,
+    Collapse,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum DedupMatchArg {
     Exact,
-    Hash2,
+    #[value(alias = "hash2")]
+    Canon,
     Full,
 }
 
@@ -181,5 +191,28 @@ impl From<OutputCodec> for logjet::Codec {
             OutputCodec::None => Self::None,
             OutputCodec::Lz4 => Self::Lz4,
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_utst {
+    use super::{Cli, Command, DedupBehaviorArg, DedupMatchArg};
+    use clap::Parser;
+
+    #[test]
+    fn dedup_defaults_to_distinct_canon() {
+        let cli = Cli::try_parse_from(["ljx", "dedup", "input.logjet", "-o", "out.logjet"]).expect("cli parses");
+        let Command::Dedup(args) = cli.command else { panic!("expected dedup command") };
+        assert!(matches!(args.mode, DedupBehaviorArg::Distinct));
+        assert!(matches!(args.matcher, DedupMatchArg::Canon));
+    }
+
+    #[test]
+    fn dedup_accepts_collapse_and_full_matcher() {
+        let cli =
+            Cli::try_parse_from(["ljx", "dedup", "input.logjet", "-o", "out.logjet", "--mode", "collapse", "--match", "full"]).expect("cli parses");
+        let Command::Dedup(args) = cli.command else { panic!("expected dedup command") };
+        assert!(matches!(args.mode, DedupBehaviorArg::Collapse));
+        assert!(matches!(args.matcher, DedupMatchArg::Full));
     }
 }

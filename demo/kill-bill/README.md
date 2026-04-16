@@ -30,7 +30,7 @@ From this directory:
 The script does this:
 
 1. starts `ljd` in file mode
-2. writes 100 numbered OTLP log messages into one `killbill.logjet` file
+2. writes 100 numbered OTLP log messages into one `killbill.logjet` file with a short pacing delay so several physical blocks are created
 3. stops `ljd`
 4. cuts out the middle third of the file by raw bytes
 5. saves only that byte slice as `./damaged/killbill.logjet`
@@ -40,6 +40,9 @@ The script does this:
 
 The damaged file does not start on a real block boundary. Its front is just a
 raw byte slice from the middle of the original file.
+The pacing delay is intentional: it makes the demo deterministic across fast
+machines by ensuring the original file contains several independently
+recoverable blocks before the byte cut.
 
 ## Expected Result
 

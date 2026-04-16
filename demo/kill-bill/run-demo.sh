@@ -11,6 +11,7 @@ LOG_DIR="$SCRIPT_DIR/logs"
 DAMAGED_DIR="$SCRIPT_DIR/damaged"
 ORIGINAL_FILE="$LOG_DIR/killbill.logjet"
 DAMAGED_FILE="$DAMAGED_DIR/killbill.logjet"
+EMIT_DELAY_S=0.03
 
 for bin in "$LJD" "$EMITTER" "$COLLECTOR"; do
     if [ ! -x "$bin" ]; then
@@ -34,6 +35,7 @@ rm -rf "$LOG_DIR" "$DAMAGED_DIR"
 mkdir -p "$LOG_DIR" "$DAMAGED_DIR"
 
 echo "starting ljd to write one .logjet file with 100 messages"
+echo "pacing writes by ${EMIT_DELAY_S}s so the demo reliably produces multiple recoverable blocks"
 "$LJD" --config "$CONFIG" &
 LJD_PID=$!
 
@@ -43,6 +45,7 @@ i=1
 while [ "$i" -le 100 ]; do
     MESSAGE=$(printf 'KILL BILL %03d: the reader should recover this if its block survives the byte cut' "$i")
     "$EMITTER" 127.0.0.1:4318 --once --service-name KILL-BILL --message "$MESSAGE" >/dev/null
+    sleep "$EMIT_DELAY_S"
     i=$((i + 1))
 done
 
