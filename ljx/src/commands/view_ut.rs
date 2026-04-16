@@ -1,5 +1,5 @@
 use super::{
-    DedupUpdate, DetailRecord, EntryMeta, Focus, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, ViewApp, create_temp_path, extract_otlp_log_message,
+    DedupUpdate, DetailRecord, EntryMeta, ExportField, Focus, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, ViewApp, create_temp_path, extract_otlp_log_message,
     format_summary, open_temp_spool_pair, read_spool_record, render_modal_info_entries, render_modal_message, text_preview, write_spool_record,
 };
 use crate::cli::ViewArgs;
@@ -517,11 +517,48 @@ fn export_prompt_defaults_to_json_and_all() {
 }
 
 #[test]
+fn export_prompt_supports_cursor_navigation_and_mid_string_editing() {
+    let input = create_temp_path().unwrap();
+    write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "logjet.log.utf8")]);
+
+    let mut app = make_view_app(input.clone());
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+    app.open_export_prompt().unwrap();
+
+    app.export_field = ExportField::Range;
+    app.export_range = "all".to_string();
+    app.export_range_cursor = 1;
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Delete)).unwrap();
+    assert_eq!(app.export_range, "al");
+    assert_eq!(app.export_range_cursor, 1);
+
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Left)).unwrap();
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Char('c'))).unwrap();
+    assert_eq!(app.export_range, "cal");
+    assert_eq!(app.export_range_cursor, 1);
+
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::End)).unwrap();
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Char('l'))).unwrap();
+    assert_eq!(app.export_range, "call");
+
+    app.handle_export_prompt_key(KeyEvent::from(KeyCode::Home)).unwrap();
+    assert_eq!(app.export_range_cursor, 0);
+
+    let _ = std::fs::remove_file(input);
+}
+
+#[test]
 fn export_selection_accepts_all_amount_and_range() {
-    assert_eq!(super::parse_export_selection("all", 50).unwrap(), (0, 50));
-    assert_eq!(super::parse_export_selection("aLl", 50).unwrap(), (0, 50));
-    assert_eq!(super::parse_export_selection("3", 50).unwrap(), (0, 3));
-    assert_eq!(super::parse_export_selection("2-4", 50).unwrap(), (1, 4));
+    assert_eq!(super::parse_export_selection("all", 50, 0).unwrap(), (0, 50));
+    assert_eq!(super::parse_export_selection("aLl", 50, 0).unwrap(), (0, 50));
+    assert_eq!(super::parse_export_selection("a", 50, 0).unwrap(), (0, 50));
+    assert_eq!(super::parse_export_selection("current", 50, 7).unwrap(), (7, 8));
+    assert_eq!(super::parse_export_selection("CuRrEnT", 50, 7).unwrap(), (7, 8));
+    assert_eq!(super::parse_export_selection("c", 50, 7).unwrap(), (7, 8));
+    assert_eq!(super::parse_export_selection("0", 50, 7).unwrap(), (7, 8));
+    assert_eq!(super::parse_export_selection("3", 50, 0).unwrap(), (0, 3));
+    assert_eq!(super::parse_export_selection("2-4", 50, 0).unwrap(), (1, 4));
 }
 
 #[test]
@@ -550,6 +587,35 @@ fn export_current_results_writes_ndjson_from_filtered_view() {
     assert_eq!(docs[0]["event_name"], "logjet.log.utf8");
     assert_eq!(docs[0]["logjet_channel"][0], "AndroidGeoLocationListener");
     assert_eq!(docs[1]["body"], "third gps");
+
+    let _ = std::fs::remove_file(input);
+    let _ = std::fs::remove_file(output);
+}
+
+#[test]
+fn export_current_results_can_export_selected_row_only() {
+    let input = create_temp_path().unwrap();
+    let output = input.parent().unwrap().join("export-current.json");
+    write_test_logjet_rows(
+        &input,
+        &[
+            ("first gps", &["AndroidGeoLocationListener"], "logjet.log.utf8"),
+            ("second gps", &["AndroidGeoLocationListener"], "logjet.log.utf8"),
+            ("third gps", &["AndroidGeoLocationListener"], "logjet.log.utf8"),
+        ],
+    );
+
+    let mut app = make_view_app(input.clone());
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+    app.selected = 1;
+    app.export_filename = "export-current.json".to_string();
+    app.export_range = "current".to_string();
+    app.export_current_results().unwrap();
+
+    let docs = read_ndjson(&output);
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0]["body"], "second gps");
 
     let _ = std::fs::remove_file(input);
     let _ = std::fs::remove_file(output);
