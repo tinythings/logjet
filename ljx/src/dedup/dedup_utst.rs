@@ -344,6 +344,53 @@ fn distinct_merges_far_apart_records_with_intervening_noise() {
 }
 
 #[test]
+fn distinct_canon_merges_small_json_variations_across_services_and_distance() {
+    let batch1 = make_batch(
+        "svc-a",
+        vec![
+            make_log_record(r#"{"requestId":22,"kind":"fake_response","statusCode":299}"#, 9, 100),
+            make_log_record("unrelated placeholder", 9, 150),
+        ],
+    );
+    let batch2 = make_batch("svc-b", vec![make_log_record(r#"{"requestId":23,"kind":"fake_response","statusCode":299}"#, 5, 200)]);
+    let batch3 = make_batch(
+        "svc-c",
+        vec![
+            make_log_record("another unrelated placeholder", 9, 250),
+            make_log_record(r#"{"requestId":24,"kind":"fake_response","statusCode":299}"#, 1, 300),
+        ],
+    );
+    let input = write_logjet(&[batch1, batch2, batch3]);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Hash2);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 3);
+    let merged = groups.iter().find(|(body, _)| body.contains(r#""requestId":22"#)).unwrap();
+    assert_eq!(merged.1, 3);
+}
+
+#[test]
+fn distinct_full_merges_far_apart_freetext_variations_with_noise() {
+    let batch = make_batch(
+        "svc-a",
+        vec![
+            make_log_record("lapsed time is 2", 9, 100),
+            make_log_record("totally different record", 9, 150),
+            make_log_record("lapsed time is 3", 9, 200),
+            make_log_record("another unrelated event", 9, 250),
+            make_log_record("lapsed time is 4", 9, 300),
+        ],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Full);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 3);
+    let merged = groups.iter().find(|(body, _)| body == "lapsed time is 2").unwrap();
+    assert_eq!(merged.1, 3);
+}
+
+#[test]
 fn collapse_merges_only_consecutive_duplicates() {
     let batch = make_batch(
         "svc-a",
