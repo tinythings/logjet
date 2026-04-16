@@ -63,7 +63,6 @@ use flat_record::{BucketKey, BucketKeyKind, FlatRecord};
 pub enum DedupMode {
     /// Collapse duplicates across the whole selected dataset.
     Distinct,
-    #[allow(dead_code)]
     /// Collapse duplicates only in a local burst / nearby sense.
     Collapse,
 }
