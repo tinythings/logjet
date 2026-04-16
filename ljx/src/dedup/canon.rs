@@ -47,7 +47,7 @@ pub fn canon_dedup(mut groups: Vec<DedupGroup>) -> Vec<DedupGroup> {
 }
 
 /// Canonicalise a body string, returning (canonical_form, shape_label).
-fn canonicalise_body(body: &str) -> (String, String) {
+pub(crate) fn canonicalise_body(body: &str) -> (String, String) {
     let detected = detect(body);
     match detected.shape {
         BodyShape::Json => {

@@ -35,9 +35,9 @@ pub struct Detected {
 
 /// Detect the body shape of a log line.
 pub fn detect(body: &str) -> Detected {
-    // JSON: starts with '{"' or '[{' or '[[', and parses successfully.
+    // JSON: starts with an object/array opener and parses successfully.
     let trimmed = body.trim_start();
-    if (trimmed.starts_with("{\"") || trimmed.starts_with("[{") || trimmed.starts_with("[["))
+    if (trimmed.starts_with('{') || trimmed.starts_with('['))
         && let Ok(val) = serde_json::from_str::<Value>(trimmed)
     {
         return Detected { shape: BodyShape::Json, json_value: Some(val), stripped_suffix: None };
@@ -84,9 +84,7 @@ fn strip_source_prefix(body: &str) -> Option<String> {
 /// Strip any non-JSON prefix before a valid JSON object/array suffix.
 fn strip_json_prefix(body: &str) -> Option<String> {
     let trimmed = body.trim_start();
-    if trimmed.starts_with('{') {
-        return None;
-    }
+    let trimmed_start = body.len() - trimmed.len();
 
     for (idx, ch) in body.char_indices() {
         if !matches!(ch, '{' | '[') {
@@ -94,6 +92,9 @@ fn strip_json_prefix(body: &str) -> Option<String> {
         }
         let suffix = body[idx..].trim_start();
         if !(suffix.starts_with('{') || suffix.starts_with('[')) {
+            continue;
+        }
+        if idx == trimmed_start {
             continue;
         }
         if serde_json::from_str::<Value>(suffix).is_ok() {
