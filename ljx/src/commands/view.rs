@@ -222,9 +222,12 @@ struct ViewApp {
     selected_detail: Option<DetailRecord>,
     modal_text: Option<String>,
     save_filename: String,
+    save_filename_cursor: usize,
     save_message: Option<String>,
     export_filename: String,
+    export_filename_cursor: usize,
     export_range: String,
+    export_range_cursor: usize,
     export_field: ExportField,
     export_message: Option<String>,
     current_scan: Option<ActiveScan>,
@@ -272,9 +275,12 @@ impl ViewApp {
             selected_detail: None,
             modal_text: None,
             save_filename: String::new(),
+            save_filename_cursor: 0,
             save_message: None,
             export_filename: String::new(),
+            export_filename_cursor: 0,
             export_range: "all".to_string(),
+            export_range_cursor: 3,
             export_field: ExportField::Filename,
             export_message: None,
             current_scan: None,
@@ -407,13 +413,29 @@ impl ViewApp {
                 self.save_current_results()?;
             }
             KeyCode::Backspace => {
-                self.save_filename.pop();
+                delete_char_before(&mut self.save_filename, &mut self.save_filename_cursor);
+            }
+            KeyCode::Delete => {
+                delete_char_at(&mut self.save_filename, self.save_filename_cursor);
+            }
+            KeyCode::Left => {
+                self.save_filename_cursor = self.save_filename_cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                self.save_filename_cursor = (self.save_filename_cursor + 1).min(char_count(&self.save_filename));
+            }
+            KeyCode::Home => {
+                self.save_filename_cursor = 0;
+            }
+            KeyCode::End => {
+                self.save_filename_cursor = char_count(&self.save_filename);
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.save_filename.clear();
+                self.save_filename_cursor = 0;
             }
             KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.save_filename.push(ch);
+                insert_char_at(&mut self.save_filename, &mut self.save_filename_cursor, ch);
             }
             _ => {}
         }
@@ -442,20 +464,42 @@ impl ViewApp {
                 };
             }
             KeyCode::Backspace => match self.export_field {
-                ExportField::Filename => {
-                    self.export_filename.pop();
-                }
-                ExportField::Range => {
-                    self.export_range.pop();
-                }
+                ExportField::Filename => delete_char_before(&mut self.export_filename, &mut self.export_filename_cursor),
+                ExportField::Range => delete_char_before(&mut self.export_range, &mut self.export_range_cursor),
+            },
+            KeyCode::Delete => match self.export_field {
+                ExportField::Filename => delete_char_at(&mut self.export_filename, self.export_filename_cursor),
+                ExportField::Range => delete_char_at(&mut self.export_range, self.export_range_cursor),
+            },
+            KeyCode::Left => match self.export_field {
+                ExportField::Filename => self.export_filename_cursor = self.export_filename_cursor.saturating_sub(1),
+                ExportField::Range => self.export_range_cursor = self.export_range_cursor.saturating_sub(1),
+            },
+            KeyCode::Right => match self.export_field {
+                ExportField::Filename => self.export_filename_cursor = (self.export_filename_cursor + 1).min(char_count(&self.export_filename)),
+                ExportField::Range => self.export_range_cursor = (self.export_range_cursor + 1).min(char_count(&self.export_range)),
+            },
+            KeyCode::Home => match self.export_field {
+                ExportField::Filename => self.export_filename_cursor = 0,
+                ExportField::Range => self.export_range_cursor = 0,
+            },
+            KeyCode::End => match self.export_field {
+                ExportField::Filename => self.export_filename_cursor = char_count(&self.export_filename),
+                ExportField::Range => self.export_range_cursor = char_count(&self.export_range),
             },
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => match self.export_field {
-                ExportField::Filename => self.export_filename.clear(),
-                ExportField::Range => self.export_range.clear(),
+                ExportField::Filename => {
+                    self.export_filename.clear();
+                    self.export_filename_cursor = 0;
+                }
+                ExportField::Range => {
+                    self.export_range.clear();
+                    self.export_range_cursor = 0;
+                }
             },
             KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => match self.export_field {
-                ExportField::Filename => self.export_filename.push(ch),
-                ExportField::Range => self.export_range.push(ch),
+                ExportField::Filename => insert_char_at(&mut self.export_filename, &mut self.export_filename_cursor, ch),
+                ExportField::Range => insert_char_at(&mut self.export_range, &mut self.export_range_cursor, ch),
             },
             _ => {}
         }
@@ -600,6 +644,7 @@ impl ViewApp {
         if self.save_filename.is_empty() {
             self.save_filename = "filtered.logjet".to_string();
         }
+        self.save_filename_cursor = char_count(&self.save_filename);
         self.focus = Focus::SavePrompt;
         Ok(())
     }
@@ -621,6 +666,8 @@ impl ViewApp {
         if self.export_range.is_empty() {
             self.export_range = "all".to_string();
         }
+        self.export_filename_cursor = char_count(&self.export_filename);
+        self.export_range_cursor = char_count(&self.export_range);
         self.export_field = ExportField::Filename;
         self.focus = Focus::ExportPrompt;
         Ok(())
@@ -689,7 +736,7 @@ impl ViewApp {
             return Ok(());
         };
 
-        let selected = parse_export_selection(&self.export_range, self.entries.len()).map_err(Error::Usage);
+        let selected = parse_export_selection(&self.export_range, self.entries.len(), self.selected).map_err(Error::Usage);
         let (start, end) = match selected {
             Ok(range) => range,
             Err(err) => {
@@ -1398,8 +1445,7 @@ impl ViewApp {
         let cursor_x = row
             .x
             .saturating_add(label.chars().count() as u16)
-            .saturating_add(1)
-            .saturating_add(self.save_filename.chars().count() as u16)
+            .saturating_add(self.save_filename_cursor as u16)
             .min(row.x.saturating_add(label.chars().count() as u16 + input_width));
         let cursor_y = row.y;
         frame.set_cursor_position((cursor_x, cursor_y));
@@ -1472,7 +1518,7 @@ impl ViewApp {
         frame.render_widget(
             Paragraph::new(Text::from(vec![
                 Line::from("Range accepts:"),
-                Line::from("  all  |  N  |  N-N"),
+                Line::from("  a / all  |  c / current / 0  |  N  |  N-N"),
                 Line::from("Uses the current filtered view order."),
             ]))
             .style(Style::default().fg(Color::DarkGray).bg(Color::Gray)),
@@ -1484,8 +1530,7 @@ impl ViewApp {
                 let x = filename_row
                     .x
                     .saturating_add(filename_label.chars().count() as u16)
-                    .saturating_add(1)
-                    .saturating_add(self.export_filename.chars().count() as u16)
+                    .saturating_add(self.export_filename_cursor as u16)
                     .min(filename_row.x.saturating_add(filename_label.chars().count() as u16 + filename_width));
                 (x, filename_row.y)
             }
@@ -1493,8 +1538,7 @@ impl ViewApp {
                 let x = range_row
                     .x
                     .saturating_add(range_label.chars().count() as u16)
-                    .saturating_add(1)
-                    .saturating_add(self.export_range.chars().count() as u16)
+                    .saturating_add(self.export_range_cursor as u16)
                     .min(range_row.x.saturating_add(range_label.chars().count() as u16 + range_width));
                 (x, range_row.y)
             }
@@ -2284,13 +2328,20 @@ fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
     lines
 }
 
-fn parse_export_selection(input: &str, total: usize) -> std::result::Result<(usize, usize), String> {
+fn parse_export_selection(input: &str, total: usize, selected: usize) -> std::result::Result<(usize, usize), String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err("Range must not be empty.".to_string());
     }
-    if trimmed.eq_ignore_ascii_case("all") {
+    if trimmed.eq_ignore_ascii_case("all") || trimmed.eq_ignore_ascii_case("a") {
         return Ok((0, total));
+    }
+    if trimmed.eq_ignore_ascii_case("current") || trimmed.eq_ignore_ascii_case("c") || trimmed == "0" {
+        if total == 0 {
+            return Ok((0, 0));
+        }
+        let current = selected.min(total.saturating_sub(1));
+        return Ok((current, current + 1));
     }
     if let Some((start, end)) = trimmed.split_once('-') {
         let start = start.trim().parse::<usize>().map_err(|_| "Invalid range start.".to_string())?;
@@ -2307,11 +2358,44 @@ fn parse_export_selection(input: &str, total: usize) -> std::result::Result<(usi
         return Ok((start - 1, end.min(total)));
     }
 
-    let amount = trimmed.parse::<usize>().map_err(|_| "Range must be all, N, or N-N.".to_string())?;
+    let amount = trimmed.parse::<usize>().map_err(|_| "Range must be all/a, current/c/0, N, or N-N.".to_string())?;
     if amount == 0 {
         return Err("Amount must be >= 1.".to_string());
     }
     Ok((0, amount.min(total)))
+}
+
+fn char_count(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn char_to_byte_idx(text: &str, char_idx: usize) -> usize {
+    text.char_indices().nth(char_idx).map(|(idx, _)| idx).unwrap_or(text.len())
+}
+
+fn insert_char_at(text: &mut String, cursor: &mut usize, ch: char) {
+    let idx = char_to_byte_idx(text, *cursor);
+    text.insert(idx, ch);
+    *cursor += 1;
+}
+
+fn delete_char_before(text: &mut String, cursor: &mut usize) {
+    if *cursor == 0 {
+        return;
+    }
+    let end = char_to_byte_idx(text, *cursor);
+    let start = char_to_byte_idx(text, cursor.saturating_sub(1));
+    text.replace_range(start..end, "");
+    *cursor = cursor.saturating_sub(1);
+}
+
+fn delete_char_at(text: &mut String, cursor: usize) {
+    if cursor >= char_count(text) {
+        return;
+    }
+    let start = char_to_byte_idx(text, cursor);
+    let end = char_to_byte_idx(text, cursor + 1);
+    text.replace_range(start..end, "");
 }
 
 fn export_ndjson_objects(detail: &DetailRecord) -> Vec<JsonValue> {
