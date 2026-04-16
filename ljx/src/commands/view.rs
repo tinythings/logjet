@@ -226,6 +226,7 @@ struct ViewApp {
     dedup_progress: f64,
     dedup_progress_target: f64,
     dedup_phase: String,
+    dedup_completion_message: Option<String>,
 }
 
 impl ViewApp {
@@ -271,6 +272,7 @@ impl ViewApp {
             dedup_progress: 0.0,
             dedup_progress_target: 0.0,
             dedup_phase: String::new(),
+            dedup_completion_message: None,
         })
     }
 
@@ -304,7 +306,7 @@ impl ViewApp {
             Focus::SavePrompt => self.handle_save_prompt_key(key),
             Focus::SaveError => self.handle_save_error_key(),
             Focus::DedupPrompt => self.handle_dedup_prompt_key(key),
-            Focus::DedupProgress => Ok(false),
+            Focus::DedupProgress => self.handle_dedup_progress_key(key),
             Focus::Search => self.handle_search_key(key),
             Focus::List => self.handle_list_key(key),
         }
@@ -929,6 +931,7 @@ impl ViewApp {
         self.dedup_progress = 0.0;
         self.dedup_progress_target = 0.0;
         self.dedup_phase = "starting".to_string();
+        self.dedup_completion_message = None;
         self.focus = Focus::DedupProgress;
 
         thread::spawn(move || {
@@ -975,15 +978,9 @@ impl ViewApp {
                 DedupUpdate::Done { total, groups, pct } => {
                     self.dedup_progress = 1.0;
                     self.dedup_progress_target = 1.0;
-                    self.dedup_phase = "done".to_string();
+                    self.dedup_phase = "OK".to_string();
                     self.dedup_rx = None;
-                    let msg = format!("Dedup: {total} → {groups} ({pct:.1}% reduction)");
-                    if let Some(path) = self.dedup_output_path.take() {
-                        let _ = self.switch_to_file(path);
-                    } else {
-                        self.focus = Focus::List;
-                    }
-                    self.status = msg;
+                    self.dedup_completion_message = Some(format!("{total} records → {groups} groups ({pct:.1}% reduction)"));
                     return;
                 }
                 DedupUpdate::Failed(e) => {
@@ -997,6 +994,34 @@ impl ViewApp {
         }
         if self.dedup_progress < self.dedup_progress_target {
             self.dedup_progress = (self.dedup_progress + 0.015).min(self.dedup_progress_target);
+        }
+    }
+
+    fn handle_dedup_progress_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.dedup_rx.is_some() {
+            return Ok(false);
+        }
+
+        match key.code {
+            KeyCode::Enter => {
+                let msg = self.dedup_completion_message.take();
+                if let Some(path) = self.dedup_output_path.take() {
+                    self.switch_to_file(path)?;
+                } else {
+                    self.focus = Focus::List;
+                }
+                if let Some(msg) = msg {
+                    self.status = format!("Dedup: {msg}");
+                }
+                Ok(false)
+            }
+            KeyCode::Esc => {
+                self.dedup_completion_message = None;
+                self.dedup_output_path = None;
+                self.focus = Focus::List;
+                Ok(false)
+            }
+            _ => Ok(false),
         }
     }
 
@@ -1565,18 +1590,24 @@ impl ViewApp {
         frame.render_widget(block, area);
 
         let pct = (self.dedup_progress * 100.0).min(100.0);
-        let label = format!("{pct:.0}%");
+        let label = self.dedup_completion_message.clone().unwrap_or_else(|| format!("{pct:.0}%"));
+        let label_style = if self.dedup_completion_message.is_some() {
+            Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)
+        };
         let gauge = Gauge::default()
             .gauge_style(Style::default().fg(Color::Indexed(28)).bg(Color::White))
-            .label(Span::styled(label, Style::default().fg(Color::Black).add_modifier(Modifier::BOLD)))
+            .label(Span::styled(label, label_style))
             .ratio(self.dedup_progress.clamp(0.0, 1.0));
         let bar_area = Rect { x: inner.x + 1, y: inner.y + 1, width: inner.width.saturating_sub(2), height: 1 };
         frame.render_widget(gauge, bar_area);
         let phase_area = Rect { x: inner.x + 1, y: inner.y + 3, width: inner.width.saturating_sub(2), height: 1 };
+        let phase_text = if self.dedup_completion_message.is_some() { "Press ENTER to open the deduped file" } else { self.dedup_phase.as_str() };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("Phase: ", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
-                Span::styled(self.dedup_phase.as_str(), Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+                Span::styled(phase_text, Style::default().fg(Color::DarkGray).bg(Color::Gray)),
             ])),
             phase_area,
         );
