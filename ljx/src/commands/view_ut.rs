@@ -348,3 +348,56 @@ fn dedup_progress_updates_target_and_eases_displayed_progress() {
 
     let _ = std::fs::remove_file(input);
 }
+
+#[test]
+fn dedup_done_keeps_popup_open_until_enter() {
+    let input = create_temp_path().unwrap();
+    let output = create_temp_path().unwrap();
+    write_test_logjet(&input, &["placeholder route update"]);
+    write_test_logjet(&output, &["placeholder route update"]);
+
+    let mut app = make_view_app(input.clone());
+    let (tx, rx) = mpsc::channel();
+    app.dedup_rx = Some(rx);
+    app.dedup_output_path = Some(output.clone());
+    app.focus = Focus::DedupProgress;
+
+    tx.send(DedupUpdate::Done { total: 94102, groups: 9039, pct: 90.4 }).unwrap();
+    drop(tx);
+
+    app.drain_dedup_updates();
+
+    assert!(matches!(app.focus, Focus::DedupProgress));
+    assert_eq!(app.dedup_progress, 1.0);
+    assert_eq!(app.dedup_phase, "OK");
+    assert_eq!(app.dedup_completion_message.as_deref(), Some("94102 records → 9039 groups (90.4% reduction)"));
+
+    let _ = std::fs::remove_file(input);
+    let _ = std::fs::remove_file(output);
+}
+
+#[test]
+fn dedup_progress_enter_opens_output_and_sets_status() {
+    let input = create_temp_path().unwrap();
+    let output = create_temp_path().unwrap();
+    write_test_logjet(&input, &["placeholder route update"]);
+    write_test_logjet(&output, &["placeholder route update"]);
+
+    let mut app = make_view_app(input.clone());
+    app.focus = Focus::DedupProgress;
+    app.dedup_output_path = Some(output.clone());
+    app.dedup_completion_message = Some("10 records → 2 groups (80.0% reduction)".to_string());
+    app.dedup_progress = 1.0;
+    app.dedup_progress_target = 1.0;
+    app.dedup_phase = "OK".to_string();
+
+    app.handle_dedup_progress_key(key(KeyCode::Enter)).unwrap();
+
+    assert!(matches!(app.focus, Focus::List));
+    assert!(app.status.contains("10 records → 2 groups (80.0% reduction)"));
+    assert_eq!(app.input, output);
+    assert!(app.dedup_completion_message.is_none());
+
+    let _ = std::fs::remove_file(input);
+    let _ = std::fs::remove_file(output);
+}
