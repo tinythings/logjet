@@ -1,15 +1,21 @@
 use super::{
-    DetailRecord, EntryMeta, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, extract_otlp_log_message, format_summary, open_temp_spool_pair, read_spool_record,
-    render_modal_info_entries, render_modal_message, text_preview, write_spool_record,
+    DedupUpdate, DetailRecord, EntryMeta, Focus, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, ViewApp, create_temp_path, extract_otlp_log_message,
+    format_summary, open_temp_spool_pair, read_spool_record, render_modal_info_entries, render_modal_message, text_preview, write_spool_record,
 };
+use crate::cli::ViewArgs;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use logjet::OwnedRecord;
-use logjet::RecordType;
+use logjet::{LogjetWriter, RecordType};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
+use std::fs::File;
+use std::io::BufWriter;
+use std::sync::mpsc;
+use std::time::Duration;
 
 #[test]
 fn text_preview_flattens_newlines() {
@@ -191,4 +197,154 @@ fn temp_spool_reader_and_writer_use_independent_offsets() {
     assert_eq!(reread_second.payload, second.payload);
 
     let _ = std::fs::remove_file(path);
+}
+
+fn make_view_app(input: std::path::PathBuf) -> ViewApp {
+    ViewApp::new(ViewArgs { input, hex_payload: false }).expect("view app")
+}
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+fn write_test_logjet(path: &std::path::Path, bodies: &[&str]) {
+    let batch = ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            resource: Some(Resource {
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue { value: Some(Value::StringValue("fake-service".to_string())) }),
+                }],
+                dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
+            }),
+            scope_logs: vec![ScopeLogs {
+                scope: Some(InstrumentationScope {
+                    name: "fake-scope".to_string(),
+                    version: String::new(),
+                    attributes: Vec::new(),
+                    dropped_attributes_count: 0,
+                }),
+                log_records: bodies
+                    .iter()
+                    .enumerate()
+                    .map(|(i, body)| LogRecord {
+                        time_unix_nano: (i as u64 + 1) * 100,
+                        observed_time_unix_nano: (i as u64 + 1) * 100,
+                        severity_number: 9,
+                        severity_text: "INFO".to_string(),
+                        body: Some(AnyValue { value: Some(Value::StringValue((*body).to_string())) }),
+                        attributes: Vec::new(),
+                        dropped_attributes_count: 0,
+                        flags: 0,
+                        trace_id: Vec::new(),
+                        span_id: Vec::new(),
+                        event_name: String::new(),
+                    })
+                    .collect(),
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+
+    let file = File::create(path).expect("create input logjet");
+    let mut writer = LogjetWriter::new(BufWriter::new(file));
+    let payload = batch.encode_to_vec();
+    writer.push(RecordType::Logs, 1, 100, &payload).expect("write record");
+    let mut inner = writer.into_inner().expect("into inner");
+    use std::io::Write;
+    inner.flush().expect("flush");
+}
+
+fn read_first_log_record(path: &std::path::Path) -> LogRecord {
+    let bytes = std::fs::read(path).expect("read output file");
+    let cursor = std::io::Cursor::new(bytes);
+    let mut reader = logjet::LogjetReader::new(cursor);
+    while let Some(rec) = reader.next_record().expect("next record") {
+        if rec.record_type != RecordType::Logs {
+            continue;
+        }
+        let batch = ExportLogsServiceRequest::decode(rec.payload.as_slice()).expect("decode batch");
+        return batch.resource_logs[0].scope_logs[0].log_records[0].clone();
+    }
+    panic!("no log record in output");
+}
+
+fn find_attr_str(record: &LogRecord, key: &str) -> Option<String> {
+    record.attributes.iter().find(|a| a.key == key).and_then(|a| match &a.value {
+        Some(AnyValue { value: Some(Value::StringValue(s)) }) => Some(s.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn dedup_prompt_switches_behaviour_and_matcher_independently() {
+    let input = create_temp_path().unwrap();
+    let mut app = make_view_app(input.clone());
+    app.open_dedup_prompt();
+
+    assert!(matches!(app.focus, Focus::DedupPrompt));
+    assert_eq!(app.dedup_behavior.label(), "distinct");
+    assert_eq!(app.dedup_match_mode.label(), "canon");
+
+    app.handle_dedup_prompt_key(key(KeyCode::Right)).unwrap();
+    assert_eq!(app.dedup_behavior.label(), "collapse");
+    assert_eq!(app.dedup_match_mode.label(), "canon");
+
+    app.handle_dedup_prompt_key(key(KeyCode::Down)).unwrap();
+    assert_eq!(app.dedup_behavior.label(), "collapse");
+    assert_eq!(app.dedup_match_mode.label(), "full");
+
+    let _ = std::fs::remove_file(input);
+}
+
+#[test]
+fn dedup_worker_uses_selected_behaviour_and_matcher() {
+    let input = create_temp_path().unwrap();
+    write_test_logjet(&input, &["lapsed time is 2", "lapsed time is 3"]);
+
+    let mut app = make_view_app(input.clone());
+    app.start_dedup("dedup-out.logjet", crate::dedup::DedupMode::Collapse, crate::dedup::DedupMatchMode::Full);
+
+    let rx = app.dedup_rx.take().expect("dedup receiver");
+    let output_path = app.dedup_output_path.clone().expect("output path");
+
+    loop {
+        match rx.recv_timeout(Duration::from_secs(5)).expect("dedup update") {
+            DedupUpdate::Done { .. } => break,
+            DedupUpdate::Failed(err) => panic!("dedup failed: {err}"),
+            DedupUpdate::Progress { .. } => {}
+        }
+    }
+
+    let record = read_first_log_record(&output_path);
+    assert_eq!(find_attr_str(&record, "dedup.behaviour").as_deref(), Some("collapse"));
+    assert_eq!(find_attr_str(&record, "dedup.matcher").as_deref(), Some("drain3"));
+    assert_eq!(find_attr_str(&record, "dedup.window").as_deref(), Some("consecutive-run"));
+
+    let _ = std::fs::remove_file(input);
+    let _ = std::fs::remove_file(output_path);
+}
+
+#[test]
+fn dedup_progress_updates_target_and_eases_displayed_progress() {
+    let input = create_temp_path().unwrap();
+    let mut app = make_view_app(input.clone());
+    let (tx, rx) = mpsc::channel();
+    app.dedup_rx = Some(rx);
+    app.dedup_progress = 0.10;
+    app.dedup_progress_target = 0.10;
+
+    tx.send(DedupUpdate::Progress { ratio: 0.80, phase: "running collapse / full".to_string() }).unwrap();
+    drop(tx);
+
+    app.drain_dedup_updates();
+
+    assert_eq!(app.dedup_progress_target, 0.80);
+    assert_eq!(app.dedup_phase, "running collapse / full");
+    assert!(app.dedup_progress > 0.10);
+    assert!(app.dedup_progress < 0.80);
+
+    let _ = std::fs::remove_file(input);
 }
