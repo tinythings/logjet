@@ -48,6 +48,7 @@ pub mod canon;
 pub mod canon_freetext;
 pub mod canon_json;
 pub mod canon_kv;
+pub mod collapse;
 pub mod detect;
 pub mod drain3;
 pub mod emit;
@@ -242,16 +243,19 @@ impl DedupStats {
 pub fn dedup(
     records: Vec<FlatRecord>, passthrough: Vec<logjet::OwnedRecord>, output: &mut logjet::LogjetWriter<impl std::io::Write>, opts: &DedupOpts,
 ) -> crate::error::Result<DedupStats> {
-    let bucket_key = match opts.mode.bucket_policy() {
-        DedupBucketPolicy::Global => BucketKeyKind::Global,
-        DedupBucketPolicy::Requested => opts.bucket_key,
+    let groups = match opts.mode {
+        DedupMode::Distinct => {
+            let bucket_key = match opts.mode.bucket_policy() {
+                DedupBucketPolicy::Global => BucketKeyKind::Global,
+                DedupBucketPolicy::Requested => opts.bucket_key,
+            };
+            let buckets = bucket::group(records, bucket_key);
+            let groups = exact::dedup(buckets);
+            let groups = if opts.match_mode >= DedupMatchMode::Hash2 { canon::canon_dedup(groups) } else { groups };
+            if opts.match_mode >= DedupMatchMode::Full { dedup_residuals(groups, &opts.drain) } else { groups }
+        }
+        DedupMode::Collapse => collapse::dedup(records, opts),
     };
-    let buckets = bucket::group(records, bucket_key);
-    let groups = exact::dedup(buckets);
-
-    let groups = if opts.match_mode >= DedupMatchMode::Hash2 { canon::canon_dedup(groups) } else { groups };
-
-    let groups = if opts.match_mode >= DedupMatchMode::Full { dedup_residuals(groups, &opts.drain) } else { groups };
 
     let mode_label = match (opts.mode, opts.match_mode) {
         (DedupMode::Distinct, DedupMatchMode::Exact) => "distinct/exact",
