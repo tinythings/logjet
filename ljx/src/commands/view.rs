@@ -25,7 +25,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, Paragraph, Scro
 use ratatui::{Frame, Terminal};
 
 use crate::cli::ViewArgs;
-use crate::dedup::DedupMatchMode;
+use crate::dedup::{DedupMatchMode, DedupMode};
 use crate::error::{Error, Result};
 use crate::input::InputHandle;
 use crate::predicate::{FieldFilter, FilterMode, parse_filter_query};
@@ -93,16 +93,43 @@ enum ScanUpdate {
 
 #[derive(Debug, Clone)]
 enum DedupUpdate {
-    Progress(f64),
+    Progress { ratio: f64, phase: String },
     Done { total: u64, groups: u64, pct: f64 },
     Failed(String),
+}
+
+impl DedupMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Distinct => "distinct",
+            Self::Collapse => "collapse",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Distinct => "whole filtered set, SQL-like distinct",
+            Self::Collapse => "nearby burst suppression within bucket",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Distinct => Self::Collapse,
+            Self::Collapse => Self::Distinct,
+        }
+    }
+
+    fn prev(self) -> Self {
+        self.next()
+    }
 }
 
 impl DedupMatchMode {
     fn label(self) -> &'static str {
         match self {
             Self::Exact => "exact",
-            Self::Hash2 => "hash2",
+            Self::Hash2 => "canon",
             Self::Full => "full",
         }
     }
@@ -110,8 +137,8 @@ impl DedupMatchMode {
     fn description(self) -> &'static str {
         match self {
             Self::Exact => "byte-identical bodies only",
-            Self::Hash2 => "canonical body grouping",
-            Self::Full => "hash2 plus Drain3 residuals",
+            Self::Hash2 => "canonicalized body grouping",
+            Self::Full => "canon plus Drain3 residuals",
         }
     }
 
@@ -192,10 +219,13 @@ struct ViewApp {
     field_filter_state: Option<FieldFilterState>,
     active_field_filter: FieldFilter,
     dedup_filename: String,
-    dedup_mode: DedupMatchMode,
+    dedup_behavior: DedupMode,
+    dedup_match_mode: DedupMatchMode,
     dedup_output_path: Option<PathBuf>,
     dedup_rx: Option<Receiver<DedupUpdate>>,
     dedup_progress: f64,
+    dedup_progress_target: f64,
+    dedup_phase: String,
 }
 
 impl ViewApp {
@@ -234,10 +264,13 @@ impl ViewApp {
             field_filter_state: None,
             active_field_filter: FieldFilter::default(),
             dedup_filename: String::new(),
-            dedup_mode: DedupMatchMode::Hash2,
+            dedup_behavior: DedupMode::Distinct,
+            dedup_match_mode: DedupMatchMode::Hash2,
             dedup_output_path: None,
             dedup_rx: None,
             dedup_progress: 0.0,
+            dedup_progress_target: 0.0,
+            dedup_phase: String::new(),
         })
     }
 
@@ -840,7 +873,8 @@ impl ViewApp {
     fn open_dedup_prompt(&mut self) {
         let stem = self.input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
         self.dedup_filename = format!("{stem}-dedup.logjet");
-        self.dedup_mode = DedupMatchMode::Hash2;
+        self.dedup_behavior = DedupMode::Distinct;
+        self.dedup_match_mode = DedupMatchMode::Hash2;
         self.focus = Focus::DedupPrompt;
     }
 
@@ -849,7 +883,7 @@ impl ViewApp {
             KeyCode::Enter => {
                 let filename = self.dedup_filename.clone();
                 if !filename.is_empty() {
-                    self.start_dedup(&filename, self.dedup_mode);
+                    self.start_dedup(&filename, self.dedup_behavior, self.dedup_match_mode);
                 }
                 Ok(false)
             }
@@ -857,12 +891,20 @@ impl ViewApp {
                 self.focus = Focus::List;
                 Ok(false)
             }
-            KeyCode::Left | KeyCode::Up => {
-                self.dedup_mode = self.dedup_mode.prev();
+            KeyCode::Left => {
+                self.dedup_behavior = self.dedup_behavior.prev();
                 Ok(false)
             }
-            KeyCode::Right | KeyCode::Down | KeyCode::Tab => {
-                self.dedup_mode = self.dedup_mode.next();
+            KeyCode::Right => {
+                self.dedup_behavior = self.dedup_behavior.next();
+                Ok(false)
+            }
+            KeyCode::Up => {
+                self.dedup_match_mode = self.dedup_match_mode.prev();
+                Ok(false)
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.dedup_match_mode = self.dedup_match_mode.next();
                 Ok(false)
             }
             KeyCode::Backspace => {
@@ -877,7 +919,7 @@ impl ViewApp {
         }
     }
 
-    fn start_dedup(&mut self, filename: &str, mode: DedupMatchMode) {
+    fn start_dedup(&mut self, filename: &str, behavior: DedupMode, match_mode: DedupMatchMode) {
         let input_path = self.input.clone();
         let output_dir = self.input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
         let output_path = output_dir.join(filename);
@@ -885,25 +927,28 @@ impl ViewApp {
         self.dedup_rx = Some(rx);
         self.dedup_output_path = Some(output_path.clone());
         self.dedup_progress = 0.0;
+        self.dedup_progress_target = 0.0;
+        self.dedup_phase = "starting".to_string();
         self.focus = Focus::DedupProgress;
 
         thread::spawn(move || {
             let run = || -> std::result::Result<crate::dedup::DedupStats, String> {
-                tx.send(DedupUpdate::Progress(0.1)).ok();
+                tx.send(DedupUpdate::Progress { ratio: 0.05, phase: "opening input".to_string() }).ok();
                 let input = crate::input::InputHandle::open(&input_path).map_err(|e| e.to_string())?;
+                tx.send(DedupUpdate::Progress { ratio: 0.18, phase: "unpacking records".to_string() }).ok();
                 let mut reader = LogjetReader::new(input.into_buf_reader());
                 let unpacked = crate::dedup::unpack::unpack(&mut reader).map_err(|e| e.to_string())?;
-                tx.send(DedupUpdate::Progress(0.3)).ok();
+                tx.send(DedupUpdate::Progress { ratio: 0.32, phase: "preparing output".to_string() }).ok();
 
                 let out_file = File::create(&output_path).map_err(|e| e.to_string())?;
                 let mut writer = LogjetWriter::new(BufWriter::new(out_file));
-                tx.send(DedupUpdate::Progress(0.5)).ok();
+                let phase = format!("running {} / {}", behavior.label(), match_mode.label());
+                tx.send(DedupUpdate::Progress { ratio: 0.82, phase }).ok();
 
-                let opts =
-                    crate::dedup::DedupOpts { mode: crate::dedup::DedupMode::Distinct, match_mode: mode, ..crate::dedup::DedupOpts::default() };
+                let opts = crate::dedup::DedupOpts { mode: behavior, match_mode, ..crate::dedup::DedupOpts::default() };
                 let stats = crate::dedup::dedup(unpacked.records, unpacked.passthrough, &mut writer, &opts).map_err(|e| e.to_string())?;
 
-                tx.send(DedupUpdate::Progress(0.9)).ok();
+                tx.send(DedupUpdate::Progress { ratio: 0.94, phase: "flushing output".to_string() }).ok();
                 let mut out = writer.into_inner().map_err(|e| e.to_string())?;
                 out.flush().map_err(|e| e.to_string())?;
                 Ok(stats)
@@ -923,9 +968,14 @@ impl ViewApp {
         let Some(rx) = &self.dedup_rx else { return };
         while let Ok(update) = rx.try_recv() {
             match update {
-                DedupUpdate::Progress(p) => self.dedup_progress = p,
+                DedupUpdate::Progress { ratio, phase } => {
+                    self.dedup_progress_target = ratio;
+                    self.dedup_phase = phase;
+                }
                 DedupUpdate::Done { total, groups, pct } => {
                     self.dedup_progress = 1.0;
+                    self.dedup_progress_target = 1.0;
+                    self.dedup_phase = "done".to_string();
                     self.dedup_rx = None;
                     let msg = format!("Dedup: {total} → {groups} ({pct:.1}% reduction)");
                     if let Some(path) = self.dedup_output_path.take() {
@@ -944,6 +994,9 @@ impl ViewApp {
                     return;
                 }
             }
+        }
+        if self.dedup_progress < self.dedup_progress_target {
+            self.dedup_progress = (self.dedup_progress + 0.015).min(self.dedup_progress_target);
         }
     }
 
@@ -1465,19 +1518,31 @@ impl ViewApp {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("Mode:   ", Style::default().fg(Color::Black).bg(Color::Gray)),
-                Span::styled(self.dedup_mode.label(), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("  {}", self.dedup_mode.description()), Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+                Span::styled(self.dedup_behavior.label(), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  {}", self.dedup_behavior.description()), Style::default().fg(Color::DarkGray).bg(Color::Gray)),
             ])),
             mode_row,
         );
 
+        let matcher_row = Rect { x: inner.x, y: inner.y.saturating_add(3), width: inner.width, height: 1 };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Match:  ", Style::default().fg(Color::Black).bg(Color::Gray)),
+                Span::styled(self.dedup_match_mode.label(), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  {}", self.dedup_match_mode.description()), Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+            ])),
+            matcher_row,
+        );
+
         // Footer hint
-        let hint_y = inner.y.saturating_add(4).min(inner.y + inner.height.saturating_sub(1));
+        let hint_y = inner.y.saturating_add(5).min(inner.y + inner.height.saturating_sub(1));
         let hint_area = Rect { x: inner.x, y: hint_y, width: inner.width, height: 1 };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("←/→", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
                 Span::styled(" mode   ", Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+                Span::styled("↑/↓", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
+                Span::styled(" match   ", Style::default().fg(Color::DarkGray).bg(Color::Gray)),
                 Span::styled("ENTER", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
                 Span::styled(" start   ", Style::default().fg(Color::DarkGray).bg(Color::Gray)),
                 Span::styled("ESC", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
@@ -1507,6 +1572,14 @@ impl ViewApp {
             .ratio(self.dedup_progress.clamp(0.0, 1.0));
         let bar_area = Rect { x: inner.x + 1, y: inner.y + 1, width: inner.width.saturating_sub(2), height: 1 };
         frame.render_widget(gauge, bar_area);
+        let phase_area = Rect { x: inner.x + 1, y: inner.y + 3, width: inner.width.saturating_sub(2), height: 1 };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Phase: ", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
+                Span::styled(self.dedup_phase.as_str(), Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+            ])),
+            phase_area,
+        );
     }
 
     fn switch_to_file(&mut self, path: PathBuf) -> Result<()> {
