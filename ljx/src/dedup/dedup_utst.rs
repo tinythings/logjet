@@ -1,4 +1,4 @@
-//! Integration tests for the dedup pipeline (exact mode).
+//! Integration tests for the dedup pipeline.
 
 use std::io::Cursor;
 
