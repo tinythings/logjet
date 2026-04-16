@@ -429,6 +429,42 @@ fn collapse_keeps_far_apart_duplicates_as_separate_groups() {
 }
 
 #[test]
+fn collapse_preserves_bucket_boundaries_inside_a_burst() {
+    let batch1 = make_batch("svc-a", vec![make_log_record("placeholder route update", 9, 100)]);
+    let batch2 = make_batch("svc-b", vec![make_log_record("placeholder route update", 9, 200)]);
+    let input = write_logjet(&[batch1, batch2]);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 2);
+    assert!(groups.iter().all(|(_, count)| *count == 1));
+}
+
+#[test]
+fn collapse_does_not_merge_alternating_messages_into_one_group() {
+    let batch = make_batch(
+        "svc-a",
+        vec![
+            make_log_record("placeholder route update", 9, 100),
+            make_log_record("placeholder route update", 9, 200),
+            make_log_record("different placeholder", 9, 300),
+            make_log_record("different placeholder", 9, 400),
+            make_log_record("placeholder route update", 9, 500),
+            make_log_record("placeholder route update", 9, 600),
+        ],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 3);
+    let repeated_runs = groups.iter().filter(|(body, count)| body == "placeholder route update" && *count == 2).count();
+    assert_eq!(repeated_runs, 2);
+    let different = groups.iter().find(|(body, _)| body == "different placeholder").unwrap();
+    assert_eq!(different.1, 2);
+}
+
+#[test]
 fn collapse_full_merges_consecutive_freetext_burst() {
     let batch = make_batch(
         "svc-a",
