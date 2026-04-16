@@ -4,18 +4,27 @@ use std::io::Write;
 
 use logjet::{LogjetReader, LogjetWriter};
 
-use crate::cli::{DedupArgs, DedupModeArg};
+use crate::cli::{DedupArgs, DedupBehaviorArg, DedupMatchArg};
 use crate::dedup::flat_record::BucketKeyKind;
-use crate::dedup::{self, DedupMode, DedupOpts, DrainOpts};
+use crate::dedup::{self, DedupMatchMode, DedupMode, DedupOpts, DrainOpts};
 use crate::error::Result;
 use crate::input::{InputHandle, open_output};
 
-impl From<DedupModeArg> for DedupMode {
-    fn from(value: DedupModeArg) -> Self {
+impl From<DedupBehaviorArg> for DedupMode {
+    fn from(value: DedupBehaviorArg) -> Self {
         match value {
-            DedupModeArg::Exact => Self::Exact,
-            DedupModeArg::Hash2 => Self::Hash2,
-            DedupModeArg::Full => Self::Full,
+            DedupBehaviorArg::Distinct => Self::Distinct,
+            DedupBehaviorArg::Collapse => Self::Collapse,
+        }
+    }
+}
+
+impl From<DedupMatchArg> for DedupMatchMode {
+    fn from(value: DedupMatchArg) -> Self {
+        match value {
+            DedupMatchArg::Exact => Self::Exact,
+            DedupMatchArg::Canon => Self::Hash2,
+            DedupMatchArg::Full => Self::Full,
         }
     }
 }
@@ -27,7 +36,7 @@ pub fn run(args: DedupArgs) -> Result<()> {
         depth: args.drain_depth.unwrap_or(3),
         extra_delimiters: args.extra_delimiters.as_ref().map(|s| s.split(',').map(String::from).collect()).unwrap_or_default(),
     };
-    let opts = DedupOpts { mode: args.mode.into(), bucket_key, drain };
+    let opts = DedupOpts { mode: args.mode.into(), match_mode: args.matcher.into(), bucket_key, drain };
 
     let input = InputHandle::open(&args.input)?;
     let mut reader = LogjetReader::new(input.into_buf_reader());

@@ -1,4 +1,4 @@
-//! Integration tests for the dedup pipeline (exact mode).
+//! Integration tests for the dedup pipeline.
 
 use std::io::Cursor;
 
@@ -11,7 +11,7 @@ use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 
 use crate::dedup::flat_record::BucketKeyKind;
-use crate::dedup::{DedupMode, DedupOpts};
+use crate::dedup::{DedupMatchMode, DedupMode, DedupOpts};
 
 fn make_log_record(body: &str, severity: i32, time_ns: u64) -> LogRecord {
     LogRecord {
@@ -71,15 +71,15 @@ fn write_logjet(batches: &[ExportLogsServiceRequest]) -> Vec<u8> {
     buf
 }
 
-/// Run exact-mode dedup on raw logjet bytes, return output bytes.
-fn run_dedup(input_bytes: &[u8], mode: DedupMode) -> Vec<u8> {
+/// Run dedup on raw logjet bytes, return output bytes.
+fn run_dedup(input_bytes: &[u8], behavior: DedupMode, match_mode: DedupMatchMode) -> Vec<u8> {
     let cursor = Cursor::new(input_bytes);
     let mut reader = LogjetReader::new(cursor);
     let unpacked = crate::dedup::unpack::unpack(&mut reader).unwrap();
 
     let mut out_buf = Vec::new();
     let mut writer = LogjetWriter::new(Cursor::new(&mut out_buf));
-    let opts = DedupOpts { mode, bucket_key: BucketKeyKind::Default, drain: Default::default() };
+    let opts = DedupOpts { mode: behavior, match_mode, bucket_key: BucketKeyKind::Default, drain: Default::default() };
     let _stats = crate::dedup::dedup(unpacked.records, unpacked.passthrough, &mut writer, &opts).unwrap();
     writer.into_inner().unwrap();
     out_buf
@@ -123,6 +123,26 @@ fn read_groups(output_bytes: &[u8]) -> Vec<(String, i64)> {
     groups
 }
 
+fn first_log_record(output_bytes: &[u8]) -> LogRecord {
+    let cursor = Cursor::new(output_bytes);
+    let mut reader = LogjetReader::new(cursor);
+    while let Some(rec) = reader.next_record().unwrap() {
+        if rec.record_type != RecordType::Logs {
+            continue;
+        }
+        let batch = ExportLogsServiceRequest::decode(rec.payload.as_slice()).unwrap();
+        return batch.resource_logs[0].scope_logs[0].log_records[0].clone();
+    }
+    panic!("no log record in output");
+}
+
+fn find_attr_str(record: &LogRecord, key: &str) -> Option<String> {
+    record.attributes.iter().find(|a| a.key == key).and_then(|a| match &a.value {
+        Some(AnyValue { value: Some(Value::StringValue(s)) }) => Some(s.clone()),
+        _ => None,
+    })
+}
+
 #[test]
 fn exact_collapses_identical_bodies() {
     let batch = make_batch(
@@ -135,7 +155,7 @@ fn exact_collapses_identical_bodies() {
         ],
     );
     let input = write_logjet(&[batch]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
     let groups = read_groups(&output);
 
     assert_eq!(groups.len(), 2);
@@ -150,7 +170,7 @@ fn different_severity_stays_separate() {
     let batch1 = make_batch("svc-a", vec![make_log_record("same placeholder", 5, 100)]);
     let batch2 = make_batch("svc-a", vec![make_log_record("same placeholder", 9, 200)]);
     let input = write_logjet(&[batch1, batch2]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
     let groups = read_groups(&output);
 
     // Same body but different severity → different buckets → 2 groups.
@@ -159,15 +179,39 @@ fn different_severity_stays_separate() {
 }
 
 #[test]
+fn distinct_ignores_severity_boundaries() {
+    let batch1 = make_batch("svc-a", vec![make_log_record("same placeholder", 5, 100)]);
+    let batch2 = make_batch("svc-a", vec![make_log_record("same placeholder", 9, 200)]);
+    let input = write_logjet(&[batch1, batch2]);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].1, 2);
+}
+
+#[test]
 fn different_service_stays_separate() {
     let batch1 = make_batch("svc-a", vec![make_log_record("same placeholder", 9, 100)]);
     let batch2 = make_batch("svc-b", vec![make_log_record("same placeholder", 9, 200)]);
     let input = write_logjet(&[batch1, batch2]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
     let groups = read_groups(&output);
 
     assert_eq!(groups.len(), 2);
     assert!(groups.iter().all(|(_, c)| *c == 1));
+}
+
+#[test]
+fn distinct_ignores_service_boundaries() {
+    let batch1 = make_batch("svc-a", vec![make_log_record("same placeholder", 9, 100)]);
+    let batch2 = make_batch("svc-b", vec![make_log_record("same placeholder", 9, 200)]);
+    let input = write_logjet(&[batch1, batch2]);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].1, 2);
 }
 
 #[test]
@@ -177,7 +221,7 @@ fn timestamps_first_and_last_correct() {
         vec![make_log_record("placeholder", 9, 500), make_log_record("placeholder", 9, 100), make_log_record("placeholder", 9, 900)],
     );
     let input = write_logjet(&[batch]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
 
     let cursor = Cursor::new(&output);
     let mut reader = LogjetReader::new(cursor);
@@ -212,7 +256,7 @@ fn passthrough_non_log_records() {
         writer.into_inner().unwrap();
     }
 
-    let output = run_dedup(&buf, DedupMode::Exact);
+    let output = run_dedup(&buf, DedupMode::Distinct, DedupMatchMode::Exact);
 
     // Should have 2 records out: 1 deduped log + 1 passthrough metrics.
     let cursor = Cursor::new(&output);
@@ -233,7 +277,7 @@ fn passthrough_non_log_records() {
 #[test]
 fn empty_input_produces_empty_output() {
     let input = write_logjet(&[]);
-    let output = run_dedup(&input, DedupMode::Exact);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
     let groups = read_groups(&output);
     assert!(groups.is_empty());
 }
@@ -252,7 +296,7 @@ fn full_mode_runs_drain3_for_small_residual_sets() {
         vec![make_log_record("error in section alpha at line 42", 9, 100), make_log_record("error in section beta at line 99", 9, 200)],
     );
     let input = write_logjet(&[batch]);
-    let output = run_dedup(&input, DedupMode::Full);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Full);
     let groups = read_groups(&output);
 
     assert_eq!(groups.len(), 1);
@@ -271,9 +315,193 @@ fn full_mode_merges_freetext_lines_that_only_change_small_integer() {
         ],
     );
     let input = write_logjet(&[batch]);
-    let output = run_dedup(&input, DedupMode::Full);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Full);
     let groups = read_groups(&output);
 
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].1, 4);
+}
+
+#[test]
+fn distinct_merges_far_apart_records_with_intervening_noise() {
+    let batch = make_batch(
+        "svc-a",
+        vec![
+            make_log_record("placeholder route update", 9, 100),
+            make_log_record("totally different record", 9, 200),
+            make_log_record("placeholder route update", 9, 300),
+            make_log_record("another unrelated event", 9, 400),
+            make_log_record("placeholder route update", 9, 500),
+        ],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 3);
+    let repeated = groups.iter().find(|(body, _)| body == "placeholder route update").unwrap();
+    assert_eq!(repeated.1, 3);
+}
+
+#[test]
+fn distinct_canon_merges_small_json_variations_across_services_and_distance() {
+    let batch1 = make_batch(
+        "svc-a",
+        vec![
+            make_log_record(r#"{"requestId":22,"kind":"fake_response","statusCode":299}"#, 9, 100),
+            make_log_record("unrelated placeholder", 9, 150),
+        ],
+    );
+    let batch2 = make_batch("svc-b", vec![make_log_record(r#"{"requestId":23,"kind":"fake_response","statusCode":299}"#, 5, 200)]);
+    let batch3 = make_batch(
+        "svc-c",
+        vec![
+            make_log_record("another unrelated placeholder", 9, 250),
+            make_log_record(r#"{"requestId":24,"kind":"fake_response","statusCode":299}"#, 1, 300),
+        ],
+    );
+    let input = write_logjet(&[batch1, batch2, batch3]);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Hash2);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 3);
+    let merged = groups.iter().find(|(body, _)| body.contains(r#""requestId":22"#)).unwrap();
+    assert_eq!(merged.1, 3);
+}
+
+#[test]
+fn distinct_full_merges_far_apart_freetext_variations_with_noise() {
+    let batch = make_batch(
+        "svc-a",
+        vec![
+            make_log_record("lapsed time is 2", 9, 100),
+            make_log_record("totally different record", 9, 150),
+            make_log_record("lapsed time is 3", 9, 200),
+            make_log_record("another unrelated event", 9, 250),
+            make_log_record("lapsed time is 4", 9, 300),
+        ],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Full);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 3);
+    let merged = groups.iter().find(|(body, _)| body == "lapsed time is 2").unwrap();
+    assert_eq!(merged.1, 3);
+}
+
+#[test]
+fn collapse_merges_only_consecutive_duplicates() {
+    let batch = make_batch(
+        "svc-a",
+        vec![
+            make_log_record("placeholder route update", 9, 100),
+            make_log_record("placeholder route update", 9, 200),
+            make_log_record("different record", 9, 300),
+        ],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 2);
+    let repeated = groups.iter().find(|(body, _)| body == "placeholder route update").unwrap();
+    assert_eq!(repeated.1, 2);
+}
+
+#[test]
+fn collapse_keeps_far_apart_duplicates_as_separate_groups() {
+    let batch = make_batch(
+        "svc-a",
+        vec![
+            make_log_record("placeholder route update", 9, 100),
+            make_log_record("different record", 9, 200),
+            make_log_record("placeholder route update", 9, 300),
+        ],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 3);
+    let repeated_count = groups.iter().filter(|(body, count)| body == "placeholder route update" && *count == 1).count();
+    assert_eq!(repeated_count, 2);
+}
+
+#[test]
+fn collapse_preserves_bucket_boundaries_inside_a_burst() {
+    let batch1 = make_batch("svc-a", vec![make_log_record("placeholder route update", 9, 100)]);
+    let batch2 = make_batch("svc-b", vec![make_log_record("placeholder route update", 9, 200)]);
+    let input = write_logjet(&[batch1, batch2]);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 2);
+    assert!(groups.iter().all(|(_, count)| *count == 1));
+}
+
+#[test]
+fn collapse_does_not_merge_alternating_messages_into_one_group() {
+    let batch = make_batch(
+        "svc-a",
+        vec![
+            make_log_record("placeholder route update", 9, 100),
+            make_log_record("placeholder route update", 9, 200),
+            make_log_record("different placeholder", 9, 300),
+            make_log_record("different placeholder", 9, 400),
+            make_log_record("placeholder route update", 9, 500),
+            make_log_record("placeholder route update", 9, 600),
+        ],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 3);
+    let repeated_runs = groups.iter().filter(|(body, count)| body == "placeholder route update" && *count == 2).count();
+    assert_eq!(repeated_runs, 2);
+    let different = groups.iter().find(|(body, _)| body == "different placeholder").unwrap();
+    assert_eq!(different.1, 2);
+}
+
+#[test]
+fn collapse_full_merges_consecutive_freetext_burst() {
+    let batch = make_batch(
+        "svc-a",
+        vec![make_log_record("lapsed time is 2", 9, 100), make_log_record("lapsed time is 3", 9, 200), make_log_record("lapsed time is 4", 9, 300)],
+    );
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Full);
+    let groups = read_groups(&output);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].1, 3);
+}
+
+#[test]
+fn distinct_metadata_is_explicit() {
+    let batch = make_batch("svc-a", vec![make_log_record("placeholder route update", 9, 100), make_log_record("placeholder route update", 9, 200)]);
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Distinct, DedupMatchMode::Exact);
+    let record = first_log_record(&output);
+
+    assert_eq!(find_attr_str(&record, "dedup.mode").as_deref(), Some("distinct/exact"));
+    assert_eq!(find_attr_str(&record, "dedup.behaviour").as_deref(), Some("distinct"));
+    assert_eq!(find_attr_str(&record, "dedup.matcher").as_deref(), Some("exact"));
+    assert_eq!(find_attr_str(&record, "dedup.scope").as_deref(), Some("global"));
+    assert_eq!(find_attr_str(&record, "dedup.window").as_deref(), Some("whole-selection"));
+}
+
+#[test]
+fn collapse_metadata_describes_burst_mode() {
+    let batch = make_batch("svc-a", vec![make_log_record("lapsed time is 2", 9, 100), make_log_record("lapsed time is 3", 9, 200)]);
+    let input = write_logjet(&[batch]);
+    let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Full);
+    let record = first_log_record(&output);
+
+    assert_eq!(find_attr_str(&record, "dedup.mode").as_deref(), Some("collapse/drain3"));
+    assert_eq!(find_attr_str(&record, "dedup.behaviour").as_deref(), Some("collapse"));
+    assert_eq!(find_attr_str(&record, "dedup.matcher").as_deref(), Some("drain3"));
+    assert_eq!(find_attr_str(&record, "dedup.scope").as_deref(), Some("bucketed"));
+    assert_eq!(find_attr_str(&record, "dedup.window").as_deref(), Some("consecutive-run"));
 }

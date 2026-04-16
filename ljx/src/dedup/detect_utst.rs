@@ -15,6 +15,14 @@ fn json_array() {
 }
 
 #[test]
+fn json_scalar_array_is_json_not_prefixed() {
+    let d = detect(r#"[1,2,3]"#);
+    assert_eq!(d.shape, BodyShape::Json);
+    assert!(d.json_value.is_some());
+    assert!(d.stripped_suffix.is_none());
+}
+
+#[test]
 fn json_with_leading_whitespace() {
     let d = detect(r#"  {"fake_key":"fake_value"}"#);
     assert_eq!(d.shape, BodyShape::Json);

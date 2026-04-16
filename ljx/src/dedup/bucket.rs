@@ -1,7 +1,7 @@
 //! Stage 1: group flat records by bucket key.
 //!
-//! Produces a `HashMap<BucketKey, Vec<FlatRecord>>`. All downstream dedup
-//! is bucket-local — records in different buckets never merge.
+//! Produces a `HashMap<BucketKey, Vec<FlatRecord>>`. Downstream dedup is
+//! bucket-local unless the selected mode requests the synthetic global bucket.
 
 use std::collections::HashMap;
 
