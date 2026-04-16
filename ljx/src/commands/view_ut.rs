@@ -98,7 +98,17 @@ fn modal_info_lists_otlp_attributes() {
                 scope: Some(InstrumentationScope {
                     name: "liblogjet".to_string(),
                     version: String::new(),
-                    attributes: Vec::new(),
+                    attributes: vec![KeyValue {
+                        key: "logjet.channel".to_string(),
+                        value: Some(AnyValue {
+                            value: Some(Value::ArrayValue(opentelemetry_proto::tonic::common::v1::ArrayValue {
+                                values: vec![
+                                    AnyValue { value: Some(Value::StringValue("de".to_string())) },
+                                    AnyValue { value: Some(Value::StringValue("eso".to_string())) },
+                                ],
+                            })),
+                        }),
+                    }],
                     dropped_attributes_count: 0,
                 }),
                 log_records: vec![LogRecord {
@@ -130,13 +140,21 @@ fn modal_info_lists_otlp_attributes() {
 
     let entries = render_modal_info_entries(&detail);
     assert!(entries.iter().any(|(key, value)| key == "resource.service.name" && value == "cpp-appliance"));
+    assert!(entries.iter().any(|(key, value)| key == "scope.logjet.channel" && value == "de"));
+    assert!(entries.iter().any(|(key, value)| key.is_empty() && value == "eso"));
     assert!(entries.iter().any(|(key, value)| key == "record.character" && value == "Bender"));
 }
 
 #[test]
 fn modal_info_caps_attribute_entries_per_kind() {
-    let attributes = (0..40)
+    let record_attributes = (0..40)
         .map(|index| KeyValue { key: format!("custom.{index}"), value: Some(AnyValue { value: Some(Value::StringValue(format!("value-{index}"))) }) })
+        .collect::<Vec<_>>();
+    let scope_attributes = (0..40)
+        .map(|index| KeyValue {
+            key: format!("scope.custom.{index}"),
+            value: Some(AnyValue { value: Some(Value::StringValue(format!("scope-value-{index}"))) }),
+        })
         .collect::<Vec<_>>();
     let batch = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
@@ -145,7 +163,7 @@ fn modal_info_caps_attribute_entries_per_kind() {
                 scope: Some(InstrumentationScope {
                     name: "liblogjet".to_string(),
                     version: String::new(),
-                    attributes: Vec::new(),
+                    attributes: scope_attributes,
                     dropped_attributes_count: 0,
                 }),
                 log_records: vec![LogRecord {
@@ -154,7 +172,7 @@ fn modal_info_caps_attribute_entries_per_kind() {
                     severity_number: 0,
                     severity_text: "INFO".to_string(),
                     body: Some(AnyValue { value: Some(Value::StringValue("hello from cpp".to_string())) }),
-                    attributes,
+                    attributes: record_attributes,
                     dropped_attributes_count: 0,
                     flags: 0,
                     trace_id: Vec::new(),
@@ -173,7 +191,10 @@ fn modal_info_caps_attribute_entries_per_kind() {
     };
 
     let entries = render_modal_info_entries(&detail);
+    let scope_entries = entries.iter().filter(|(key, _)| key.starts_with("scope.scope.custom.")).count();
     let record_entries = entries.iter().filter(|(key, _)| key.starts_with("record.custom.")).count();
+    assert_eq!(scope_entries, MODAL_ATTR_ENTRY_LIMIT_PER_KIND);
+    assert!(entries.iter().any(|(key, value)| key == "scope.attrs.more" && value == "8 not shown"));
     assert_eq!(record_entries, MODAL_ATTR_ENTRY_LIMIT_PER_KIND);
     assert!(entries.iter().any(|(key, value)| key == "record.attrs.more" && value == "8 not shown"));
 }
