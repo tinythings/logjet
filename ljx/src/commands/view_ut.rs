@@ -500,7 +500,7 @@ fn dedup_progress_enter_opens_output_and_sets_status() {
 }
 
 #[test]
-fn export_prompt_defaults_to_json_and_all() {
+fn export_prompt_defaults_to_ndjson_and_all() {
     let input = create_temp_path().unwrap();
     write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "esotrace.log.utf8")]);
 
@@ -510,7 +510,7 @@ fn export_prompt_defaults_to_json_and_all() {
     app.open_export_prompt().unwrap();
 
     assert!(matches!(app.focus, Focus::ExportPrompt));
-    assert!(app.export_filename.ends_with(".json"));
+    assert!(app.export_filename.ends_with(".ndjson"));
     assert_eq!(app.export_range, "all");
 
     let _ = std::fs::remove_file(input);
@@ -564,7 +564,7 @@ fn export_selection_accepts_all_amount_and_range() {
 #[test]
 fn export_current_results_writes_ndjson_from_filtered_view() {
     let input = create_temp_path().unwrap();
-    let output = input.parent().unwrap().join("export-out.json");
+    let output = input.parent().unwrap().join("export-out.ndjson");
     write_test_logjet_rows(
         &input,
         &[
@@ -577,7 +577,7 @@ fn export_current_results_writes_ndjson_from_filtered_view() {
     let mut app = make_view_app(input.clone());
     app.apply_filter().unwrap();
     wait_for_scan(&mut app);
-    app.export_filename = "export-out.json".to_string();
+    app.export_filename = "export-out.ndjson".to_string();
     app.export_range = "2-3".to_string();
     app.export_current_results().unwrap();
 
@@ -595,7 +595,7 @@ fn export_current_results_writes_ndjson_from_filtered_view() {
 #[test]
 fn export_current_results_can_export_selected_row_only() {
     let input = create_temp_path().unwrap();
-    let output = input.parent().unwrap().join("export-current.json");
+    let output = input.parent().unwrap().join("export-current.ndjson");
     write_test_logjet_rows(
         &input,
         &[
@@ -609,7 +609,7 @@ fn export_current_results_can_export_selected_row_only() {
     app.apply_filter().unwrap();
     wait_for_scan(&mut app);
     app.selected = 1;
-    app.export_filename = "export-current.json".to_string();
+    app.export_filename = "export-current.ndjson".to_string();
     app.export_range = "current".to_string();
     app.export_current_results().unwrap();
 
