@@ -43,6 +43,6 @@ zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 arrow-array = "58.0.0"
-opentelemetry-proto = { version = "0.28", features = ["gen-tonic", "logs"] }
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs"] }
 parquet = { version = "58.0.0", default-features = false, features = ["arrow", "zstd"] }
-prost = "0.13"
+prost = "0.14"

@@ -22,7 +22,7 @@ fix: setup
 	cargo clippy --workspace --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
 
 test: setup
-	cargo build -p ljd -p ljx
+	cargo build -p ljd -p ljx -p ljx-parquet-exporter
 	cargo build -p otlp-demo --bin otlp-bofh-emitter
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run $(CORE_WORKSPACE); \
@@ -42,7 +42,7 @@ test-unit: setup
 	fi
 
 test-integration: setup
-	cargo build -p ljd -p ljx
+	cargo build -p ljd -p ljx -p ljx-parquet-exporter
 	cargo build -p otlp-demo --bin otlp-bofh-emitter
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p ljd --test bridge_flows; \
