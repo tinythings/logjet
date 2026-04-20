@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
 use std::io::{self, Read, Write};
@@ -15,6 +17,8 @@ use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 use tokio::runtime::Runtime;
 use tonic::Request;
+
+pub mod export;
 
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(cstring_lossy("ok"));
