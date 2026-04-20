@@ -25,7 +25,14 @@ fn top_level_export_parses() {
     assert_eq!(cli.export.as_deref(), Some("ndjson"));
     assert_eq!(cli.input, Some(PathBuf::from("input.logjet")));
     assert_eq!(cli.output, Some(PathBuf::from("out.ndjson")));
+    assert!(!cli.force);
     assert!(cli.command.is_none());
+}
+
+#[test]
+fn top_level_export_force_parses() {
+    let cli = Cli::try_parse_from(["ljx", "--export", "ndjson", "input.logjet", "-o", "out.ndjson", "--force"]).expect("cli parses");
+    assert!(cli.force);
 }
 
 #[test]
