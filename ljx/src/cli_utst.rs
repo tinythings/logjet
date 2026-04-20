@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::cli::{Cli, Command, DedupBehaviorArg, DedupMatchArg, ExportFormat};
+use crate::cli::{Cli, Command, DedupBehaviorArg, DedupMatchArg};
 use clap::Parser;
 
 #[test]
@@ -22,7 +22,7 @@ fn dedup_accepts_collapse_and_full_matcher() {
 #[test]
 fn top_level_export_parses() {
     let cli = Cli::try_parse_from(["ljx", "--export", "ndjson", "input.logjet", "-o", "out.ndjson"]).expect("cli parses");
-    assert!(matches!(cli.export, Some(ExportFormat::Ndjson)));
+    assert_eq!(cli.export.as_deref(), Some("ndjson"));
     assert_eq!(cli.input, Some(PathBuf::from("input.logjet")));
     assert_eq!(cli.output, Some(PathBuf::from("out.ndjson")));
     assert!(cli.command.is_none());
