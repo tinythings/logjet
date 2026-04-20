@@ -32,6 +32,7 @@ test: setup
 	fi
 
 test-unit: setup
+	cargo build -p ljx-parquet-exporter
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p logjet --lib -p ljd --bins -p ljx --bin ljx; \
 	else \
