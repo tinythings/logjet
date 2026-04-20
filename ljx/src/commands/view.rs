@@ -25,7 +25,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, Paragraph, Scro
 use ratatui::{Frame, Terminal};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
-use crate::cli::ViewArgs;
+use crate::cli::{ExportFormat, ViewArgs};
 use crate::dedup::{DedupMatchMode, DedupMode};
 use crate::error::{Error, Result};
 use crate::input::InputHandle;
@@ -74,6 +74,7 @@ enum Focus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportField {
+    Format,
     Filename,
     Range,
 }
@@ -168,6 +169,36 @@ impl DedupMatchMode {
     }
 }
 
+impl ExportFormat {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ndjson => "ndjson",
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Ndjson => "NDJSON",
+        }
+    }
+
+    fn default_extension(self) -> &'static str {
+        match self {
+            Self::Ndjson => "ndjson",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Ndjson => Self::Ndjson,
+        }
+    }
+
+    fn prev(self) -> Self {
+        self.next()
+    }
+}
+
 struct ActiveScan {
     rx: Receiver<ScanUpdate>,
     cancel: Arc<AtomicBool>,
@@ -224,6 +255,7 @@ struct ViewApp {
     save_filename: String,
     save_filename_cursor: usize,
     save_message: Option<String>,
+    export_format: ExportFormat,
     export_filename: String,
     export_filename_cursor: usize,
     export_range: String,
@@ -277,11 +309,12 @@ impl ViewApp {
             save_filename: String::new(),
             save_filename_cursor: 0,
             save_message: None,
+            export_format: ExportFormat::Ndjson,
             export_filename: String::new(),
             export_filename_cursor: 0,
             export_range: "all".to_string(),
             export_range_cursor: 3,
-            export_field: ExportField::Filename,
+            export_field: ExportField::Format,
             export_message: None,
             current_scan: None,
             field_catalog: catalog,
@@ -459,35 +492,43 @@ impl ViewApp {
             }
             KeyCode::Tab | KeyCode::Up | KeyCode::Down => {
                 self.export_field = match self.export_field {
+                    ExportField::Format => ExportField::Filename,
                     ExportField::Filename => ExportField::Range,
-                    ExportField::Range => ExportField::Filename,
+                    ExportField::Range => ExportField::Format,
                 };
             }
             KeyCode::Backspace => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => delete_char_before(&mut self.export_filename, &mut self.export_filename_cursor),
                 ExportField::Range => delete_char_before(&mut self.export_range, &mut self.export_range_cursor),
             },
             KeyCode::Delete => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => delete_char_at(&mut self.export_filename, self.export_filename_cursor),
                 ExportField::Range => delete_char_at(&mut self.export_range, self.export_range_cursor),
             },
             KeyCode::Left => match self.export_field {
+                ExportField::Format => self.export_format = self.export_format.prev(),
                 ExportField::Filename => self.export_filename_cursor = self.export_filename_cursor.saturating_sub(1),
                 ExportField::Range => self.export_range_cursor = self.export_range_cursor.saturating_sub(1),
             },
             KeyCode::Right => match self.export_field {
+                ExportField::Format => self.export_format = self.export_format.next(),
                 ExportField::Filename => self.export_filename_cursor = (self.export_filename_cursor + 1).min(char_count(&self.export_filename)),
                 ExportField::Range => self.export_range_cursor = (self.export_range_cursor + 1).min(char_count(&self.export_range)),
             },
             KeyCode::Home => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => self.export_filename_cursor = 0,
                 ExportField::Range => self.export_range_cursor = 0,
             },
             KeyCode::End => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => self.export_filename_cursor = char_count(&self.export_filename),
                 ExportField::Range => self.export_range_cursor = char_count(&self.export_range),
             },
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => {
                     self.export_filename.clear();
                     self.export_filename_cursor = 0;
@@ -497,7 +538,11 @@ impl ViewApp {
                     self.export_range_cursor = 0;
                 }
             },
+            KeyCode::Char(' ') if self.export_field == ExportField::Format => {
+                self.export_format = self.export_format.next();
+            }
             KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => insert_char_at(&mut self.export_filename, &mut self.export_filename_cursor, ch),
                 ExportField::Range => insert_char_at(&mut self.export_range, &mut self.export_range_cursor, ch),
             },
@@ -661,14 +706,14 @@ impl ViewApp {
         self.export_message = None;
         if self.export_filename.is_empty() {
             let stem = self.input.file_stem().and_then(|s| s.to_str()).unwrap_or("export");
-            self.export_filename = format!("{stem}.json");
+            self.export_filename = format!("{stem}.{}", self.export_format.default_extension());
         }
         if self.export_range.is_empty() {
             self.export_range = "all".to_string();
         }
         self.export_filename_cursor = char_count(&self.export_filename);
         self.export_range_cursor = char_count(&self.export_range);
-        self.export_field = ExportField::Filename;
+        self.export_field = ExportField::Format;
         self.focus = Focus::ExportPrompt;
         Ok(())
     }
@@ -756,19 +801,23 @@ impl ViewApp {
 
         let mut out = OpenOptions::new().write(true).create_new(true).open(&output_path)?;
         let mut exported = 0usize;
-        for meta in self.entries[start..end].iter().copied() {
-            let detail = read_spool_record(&mut scan.spool_reader, meta)?;
-            for object in export_ndjson_objects(&detail) {
-                serde_json::to_writer(&mut out, &object).map_err(|e| Error::Usage(e.to_string()))?;
-                out.write_all(b"\n")?;
-                exported += 1;
+        match self.export_format {
+            ExportFormat::Ndjson => {
+                for meta in self.entries[start..end].iter().copied() {
+                    let detail = read_spool_record(&mut scan.spool_reader, meta)?;
+                    for object in export_ndjson_objects(&detail) {
+                        serde_json::to_writer(&mut out, &object).map_err(|e| Error::Usage(e.to_string()))?;
+                        out.write_all(b"\n")?;
+                        exported += 1;
+                    }
+                }
             }
         }
         out.flush()?;
 
         self.focus = Focus::List;
         self.export_message = None;
-        self.status = format!("Exported {exported} row(s) to {}", output_path.display());
+        self.status = format!("Exported {exported} {} row(s) to {}", self.export_format.label(), output_path.display());
         Ok(())
     }
 
@@ -1373,6 +1422,8 @@ impl ViewApp {
                 &[
                     status_key("TAB"),
                     status_text(" next field   "),
+                    status_key("←/→"),
+                    status_text(" format   "),
                     status_key("ENTER"),
                     status_text(" export   "),
                     status_key("ESC"),
@@ -1471,20 +1522,39 @@ impl ViewApp {
     }
 
     fn render_export_prompt(&self, frame: &mut Frame<'_>) {
-        let area = centered_rect(58, 14, frame.area());
+        let area = centered_rect(62, 16, frame.area());
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(Span::styled(" Export NDJSON ", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)))
+            .title(Span::styled(
+                format!(" Export {} ", self.export_format.title()),
+                Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD),
+            ))
             .borders(Borders::ALL)
-            .border_type(BorderType::Plain)
+            .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::White).bg(Color::Gray))
             .style(Style::default().fg(Color::Black).bg(Color::Gray));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
+        let format_label = "Format:   ";
+        let format_width = inner.width.saturating_sub(format_label.chars().count() as u16 + 2);
+        let format_row = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
+        let format_style = if self.export_field == ExportField::Format {
+            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Black).bg(Color::Indexed(250))
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format_label, Style::default().fg(Color::Black).bg(Color::Gray)),
+                Span::styled(fit_to_width(&format!("< {} >", self.export_format.label()), format_width as usize), format_style),
+            ])),
+            format_row,
+        );
+
         let filename_label = "Filename: ";
         let filename_width = inner.width.saturating_sub(filename_label.chars().count() as u16 + 2);
-        let filename_row = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
+        let filename_row = Rect { x: inner.x, y: inner.y.saturating_add(2), width: inner.width, height: 1 };
         let filename_style = if self.export_field == ExportField::Filename {
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
@@ -1500,7 +1570,7 @@ impl ViewApp {
 
         let range_label = "Range:    ";
         let range_width = inner.width.saturating_sub(range_label.chars().count() as u16 + 2);
-        let range_row = Rect { x: inner.x, y: inner.y.saturating_add(2), width: inner.width, height: 1 };
+        let range_row = Rect { x: inner.x, y: inner.y.saturating_add(4), width: inner.width, height: 1 };
         let range_style = if self.export_field == ExportField::Range {
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
@@ -1517,8 +1587,8 @@ impl ViewApp {
         let hint_row = Rect { x: inner.x, y: inner.y.saturating_add(5), width: inner.width, height: 3 };
         frame.render_widget(
             Paragraph::new(Text::from(vec![
-                Line::from("Range accepts:"),
-                Line::from("  a / all  |  c / current / 0  |  N  |  N-N"),
+                Line::from("Format: use ←/→ or SPACE to choose"),
+                Line::from("Range:  a / all  |  c / current / 0  |  N  |  N-N"),
                 Line::from("Uses the current filtered view order."),
             ]))
             .style(Style::default().fg(Color::DarkGray).bg(Color::Gray)),
@@ -1526,6 +1596,14 @@ impl ViewApp {
         );
 
         let (cursor_x, cursor_y) = match self.export_field {
+            ExportField::Format => {
+                let x = format_row
+                    .x
+                    .saturating_add(format_label.chars().count() as u16)
+                    .saturating_add(2)
+                    .min(format_row.x.saturating_add(format_label.chars().count() as u16 + format_width));
+                (x, format_row.y)
+            }
             ExportField::Filename => {
                 let x = filename_row
                     .x
