@@ -4,6 +4,7 @@ use clap::builder::styling;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 
+use crate::exporter::ExporterRegistry;
 use crate::predicate::PredicateArgs;
 
 #[derive(Debug, Parser)]
@@ -29,26 +30,24 @@ pub struct Cli {
 
 pub fn build_cli() -> clap::Command {
     let appname = "ljx";
+    let exporters = ExporterRegistry::discover();
+    let formats = exporters.available_formats();
     let styles = styling::Styles::styled()
         .header(styling::AnsiColor::Yellow.on_default())
         .usage(styling::AnsiColor::Yellow.on_default())
         .literal(styling::AnsiColor::BrightGreen.on_default())
         .placeholder(styling::AnsiColor::BrightMagenta.on_default());
+    let after_help = format!(
+        "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson\n\nAvailable export formats now: {}\n\nPlugin exporters are discovered from LJX_EXPORTER_PATH, then ./exporters, then <exe>/exporters, then <exe>/../lib/logjet/exporters.",
+        formats.join(", ")
+    );
 
     Cli::command()
         .arg_required_else_help(true)
         .styles(styles)
-        .about(format!(
-            "{} - {}",
-            appname.bright_magenta().bold(),
-            "offline toolbox for .logjet streams"
-        ))
-        .override_usage(format!(
-            "{appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT>"
-        ))
-        .after_help(
-            "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson\n\nPlugin exporters are discovered from LJX_EXPORTER_PATH, then ./exporters, then <exe>/exporters, then <exe>/../lib/logjet/exporters.",
-        )
+        .about(format!("{} - {}", appname.bright_magenta().bold(), "offline toolbox for .logjet streams"))
+        .override_usage(format!("{appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT>"))
+        .after_help(after_help)
 }
 
 fn parse_export_name(value: &str) -> std::result::Result<String, String> {

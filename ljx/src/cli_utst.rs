@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::cli::{Cli, Command, DedupBehaviorArg, DedupMatchArg};
+use crate::cli::{Cli, Command, DedupBehaviorArg, DedupMatchArg, build_cli};
 use clap::Parser;
 
 #[test]
@@ -26,4 +26,10 @@ fn top_level_export_parses() {
     assert_eq!(cli.input, Some(PathBuf::from("input.logjet")));
     assert_eq!(cli.output, Some(PathBuf::from("out.ndjson")));
     assert!(cli.command.is_none());
+}
+
+#[test]
+fn help_lists_current_export_formats() {
+    let help = build_cli().render_long_help().to_string();
+    assert!(help.contains("Available export formats now: ndjson"));
 }
