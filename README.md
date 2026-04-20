@@ -1,93 +1,38 @@
 # logjet
 
-`logjet` is a compact append-only binary log format and Rust library for storing
-and replaying raw OTLP protobuf batches on unreliable storage.
+[![It is alive!](https://github.com/tinythings/logjet/actions/workflows/it-is-alive.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/it-is-alive.yml)
+[![Unit Tests](https://github.com/tinythings/logjet/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/unit-tests.yml)
+[![Integration Tests](https://github.com/tinythings/logjet/actions/workflows/integration-tests.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/integration-tests.yml)
+[![Insanity Check](https://github.com/tinythings/logjet/actions/workflows/insanity-check.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/insanity-check.yml)
+[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](./LICENSE)
 
-It is designed for telemetry relay and local persistence on weak hardware where:
+`logjet` is a block-oriented binary format and Rust library for storing raw OTLP protobuf batches as an append-only stream. The project is aimed at telemetry relay, local backlog retention, and later replay on systems where sequential I/O is far easier to afford than elaborate indexing, background compaction, or large in-memory state. It is also intended for the less well-behaved parts of real deployments: links that are intermittent, slow, lossy, or simply unavailable for long enough that local backlog ceases to be optional. The emphasis throughout is on predictable writes, bounded reader memory, and partial recovery after corruption.
 
-- files may grow large
-- writes must stay simple and fast
-- reads must be sequential and streamable
-- corruption may happen in the middle of a file
-- later valid data must still be recoverable
+The repository contains more than the format crate itself. The `logjet` crate provides the storage format and the reader and writer APIs.
 
-## What It Is
+- `ljd` is a daemon for ingest, retention, replay, bridge mode, and file replay.
+- `ljx` is the offline CLI for inspection, viewing, filtering, and export.
+- `liblogjet` exposes the relevant pieces through a C ABI for C and C++ callers. The demos are not merely decorative; they are small executable scenarios for retention, replay, transport, plugin loading, TLS, and exporter integration.
 
-`logjet` is:
+The storage model is intentionally transport-neutral. A stored record carries a record type, a sequence number, a Unix timestamp in nanoseconds, and the raw OTLP payload bytes. The format does not interpret those bytes beyond preserving them faithfully. That boundary is deliberate. `logjet` is meant to be a reliable persistence and replay layer, not a query engine or a general telemetry warehouse.
 
-- a block-based on-disk container format
-- a Rust library for appending telemetry records and replaying them later
-- a corruption-tolerant sequential reader with forward resynchronisation
-- a transport-neutral storage layer for opaque OTLP protobuf payload bytes
+## Format Overview
 
-Each record stores:
+A `.logjet` file is an append-only sequence of independently verifiable blocks. Each block begins with a sync marker, followed by a fixed header, a small extension containing the block base sequence and base timestamp, a payload region containing multiple records, and a trailing CRC32C checksum. Fixed-width integers are little-endian. Compression is applied per block rather than per file. LZ4 is the default codec, and `none` is supported when compression is undesirable.
 
-- a record type: logs, metrics, or traces
-- a sequence number
-- a Unix timestamp in nanoseconds
-- the raw OTLP protobuf bytes
+Within a block, records are encoded compactly through deltas relative to the block base sequence and timestamp. The essential fields are the record type, the sequence delta, the timestamp delta in nanoseconds, the payload length, and the raw payload itself. Sequence and timestamp deltas are stored as unsigned varints. This keeps the common case compact while preserving a reader that can operate in a strictly sequential manner.
 
-## How It Works
+The format is organised around recovery rather than random access. If a block is damaged, the reader validates headers, lengths, codec information, and checksum, rejects the invalid block, and resumes scanning for the next sync marker. Once another valid block is found, replay can continue from that point. This is the principal reason the design is block-based. Whole-file compression would make later valid data difficult to recover, and per-record framing would push overhead in the wrong direction for the intended workload.
 
-The file is an append-only sequence of independently verifiable blocks.
+The result is a format suited to persistent telemetry staging on unreliable media or modest hardware. It does not attempt to provide indexing, ad hoc search, or analytical execution. Those concerns belong elsewhere in the stack.
 
-Each block contains:
+## Using The Rust Library
 
-1. an 8-byte sync marker
-2. a fixed header
-3. a small header extension with block base sequence and base timestamp
-4. a payload containing multiple concatenated records
-5. a trailing CRC32C checksum
-
-Record payloads inside the block are stored as:
-
-- `record_type: u8`
-- `seq_delta: unsigned varint`
-- `ts_delta_ns: unsigned varint`
-- `payload_len: unsigned varint`
-- `payload: raw OTLP protobuf bytes`
-
-Important format properties:
-
-- fixed-width integers are little-endian
-- blocks are compressed independently
-- default compression is LZ4
-- `none` is also supported
-- CRC32C is computed per block
-- recovery works by scanning for the next sync marker after a bad block
-- a reader never needs to load the whole file into memory
-
-If a block is corrupted:
-
-1. the reader detects the failure while validating the header, lengths, codec, or CRC
-2. it treats that candidate block as bad
-3. it resumes scanning from the next byte after the rejected sync marker
-4. once another valid block is found, replay continues
-
-That recovery model is the main reason the format is block-oriented instead of
-using whole-file compression or per-record checksums.
-
-## What It Is Not
-
-`logjet` is not:
-
-- a general-purpose database
-- an indexed random-access storage engine
-- a query layer for telemetry
-- an OTLP decoder or validator
-- a replacement for object storage, Kafka, or long-term analytics systems
-- a whole-file archival compressor optimised for maximum compression ratio
-
-It stores opaque OTLP protobuf bytes and focuses on durable append and reliable
-sequential replay, not schema inspection or analytical querying.
-
-## Library Usage
-
-Add it to your project:
+If you want to depend on the crate straight from the repository, point Cargo at GitHub:
 
 ```toml
 [dependencies]
-logjet = { path = "../logjet" }
+logjet = { git = "https://github.com/tinythings/logjet.git" }
 ```
 
 Write telemetry batches:
@@ -151,10 +96,16 @@ fn replay_batches() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Notes
+## The Rest Of The Toolkit
 
-- Examples for standalone usage live in [examples](./examples).
-- C and C++ shared-library usage lives in [doc/c-cpp-integration.md](./doc/c-cpp-integration.md).
-- The reader is sequential by design.
-- Compression is per block, not per file.
-- The payload bytes are opaque to `logjet`.
+The format crate is only one part of the repository. `ljd` handles live ingest and retained replay. It accepts OTLP/HTTP and OTLP/gRPC log traffic, supports plugin-based ingest, keeps backlog either in memory or in rotating `.logjet` segments, exposes a replay listener for downstream consumers, and can operate as a bridge to another collector. `ljx` covers the offline path: inspection, viewing, filtering, and export. `liblogjet` exists for environments in which the surrounding software is written in C or C++ and wants a stable library boundary rather than a Rust crate dependency.
+
+The demos are useful as small reference systems. They show file-backed retention, memory retention, late consumer replay, replay handoff, bridge resume, TLS on replay links, plugin-based ingest, Parquet export through the external exporter ABI, and shared-library use from C++. In practice they also serve as executable documentation for behavior that is easier to understand by observing a working scenario than by reading a static paragraph.
+
+## Build And Explore
+
+From the project root, `make` builds the main release binaries. `make demo` builds the demo artefacts. `make test` runs the full test path, and `make check` runs clippy through the Makefile. Readers who prefer orientation before compilation should begin with [doc/README.md](./doc/README.md), then continue to [doc/overview.md](./doc/overview.md) for the system shape, [doc/configuration.md](./doc/configuration.md) for the YAML configuration surface, [doc/features.md](./doc/features.md) for the daemon feature set, and [doc/c-cpp-integration.md](./doc/c-cpp-integration.md) for the shared-library boundary. Standalone Rust examples remain in [examples](./examples), and the scenario-driven material remains in [demo](./demo).
+
+## Final Word
+
+The guiding preference in `logjet` is restraint. The format is compact, the reader is sequential, the recovery strategy is explicit, and the surrounding tools stay close to the operational problems they are meant to solve. That makes the project less ornate than many telemetry systems, but substantially easier to reason about when persistence, replay, and failure handling matter more than decorative complexity.
