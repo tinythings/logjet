@@ -4,6 +4,7 @@ use clap::builder::styling;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 
+use crate::exporter::ExporterRegistry;
 use crate::predicate::PredicateArgs;
 
 #[derive(Debug, Parser)]
@@ -14,31 +15,72 @@ use crate::predicate::PredicateArgs;
     long_about = None
 )]
 pub struct Cli {
+    #[arg(
+        short = 'x',
+        long = "export",
+        value_name = "FORMAT",
+        value_parser = parse_export_name,
+        requires_all = ["input", "output"],
+        help = "Export one .logjet input to a built-in or plugin format",
+        long_help = "Export one .logjet input to a built-in or plugin format"
+    )]
+    pub export: Option<String>,
+
+    #[arg(short, long, value_name = "OUTPUT", requires = "export", help = "Output file or - for stdout")]
+    pub output: Option<PathBuf>,
+
+    #[arg(long = "force", requires = "export", help = "Overwrite output file if it already exists")]
+    pub force: bool,
+
+    #[arg(value_name = "INPUT", requires = "export", help = "Input .logjet file or - for stdin")]
+    pub input: Option<PathBuf>,
+
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 pub fn build_cli() -> clap::Command {
     let appname = "ljx";
+    let exporters = ExporterRegistry::discover();
+    let builtins = built_in_export_formats();
+    let plugins = exporters.available_formats().into_iter().filter(|name| !builtins.iter().any(|builtin| builtin == name)).collect::<Vec<_>>();
+    let all_formats = builtins.iter().cloned().chain(plugins.iter().cloned()).collect::<Vec<_>>();
+    let export_help = format!("Export one .logjet input to a built-in or plugin format: {}", all_formats.join(", "));
     let styles = styling::Styles::styled()
         .header(styling::AnsiColor::Yellow.on_default())
         .usage(styling::AnsiColor::Yellow.on_default())
         .literal(styling::AnsiColor::BrightGreen.on_default())
         .placeholder(styling::AnsiColor::BrightMagenta.on_default());
+    let after_help = "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson\n  ljx --export parquet telemetry.logjet -o telemetry.parquet --force";
 
     Cli::command()
+        .arg_required_else_help(true)
         .styles(styles)
-        .about(format!(
-            "{} - {}",
-            appname.bright_magenta().bold(),
-            "offline toolbox for .logjet streams"
-        ))
-        .override_usage(format!(
-            "{appname} <COMMAND> [OPTIONS] [ARGS]"
-        ))
-        .after_help(
-            "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet",
-        )
+        .about(format!("{} - {}", appname.bright_magenta().bold(), "offline toolbox for .logjet streams"))
+        .override_usage(format!("{appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT> [--force]"))
+        .mut_arg("export", |arg| arg.help(&export_help).long_help(&export_help))
+        .after_help(after_help)
+}
+
+fn parse_export_name(value: &str) -> std::result::Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err("export format must not be empty".to_string());
+    }
+    if normalized.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')) {
+        Ok(normalized)
+    } else {
+        Err("export format must use only lowercase letters, digits, '-' or '_'".to_string())
+    }
+}
+
+fn built_in_export_formats() -> Vec<String> {
+    ExportFormat::value_variants().iter().filter_map(|value| value.to_possible_value().map(|pv| pv.get_name().to_string())).collect()
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ExportFormat {
+    Ndjson,
 }
 
 #[derive(Debug, Subcommand)]
@@ -195,24 +237,5 @@ impl From<OutputCodec> for logjet::Codec {
 }
 
 #[cfg(test)]
-mod cli_utst {
-    use super::{Cli, Command, DedupBehaviorArg, DedupMatchArg};
-    use clap::Parser;
-
-    #[test]
-    fn dedup_defaults_to_distinct_canon() {
-        let cli = Cli::try_parse_from(["ljx", "dedup", "input.logjet", "-o", "out.logjet"]).expect("cli parses");
-        let Command::Dedup(args) = cli.command else { panic!("expected dedup command") };
-        assert!(matches!(args.mode, DedupBehaviorArg::Distinct));
-        assert!(matches!(args.matcher, DedupMatchArg::Canon));
-    }
-
-    #[test]
-    fn dedup_accepts_collapse_and_full_matcher() {
-        let cli =
-            Cli::try_parse_from(["ljx", "dedup", "input.logjet", "-o", "out.logjet", "--mode", "collapse", "--match", "full"]).expect("cli parses");
-        let Command::Dedup(args) = cli.command else { panic!("expected dedup command") };
-        assert!(matches!(args.mode, DedupBehaviorArg::Collapse));
-        assert!(matches!(args.matcher, DedupMatchArg::Full));
-    }
-}
+#[path = "cli_utst.rs"]
+mod cli_utst;

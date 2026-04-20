@@ -1,4 +1,4 @@
-.PHONY: build dev devel check fix test test-unit test-integration setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo man
+.PHONY: build dev devel check fix test test-unit test-integration test-abi-matrix test-exporter-release-smoke setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo man
 
 DEFAULT_TARGET := build
 ARM_TARGET ?= aarch64-unknown-linux-musl
@@ -22,7 +22,7 @@ fix: setup
 	cargo clippy --workspace --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
 
 test: setup
-	cargo build -p ljd -p ljx
+	cargo build -p ljd -p ljx -p ljx-parquet-exporter
 	cargo build -p otlp-demo --bin otlp-bofh-emitter
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run $(CORE_WORKSPACE); \
@@ -42,16 +42,27 @@ test-unit: setup
 	fi
 
 test-integration: setup
-	cargo build -p ljd -p ljx
+	cargo build -p ljd -p ljx -p ljx-parquet-exporter
 	cargo build -p otlp-demo --bin otlp-bofh-emitter
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p ljd --test bridge_flows; \
 		cargo nextest run -p logjet --test ljx_cli; \
+		cargo nextest run -p logjet --test ljx_export; \
 	else \
 		echo "cargo-nextest not available, falling back to cargo test integration targets"; \
 		cargo test -p ljd --test bridge_flows; \
 		cargo test -p logjet --test ljx_cli; \
+		cargo test -p logjet --test ljx_export; \
 	fi
+
+test-abi-matrix: setup
+	bash scripts/test-exporter-abi-matrix.sh
+
+test-exporter-release-smoke: setup
+	HOST_TOOLCHAIN=$$(awk -F'"' '/channel = / { print $$2; exit }' rust-toolchain.toml) \
+	PLUGIN_TOOLCHAIN=$$(awk -F'"' '/channel = / { print $$2; exit }' rust-toolchain.toml) \
+	PROFILE=release \
+	bash scripts/test-exporter-abi-matrix.sh
 
 arm-devel: setup setup-arm
 	cargo build $(CORE_WORKSPACE) --target $(ARM_TARGET)

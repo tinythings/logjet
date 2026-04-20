@@ -41,6 +41,8 @@ It also contains scenario demos under subdirectories:
   - replay stored `.logjet` files into a collector
 - [`file-tooling`](./file-tooling)
   - inspect rotated file segments and prune archived files deliberately
+- [`parquet-export`](./parquet-export)
+  - generate about 5K BOFH log entries, then export that `.logjet` file to Parquet through the external exporter plugin
 - [`tui-view`](./tui-view)
   - generate 1000 randomized log entries and open `ljx view` on the result
 - [`bridge-resume`](./bridge-resume)

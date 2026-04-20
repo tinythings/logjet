@@ -28,6 +28,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use crate::cli::ViewArgs;
 use crate::dedup::{DedupMatchMode, DedupMode};
 use crate::error::{Error, Result};
+use crate::exporter::ExporterRegistry;
 use crate::input::InputHandle;
 use crate::predicate::{FieldFilter, FilterMode, parse_filter_query};
 
@@ -74,6 +75,7 @@ enum Focus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportField {
+    Format,
     Filename,
     Range,
 }
@@ -168,6 +170,44 @@ impl DedupMatchMode {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ExportFormatChoice {
+    name: String,
+    title: String,
+    default_extension: String,
+}
+
+impl ExportFormatChoice {
+    fn ndjson() -> Self {
+        Self { name: "ndjson".to_string(), title: "NDJSON".to_string(), default_extension: "ndjson".to_string() }
+    }
+
+    fn from_plugin_name(name: String) -> Self {
+        Self { title: name.to_ascii_uppercase(), default_extension: name.clone(), name }
+    }
+
+    fn label(&self) -> &str {
+        self.name.as_str()
+    }
+
+    fn title(&self) -> &str {
+        self.title.as_str()
+    }
+
+    fn default_extension(&self) -> &str {
+        self.default_extension.as_str()
+    }
+}
+
+fn discover_export_format_choices(exporters: &ExporterRegistry) -> Vec<ExportFormatChoice> {
+    let mut out = vec![ExportFormatChoice::ndjson()];
+    let mut plugins = exporters.available_formats().into_iter().filter(|name| name != "ndjson").collect::<Vec<_>>();
+    plugins.sort();
+    plugins.dedup();
+    out.extend(plugins.into_iter().map(ExportFormatChoice::from_plugin_name));
+    out
+}
+
 struct ActiveScan {
     rx: Receiver<ScanUpdate>,
     cancel: Arc<AtomicBool>,
@@ -206,6 +246,8 @@ struct FieldFilterState {
 struct ViewApp {
     input: PathBuf,
     hex_payload: bool,
+    exporters: ExporterRegistry,
+    export_formats: Vec<ExportFormatChoice>,
     focus: Focus,
     filter_mode: FilterMode,
     query_input: String,
@@ -224,6 +266,7 @@ struct ViewApp {
     save_filename: String,
     save_filename_cursor: usize,
     save_message: Option<String>,
+    export_format_index: usize,
     export_filename: String,
     export_filename_cursor: usize,
     export_range: String,
@@ -247,6 +290,8 @@ struct ViewApp {
 
 impl ViewApp {
     fn new(args: ViewArgs) -> Result<Self> {
+        let exporters = ExporterRegistry::discover();
+        let export_formats = discover_export_format_choices(&exporters);
         let catalog: Arc<std::sync::Mutex<Option<FieldCatalog>>> = Arc::new(std::sync::Mutex::new(None));
         let catalog_bg = Arc::clone(&catalog);
         let input_bg = args.input.clone();
@@ -259,6 +304,8 @@ impl ViewApp {
         Ok(Self {
             input: args.input,
             hex_payload: args.hex_payload,
+            exporters,
+            export_formats,
             focus: Focus::Search,
             filter_mode: FilterMode::Strings,
             query_input: String::new(),
@@ -277,11 +324,12 @@ impl ViewApp {
             save_filename: String::new(),
             save_filename_cursor: 0,
             save_message: None,
+            export_format_index: 0,
             export_filename: String::new(),
             export_filename_cursor: 0,
             export_range: "all".to_string(),
             export_range_cursor: 3,
-            export_field: ExportField::Filename,
+            export_field: ExportField::Format,
             export_message: None,
             current_scan: None,
             field_catalog: catalog,
@@ -459,35 +507,43 @@ impl ViewApp {
             }
             KeyCode::Tab | KeyCode::Up | KeyCode::Down => {
                 self.export_field = match self.export_field {
+                    ExportField::Format => ExportField::Filename,
                     ExportField::Filename => ExportField::Range,
-                    ExportField::Range => ExportField::Filename,
+                    ExportField::Range => ExportField::Format,
                 };
             }
             KeyCode::Backspace => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => delete_char_before(&mut self.export_filename, &mut self.export_filename_cursor),
                 ExportField::Range => delete_char_before(&mut self.export_range, &mut self.export_range_cursor),
             },
             KeyCode::Delete => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => delete_char_at(&mut self.export_filename, self.export_filename_cursor),
                 ExportField::Range => delete_char_at(&mut self.export_range, self.export_range_cursor),
             },
             KeyCode::Left => match self.export_field {
+                ExportField::Format => self.cycle_export_format(-1),
                 ExportField::Filename => self.export_filename_cursor = self.export_filename_cursor.saturating_sub(1),
                 ExportField::Range => self.export_range_cursor = self.export_range_cursor.saturating_sub(1),
             },
             KeyCode::Right => match self.export_field {
+                ExportField::Format => self.cycle_export_format(1),
                 ExportField::Filename => self.export_filename_cursor = (self.export_filename_cursor + 1).min(char_count(&self.export_filename)),
                 ExportField::Range => self.export_range_cursor = (self.export_range_cursor + 1).min(char_count(&self.export_range)),
             },
             KeyCode::Home => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => self.export_filename_cursor = 0,
                 ExportField::Range => self.export_range_cursor = 0,
             },
             KeyCode::End => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => self.export_filename_cursor = char_count(&self.export_filename),
                 ExportField::Range => self.export_range_cursor = char_count(&self.export_range),
             },
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => {
                     self.export_filename.clear();
                     self.export_filename_cursor = 0;
@@ -497,7 +553,11 @@ impl ViewApp {
                     self.export_range_cursor = 0;
                 }
             },
+            KeyCode::Char(' ') if self.export_field == ExportField::Format => {
+                self.cycle_export_format(1);
+            }
             KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => match self.export_field {
+                ExportField::Format => {}
                 ExportField::Filename => insert_char_at(&mut self.export_filename, &mut self.export_filename_cursor, ch),
                 ExportField::Range => insert_char_at(&mut self.export_range, &mut self.export_range_cursor, ch),
             },
@@ -658,17 +718,21 @@ impl ViewApp {
             self.status = "Wait for the scan to finish before exporting.".to_string();
             return Ok(());
         }
+        self.export_formats = discover_export_format_choices(&self.exporters);
         self.export_message = None;
+        let default_ext = self.current_export_format().default_extension().to_string();
         if self.export_filename.is_empty() {
             let stem = self.input.file_stem().and_then(|s| s.to_str()).unwrap_or("export");
-            self.export_filename = format!("{stem}.json");
+            self.export_filename = format!("{stem}.{default_ext}");
+        } else {
+            self.sync_export_filename_extension();
         }
         if self.export_range.is_empty() {
             self.export_range = "all".to_string();
         }
         self.export_filename_cursor = char_count(&self.export_filename);
         self.export_range_cursor = char_count(&self.export_range);
-        self.export_field = ExportField::Filename;
+        self.export_field = ExportField::Format;
         self.focus = Focus::ExportPrompt;
         Ok(())
     }
@@ -731,11 +795,6 @@ impl ViewApp {
             return Ok(());
         }
 
-        let Some(scan) = &mut self.current_scan else {
-            self.export_message = Some("No scan data to export.".to_string());
-            return Ok(());
-        };
-
         let selected = parse_export_selection(&self.export_range, self.entries.len(), self.selected).map_err(Error::Usage);
         let (start, end) = match selected {
             Ok(range) => range,
@@ -754,22 +813,75 @@ impl ViewApp {
             return Ok(());
         }
 
-        let mut out = OpenOptions::new().write(true).create_new(true).open(&output_path)?;
+        let format = self.current_export_format().clone();
+        let selected_entries = self.entries[start..end].to_vec();
         let mut exported = 0usize;
-        for meta in self.entries[start..end].iter().copied() {
-            let detail = read_spool_record(&mut scan.spool_reader, meta)?;
-            for object in export_ndjson_objects(&detail) {
-                serde_json::to_writer(&mut out, &object).map_err(|e| Error::Usage(e.to_string()))?;
-                out.write_all(b"\n")?;
-                exported += 1;
+        match format.label() {
+            "ndjson" => {
+                let Some(scan) = &mut self.current_scan else {
+                    self.export_message = Some("No scan data to export.".to_string());
+                    return Ok(());
+                };
+                let mut out = OpenOptions::new().write(true).create_new(true).open(&output_path)?;
+                for meta in selected_entries.iter().copied() {
+                    let detail = read_spool_record(&mut scan.spool_reader, meta)?;
+                    for object in export_ndjson_objects(&detail) {
+                        serde_json::to_writer(&mut out, &object).map_err(|e| Error::Usage(e.to_string()))?;
+                        out.write_all(b"\n")?;
+                        exported += 1;
+                    }
+                }
+                out.flush()?;
+            }
+            other => {
+                let temp_input = {
+                    let Some(scan) = &mut self.current_scan else {
+                        self.export_message = Some("No scan data to export.".to_string());
+                        return Ok(());
+                    };
+                    write_export_selection_to_temp_logjet(scan, &selected_entries)?
+                };
+                let plugin = self.exporters.plugin(other).ok_or_else(|| self.exporters.unknown_format_error(other))?;
+                let plugin_result = plugin.export(&temp_input, &output_path, false, &[]);
+                let _ = std::fs::remove_file(&temp_input);
+                plugin_result?;
+                exported = end.saturating_sub(start);
             }
         }
-        out.flush()?;
 
         self.focus = Focus::List;
         self.export_message = None;
-        self.status = format!("Exported {exported} row(s) to {}", output_path.display());
+        self.status = format!("Exported {exported} {} row(s) to {}", format.label(), output_path.display());
         Ok(())
+    }
+
+    fn current_export_format(&self) -> &ExportFormatChoice {
+        &self.export_formats[self.export_format_index.min(self.export_formats.len().saturating_sub(1))]
+    }
+
+    fn cycle_export_format(&mut self, delta: isize) {
+        if self.export_formats.is_empty() {
+            return;
+        }
+        let len = self.export_formats.len() as isize;
+        let idx = self.export_format_index as isize;
+        self.export_format_index = (idx + delta).rem_euclid(len) as usize;
+        self.sync_export_filename_extension();
+    }
+
+    fn sync_export_filename_extension(&mut self) {
+        if self.export_filename.trim().is_empty() {
+            return;
+        }
+        let extension = self.current_export_format().default_extension().to_string();
+        let Some((stem, _)) = self.export_filename.rsplit_once('.') else {
+            self.export_filename.push('.');
+            self.export_filename.push_str(&extension);
+            self.export_filename_cursor = char_count(&self.export_filename);
+            return;
+        };
+        self.export_filename = format!("{stem}.{extension}");
+        self.export_filename_cursor = char_count(&self.export_filename);
     }
 
     fn drain_scan_updates(&mut self) -> Result<()> {
@@ -1373,6 +1485,8 @@ impl ViewApp {
                 &[
                     status_key("TAB"),
                     status_text(" next field   "),
+                    status_key("←/→"),
+                    status_text(" format   "),
                     status_key("ENTER"),
                     status_text(" export   "),
                     status_key("ESC"),
@@ -1471,20 +1585,39 @@ impl ViewApp {
     }
 
     fn render_export_prompt(&self, frame: &mut Frame<'_>) {
-        let area = centered_rect(58, 14, frame.area());
+        let area = centered_rect(62, 16, frame.area());
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(Span::styled(" Export NDJSON ", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)))
+            .title(Span::styled(
+                format!(" Export {} ", self.current_export_format().title()),
+                Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD),
+            ))
             .borders(Borders::ALL)
-            .border_type(BorderType::Plain)
+            .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::White).bg(Color::Gray))
             .style(Style::default().fg(Color::Black).bg(Color::Gray));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
+        let format_label = "Format:   ";
+        let format_width = inner.width.saturating_sub(format_label.chars().count() as u16 + 2);
+        let format_row = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
+        let format_style = if self.export_field == ExportField::Format {
+            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Black).bg(Color::Indexed(250))
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format_label, Style::default().fg(Color::Black).bg(Color::Gray)),
+                Span::styled(fit_to_width(&format!("< {} >", self.current_export_format().label()), format_width as usize), format_style),
+            ])),
+            format_row,
+        );
+
         let filename_label = "Filename: ";
         let filename_width = inner.width.saturating_sub(filename_label.chars().count() as u16 + 2);
-        let filename_row = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
+        let filename_row = Rect { x: inner.x, y: inner.y.saturating_add(2), width: inner.width, height: 1 };
         let filename_style = if self.export_field == ExportField::Filename {
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
@@ -1500,7 +1633,7 @@ impl ViewApp {
 
         let range_label = "Range:    ";
         let range_width = inner.width.saturating_sub(range_label.chars().count() as u16 + 2);
-        let range_row = Rect { x: inner.x, y: inner.y.saturating_add(2), width: inner.width, height: 1 };
+        let range_row = Rect { x: inner.x, y: inner.y.saturating_add(4), width: inner.width, height: 1 };
         let range_style = if self.export_field == ExportField::Range {
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
@@ -1517,8 +1650,8 @@ impl ViewApp {
         let hint_row = Rect { x: inner.x, y: inner.y.saturating_add(5), width: inner.width, height: 3 };
         frame.render_widget(
             Paragraph::new(Text::from(vec![
-                Line::from("Range accepts:"),
-                Line::from("  a / all  |  c / current / 0  |  N  |  N-N"),
+                Line::from("Format: use ←/→ or SPACE to choose (built-in + plugins)"),
+                Line::from("Range:  a / all  |  c / current / 0  |  N  |  N-N"),
                 Line::from("Uses the current filtered view order."),
             ]))
             .style(Style::default().fg(Color::DarkGray).bg(Color::Gray)),
@@ -1526,6 +1659,14 @@ impl ViewApp {
         );
 
         let (cursor_x, cursor_y) = match self.export_field {
+            ExportField::Format => {
+                let x = format_row
+                    .x
+                    .saturating_add(format_label.chars().count() as u16)
+                    .saturating_add(2)
+                    .min(format_row.x.saturating_add(format_label.chars().count() as u16 + format_width));
+                (x, format_row.y)
+            }
             ExportField::Filename => {
                 let x = filename_row
                     .x
@@ -2545,7 +2686,7 @@ fn modal_info_line(key: &str, value: String, key_width: usize, value_width: usiz
     }
 
     let (key_style, value_style) = if is_otlp_attribute_entry(key) && !is_standard_otlp_attribute_entry(key) {
-        // Custom attributes (logjet.*): bold bright-cyan key, bold bright-white value
+        // Custom attributes (demo.*): bold bright-cyan key, bold bright-white value
         (
             Style::default().fg(Color::LightCyan).bg(bg).add_modifier(Modifier::BOLD),
             Style::default().fg(Color::White).bg(bg).add_modifier(Modifier::BOLD),
@@ -2911,6 +3052,20 @@ fn open_temp_spool_pair() -> Result<(PathBuf, File, File)> {
     let spool_reader = OpenOptions::new().read(true).write(true).create_new(true).open(&spool_path)?;
     let spool_writer = OpenOptions::new().read(true).write(true).open(&spool_path)?;
     Ok((spool_path, spool_reader, spool_writer))
+}
+
+fn write_export_selection_to_temp_logjet(scan: &mut ActiveScan, entries: &[EntryMeta]) -> Result<PathBuf> {
+    let temp_input = create_temp_path()?;
+    let file = OpenOptions::new().write(true).create_new(true).open(&temp_input)?;
+    let writer = BufWriter::new(file);
+    let mut logjet = LogjetWriter::with_config(writer, WriterConfig::default());
+    for meta in entries.iter().copied() {
+        let detail = read_spool_record(&mut scan.spool_reader, meta)?;
+        logjet.push(detail.meta.record_type, detail.meta.seq, detail.meta.ts_unix_ns, &detail.payload)?;
+    }
+    let mut writer = logjet.into_inner()?;
+    writer.flush()?;
+    Ok(temp_input)
 }
 
 #[cfg(test)]

@@ -5,8 +5,28 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace]
-members = [".", "logjetd", "demo", "ljx", "liblogjet", "plugins/syslog-ingest", "plugins/logcat-ingest", "plugins/stress-ingest"]
-default-members = [".", "logjetd", "demo", "ljx", "liblogjet", "plugins/syslog-ingest", "plugins/logcat-ingest", "plugins/stress-ingest"]
+members = [
+	".",
+	"logjetd",
+	"demo",
+	"ljx",
+	"liblogjet",
+	"plugins/syslog-ingest",
+	"plugins/logcat-ingest",
+	"plugins/stress-ingest",
+	"plugins/parquet-exporter",
+]
+default-members = [
+	".",
+	"logjetd",
+	"demo",
+	"ljx",
+	"liblogjet",
+	"plugins/syslog-ingest",
+	"plugins/logcat-ingest",
+	"plugins/stress-ingest",
+	"plugins/parquet-exporter",
+]
 
 [profile.release]
 lto = true
@@ -22,5 +42,7 @@ lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
 zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
-opentelemetry-proto = { version = "0.28", features = ["gen-tonic", "logs"] }
-prost = "0.13"
+arrow-array = "58.0.0"
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs"] }
+parquet = { version = "58.0.0", default-features = false, features = ["arrow", "zstd"] }
+prost = "0.14"

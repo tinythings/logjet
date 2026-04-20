@@ -100,7 +100,7 @@ fn modal_info_lists_otlp_attributes() {
                     name: "liblogjet".to_string(),
                     version: String::new(),
                     attributes: vec![KeyValue {
-                        key: "logjet.channel".to_string(),
+                        key: "demo.channel".to_string(),
                         value: Some(AnyValue {
                             value: Some(Value::ArrayValue(opentelemetry_proto::tonic::common::v1::ArrayValue {
                                 values: vec![
@@ -141,7 +141,7 @@ fn modal_info_lists_otlp_attributes() {
 
     let entries = render_modal_info_entries(&detail);
     assert!(entries.iter().any(|(key, value)| key == "resource.service.name" && value == "cpp-appliance"));
-    assert!(entries.iter().any(|(key, value)| key == "scope.logjet.channel" && value == "de"));
+    assert!(entries.iter().any(|(key, value)| key == "scope.demo.channel" && value == "de"));
     assert!(entries.iter().any(|(key, value)| key.is_empty() && value == "eso"));
     assert!(entries.iter().any(|(key, value)| key == "record.character" && value == "Bender"));
 }
@@ -299,7 +299,7 @@ fn write_test_logjet_rows(path: &std::path::Path, rows: &[(&str, &[&str], &str)]
                         name: "fake-scope".to_string(),
                         version: String::new(),
                         attributes: vec![KeyValue {
-                            key: "logjet.channel".to_string(),
+                            key: "demo.channel".to_string(),
                             value: Some(AnyValue {
                                 value: Some(Value::ArrayValue(opentelemetry_proto::tonic::common::v1::ArrayValue {
                                     values: channel.iter().map(|part| AnyValue { value: Some(Value::StringValue((*part).to_string())) }).collect(),
@@ -500,9 +500,9 @@ fn dedup_progress_enter_opens_output_and_sets_status() {
 }
 
 #[test]
-fn export_prompt_defaults_to_json_and_all() {
+fn export_prompt_defaults_to_ndjson_and_all() {
     let input = create_temp_path().unwrap();
-    write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "logjet.log.utf8")]);
+    write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "demo.log.utf8")]);
 
     let mut app = make_view_app(input.clone());
     app.apply_filter().unwrap();
@@ -510,8 +510,29 @@ fn export_prompt_defaults_to_json_and_all() {
     app.open_export_prompt().unwrap();
 
     assert!(matches!(app.focus, Focus::ExportPrompt));
-    assert!(app.export_filename.ends_with(".json"));
+    assert!(app.export_filename.ends_with(".ndjson"));
     assert_eq!(app.export_range, "all");
+
+    let _ = std::fs::remove_file(input);
+}
+
+#[test]
+fn export_format_cycle_updates_filename_extension() {
+    let input = create_temp_path().unwrap();
+    write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "demo.log.utf8")]);
+
+    let mut app = make_view_app(input.clone());
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+    app.export_formats = vec![super::ExportFormatChoice::ndjson(), super::ExportFormatChoice::from_plugin_name("parquet".to_string())];
+    app.export_format_index = 0;
+    app.export_filename = "export-out.ndjson".to_string();
+    app.export_filename_cursor = app.export_filename.len();
+
+    app.cycle_export_format(1);
+
+    assert_eq!(app.current_export_format().label(), "parquet");
+    assert_eq!(app.export_filename, "export-out.parquet");
 
     let _ = std::fs::remove_file(input);
 }
@@ -519,7 +540,7 @@ fn export_prompt_defaults_to_json_and_all() {
 #[test]
 fn export_prompt_supports_cursor_navigation_and_mid_string_editing() {
     let input = create_temp_path().unwrap();
-    write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "logjet.log.utf8")]);
+    write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "demo.log.utf8")]);
 
     let mut app = make_view_app(input.clone());
     app.apply_filter().unwrap();
@@ -564,28 +585,28 @@ fn export_selection_accepts_all_amount_and_range() {
 #[test]
 fn export_current_results_writes_ndjson_from_filtered_view() {
     let input = create_temp_path().unwrap();
-    let output = input.parent().unwrap().join("export-out.json");
+    let output = input.parent().unwrap().join("export-out.ndjson");
     write_test_logjet_rows(
         &input,
         &[
-            ("first gps", &["AndroidGeoLocationListener"], "logjet.log.utf8"),
-            ("second gps", &["AndroidGeoLocationListener"], "logjet.log.utf8"),
-            ("third gps", &["AndroidGeoLocationListener"], "logjet.log.utf8"),
+            ("first gps", &["AndroidGeoLocationListener"], "demo.log.utf8"),
+            ("second gps", &["AndroidGeoLocationListener"], "demo.log.utf8"),
+            ("third gps", &["AndroidGeoLocationListener"], "demo.log.utf8"),
         ],
     );
 
     let mut app = make_view_app(input.clone());
     app.apply_filter().unwrap();
     wait_for_scan(&mut app);
-    app.export_filename = "export-out.json".to_string();
+    app.export_filename = "export-out.ndjson".to_string();
     app.export_range = "2-3".to_string();
     app.export_current_results().unwrap();
 
     let docs = read_ndjson(&output);
     assert_eq!(docs.len(), 2);
     assert_eq!(docs[0]["body"], "second gps");
-    assert_eq!(docs[0]["event_name"], "logjet.log.utf8");
-    assert_eq!(docs[0]["logjet_channel"][0], "AndroidGeoLocationListener");
+    assert_eq!(docs[0]["event_name"], "demo.log.utf8");
+    assert_eq!(docs[0]["demo_channel"][0], "AndroidGeoLocationListener");
     assert_eq!(docs[1]["body"], "third gps");
 
     let _ = std::fs::remove_file(input);
@@ -595,13 +616,13 @@ fn export_current_results_writes_ndjson_from_filtered_view() {
 #[test]
 fn export_current_results_can_export_selected_row_only() {
     let input = create_temp_path().unwrap();
-    let output = input.parent().unwrap().join("export-current.json");
+    let output = input.parent().unwrap().join("export-current.ndjson");
     write_test_logjet_rows(
         &input,
         &[
-            ("first gps", &["AndroidGeoLocationListener"], "logjet.log.utf8"),
-            ("second gps", &["AndroidGeoLocationListener"], "logjet.log.utf8"),
-            ("third gps", &["AndroidGeoLocationListener"], "logjet.log.utf8"),
+            ("first gps", &["AndroidGeoLocationListener"], "demo.log.utf8"),
+            ("second gps", &["AndroidGeoLocationListener"], "demo.log.utf8"),
+            ("third gps", &["AndroidGeoLocationListener"], "demo.log.utf8"),
         ],
     );
 
@@ -609,7 +630,7 @@ fn export_current_results_can_export_selected_row_only() {
     app.apply_filter().unwrap();
     wait_for_scan(&mut app);
     app.selected = 1;
-    app.export_filename = "export-current.json".to_string();
+    app.export_filename = "export-current.ndjson".to_string();
     app.export_range = "current".to_string();
     app.export_current_results().unwrap();
 

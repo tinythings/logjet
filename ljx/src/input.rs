@@ -55,7 +55,29 @@ impl Drop for InputHandle {
 }
 
 pub fn open_output(path: &Path) -> Result<Box<dyn Write>> {
-    if path == Path::new("-") { Ok(Box::new(BufWriter::new(io::stdout().lock()))) } else { Ok(Box::new(BufWriter::new(File::create(path)?))) }
+    open_output_with_policy(path, true)
+}
+
+pub fn open_output_with_policy(path: &Path, overwrite: bool) -> Result<Box<dyn Write>> {
+    if path == Path::new("-") {
+        return Ok(Box::new(BufWriter::new(io::stdout().lock())));
+    }
+
+    let mut options = OpenOptions::new();
+    options.write(true);
+    if overwrite {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+
+    match options.open(path) {
+        Ok(file) => Ok(Box::new(BufWriter::new(file))),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            Err(Error::Usage(format!("output file {} already exists; use --force to overwrite", path.display())))
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn create_temp_path() -> Result<PathBuf> {
