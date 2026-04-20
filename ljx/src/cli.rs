@@ -14,8 +14,8 @@ use crate::predicate::PredicateArgs;
     long_about = None
 )]
 pub struct Cli {
-    #[arg(short = 'x', long = "export", value_enum, requires_all = ["input", "output"], help = "Export one .logjet input to another format")]
-    pub export: Option<ExportFormat>,
+    #[arg(short = 'x', long = "export", value_name = "FORMAT", value_parser = parse_export_name, requires_all = ["input", "output"], help = "Export one .logjet input to a built-in or plugin format")]
+    pub export: Option<String>,
 
     #[arg(short, long, value_name = "OUTPUT", requires = "export", help = "Output file or - for stdout")]
     pub output: Option<PathBuf>,
@@ -47,8 +47,20 @@ pub fn build_cli() -> clap::Command {
             "{appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT>"
         ))
         .after_help(
-            "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson",
+            "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson\n\nPlugin exporters are discovered from LJX_EXPORTER_PATH, then ./exporters, then <exe>/exporters, then <exe>/../lib/logjet/exporters.",
         )
+}
+
+fn parse_export_name(value: &str) -> std::result::Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err("export format must not be empty".to_string());
+    }
+    if normalized.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')) {
+        Ok(normalized)
+    } else {
+        Err("export format must use only lowercase letters, digits, '-' or '_'".to_string())
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

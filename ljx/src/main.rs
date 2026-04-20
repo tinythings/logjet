@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod dedup;
 mod error;
+mod exporter;
 mod input;
 mod predicate;
 
@@ -21,7 +22,7 @@ fn run() -> Result<()> {
     let mut command = cli::build_cli();
     let mut matches = command.get_matches_mut();
     let cli = Cli::from_arg_matches_mut(&mut matches).map_err(|err| crate::error::Error::Usage(err.to_string()))?;
-    if let Some(format) = cli.export {
+    if let Some(format) = cli.export.as_deref() {
         let input = cli.input.ok_or_else(|| Error::Usage("missing export input; use `ljx --export <format> <input> -o <output>`".to_string()))?;
         let output = cli.output.ok_or_else(|| Error::Usage("missing export output; use `ljx --export <format> <input> -o <output>`".to_string()))?;
         return commands::export::run(format, &input, &output);

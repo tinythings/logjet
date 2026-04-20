@@ -907,6 +907,8 @@ dependencies = [
  "clap",
  "colored",
  "crossterm",
+ "libloading",
+ "liblogjet",
  "logjet",
  "opentelemetry-proto 0.31.0",
  "prost 0.14.3",

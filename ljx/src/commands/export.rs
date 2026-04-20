@@ -14,14 +14,21 @@ use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use prost::Message;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
-use crate::cli::ExportFormat;
 use crate::error::{Error, Result};
+use crate::exporter::ExporterRegistry;
 use crate::input::{InputHandle, open_output};
 
 /// Run the top-level export flow for one input file.
-pub fn run(format: ExportFormat, input: &Path, output: &Path) -> Result<()> {
+pub fn run(format: &str, input: &Path, output: &Path) -> Result<()> {
     match format {
-        ExportFormat::Ndjson => run_ndjson(input, output),
+        "ndjson" => run_ndjson(input, output),
+        other => {
+            let registry = ExporterRegistry::discover();
+            let Some(plugin) = registry.plugin(other) else {
+                return Err(registry.unknown_format_error(other));
+            };
+            plugin.export(input, output)
+        }
     }
 }
 
