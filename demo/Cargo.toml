@@ -7,9 +7,13 @@ license = "Apache-2.0"
 [dependencies]
 colored = "3"
 logjet = { path = ".." }
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs"] }
 prost = "0.14"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+] }
 rustls-pemfile = "2"
 tiny_http = "0.12"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
