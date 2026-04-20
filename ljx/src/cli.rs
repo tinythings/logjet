@@ -14,8 +14,17 @@ use crate::predicate::PredicateArgs;
     long_about = None
 )]
 pub struct Cli {
+    #[arg(short = 'x', long = "export", value_enum, requires_all = ["input", "output"], help = "Export one .logjet input to another format")]
+    pub export: Option<ExportFormat>,
+
+    #[arg(short, long, value_name = "OUTPUT", requires = "export", help = "Output file or - for stdout")]
+    pub output: Option<PathBuf>,
+
+    #[arg(value_name = "INPUT", requires = "export", help = "Input .logjet file or - for stdin")]
+    pub input: Option<PathBuf>,
+
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 pub fn build_cli() -> clap::Command {
@@ -27,6 +36,7 @@ pub fn build_cli() -> clap::Command {
         .placeholder(styling::AnsiColor::BrightMagenta.on_default());
 
     Cli::command()
+        .arg_required_else_help(true)
         .styles(styles)
         .about(format!(
             "{} - {}",
@@ -34,11 +44,16 @@ pub fn build_cli() -> clap::Command {
             "offline toolbox for .logjet streams"
         ))
         .override_usage(format!(
-            "{appname} <COMMAND> [OPTIONS] [ARGS]"
+            "{appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT>"
         ))
         .after_help(
-            "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet",
+            "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson",
         )
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ExportFormat {
+    Ndjson,
 }
 
 #[derive(Debug, Subcommand)]
@@ -195,24 +210,5 @@ impl From<OutputCodec> for logjet::Codec {
 }
 
 #[cfg(test)]
-mod cli_utst {
-    use super::{Cli, Command, DedupBehaviorArg, DedupMatchArg};
-    use clap::Parser;
-
-    #[test]
-    fn dedup_defaults_to_distinct_canon() {
-        let cli = Cli::try_parse_from(["ljx", "dedup", "input.logjet", "-o", "out.logjet"]).expect("cli parses");
-        let Command::Dedup(args) = cli.command else { panic!("expected dedup command") };
-        assert!(matches!(args.mode, DedupBehaviorArg::Distinct));
-        assert!(matches!(args.matcher, DedupMatchArg::Canon));
-    }
-
-    #[test]
-    fn dedup_accepts_collapse_and_full_matcher() {
-        let cli =
-            Cli::try_parse_from(["ljx", "dedup", "input.logjet", "-o", "out.logjet", "--mode", "collapse", "--match", "full"]).expect("cli parses");
-        let Command::Dedup(args) = cli.command else { panic!("expected dedup command") };
-        assert!(matches!(args.mode, DedupBehaviorArg::Collapse));
-        assert!(matches!(args.matcher, DedupMatchArg::Full));
-    }
-}
+#[path = "cli_utst.rs"]
+mod cli_utst;
