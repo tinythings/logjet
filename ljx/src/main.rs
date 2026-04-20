@@ -25,7 +25,7 @@ fn run() -> Result<()> {
     if let Some(format) = cli.export.as_deref() {
         let input = cli.input.ok_or_else(|| Error::Usage("missing export input; use `ljx --export <format> <input> -o <output>`".to_string()))?;
         let output = cli.output.ok_or_else(|| Error::Usage("missing export output; use `ljx --export <format> <input> -o <output>`".to_string()))?;
-        return commands::export::run(format, &input, &output);
+        return commands::export::run(format, &input, &output, cli.force);
     }
 
     match cli.command {

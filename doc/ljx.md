@@ -215,6 +215,31 @@ Expected properties:
 - deterministic for exact and hash2 modes (same input, same output)
 - full mode is order-dependent (Drain3 produces different templates for different input orders)
 
+## `ljx --export`
+
+`ljx` can export one `.logjet` file to a non-logjet format through either a
+built-in exporter or a discovered exporter plugin.
+
+Current formats:
+
+- built-in: `ndjson`
+- plugin: `parquet` when the Parquet exporter `.so` is discoverable
+
+Example:
+
+```text
+ljx --export parquet telemetry.logjet -o telemetry.parquet --force
+```
+
+Important behaviour:
+
+- export is streaming and preserves input record order
+- the host owns the output file and passes bytes through callbacks to the plugin
+- if the output file already exists, `--force` is required to overwrite it
+- plugin discovery order and ABI rules are documented in `doc/parquet/exporters-abi.md`
+- Parquet-specific usage, schema, installation, and limits are documented in
+  `doc/parquet/export-parquet.md`
+
 ## Implementation Notes
 
 The simplest useful internal shape for `ljx` is:

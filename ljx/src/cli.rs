@@ -29,6 +29,9 @@ pub struct Cli {
     #[arg(short, long, value_name = "OUTPUT", requires = "export", help = "Output file or - for stdout")]
     pub output: Option<PathBuf>,
 
+    #[arg(long = "force", requires = "export", help = "Overwrite output file if it already exists")]
+    pub force: bool,
+
     #[arg(value_name = "INPUT", requires = "export", help = "Input .logjet file or - for stdin")]
     pub input: Option<PathBuf>,
 
@@ -48,13 +51,13 @@ pub fn build_cli() -> clap::Command {
         .usage(styling::AnsiColor::Yellow.on_default())
         .literal(styling::AnsiColor::BrightGreen.on_default())
         .placeholder(styling::AnsiColor::BrightMagenta.on_default());
-    let after_help = "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson";
+    let after_help = "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson\n  ljx --export parquet telemetry.logjet -o telemetry.parquet --force";
 
     Cli::command()
         .arg_required_else_help(true)
         .styles(styles)
         .about(format!("{} - {}", appname.bright_magenta().bold(), "offline toolbox for .logjet streams"))
-        .override_usage(format!("{appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT>"))
+        .override_usage(format!("{appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT> [--force]"))
         .mut_arg("export", |arg| arg.help(&export_help).long_help(&export_help))
         .after_help(after_help)
 }

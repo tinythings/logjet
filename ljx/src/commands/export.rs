@@ -16,26 +16,26 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::error::{Error, Result};
 use crate::exporter::ExporterRegistry;
-use crate::input::{InputHandle, open_output};
+use crate::input::{InputHandle, open_output_with_policy};
 
 /// Run the top-level export flow for one input file.
-pub fn run(format: &str, input: &Path, output: &Path) -> Result<()> {
+pub fn run(format: &str, input: &Path, output: &Path, force: bool) -> Result<()> {
     match format {
-        "ndjson" => run_ndjson(input, output),
+        "ndjson" => run_ndjson(input, output, force),
         other => {
             let registry = ExporterRegistry::discover();
             let Some(plugin) = registry.plugin(other) else {
                 return Err(registry.unknown_format_error(other));
             };
-            plugin.export(input, output)
+            plugin.export(input, output, force, &[])
         }
     }
 }
 
-fn run_ndjson(input: &Path, output: &Path) -> Result<()> {
+fn run_ndjson(input: &Path, output: &Path, force: bool) -> Result<()> {
     let input = InputHandle::open(input)?;
     let mut reader = LogjetReader::new(input.into_buf_reader());
-    let mut output = open_output(output)?;
+    let mut output = open_output_with_policy(output, force)?;
 
     while let Some(record) = reader.next_record()? {
         for row in export_ndjson_objects(&record) {
