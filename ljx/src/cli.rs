@@ -15,7 +15,15 @@ use crate::predicate::PredicateArgs;
     long_about = None
 )]
 pub struct Cli {
-    #[arg(short = 'x', long = "export", value_name = "FORMAT", value_parser = parse_export_name, requires_all = ["input", "output"], help = "Export one .logjet input to a built-in or plugin format")]
+    #[arg(
+        short = 'x',
+        long = "export",
+        value_name = "FORMAT",
+        value_parser = parse_export_name,
+        requires_all = ["input", "output"],
+        help = "Export one .logjet input to a built-in or plugin format",
+        long_help = "Export one .logjet input to a built-in or plugin format"
+    )]
     pub export: Option<String>,
 
     #[arg(short, long, value_name = "OUTPUT", requires = "export", help = "Output file or - for stdout")]
@@ -31,22 +39,23 @@ pub struct Cli {
 pub fn build_cli() -> clap::Command {
     let appname = "ljx";
     let exporters = ExporterRegistry::discover();
-    let formats = exporters.available_formats();
+    let builtins = built_in_export_formats();
+    let plugins = exporters.available_formats().into_iter().filter(|name| !builtins.iter().any(|builtin| builtin == name)).collect::<Vec<_>>();
+    let all_formats = builtins.iter().cloned().chain(plugins.iter().cloned()).collect::<Vec<_>>();
+    let export_help = format!("Export one .logjet input to a built-in or plugin format: {}", all_formats.join(", "));
     let styles = styling::Styles::styled()
         .header(styling::AnsiColor::Yellow.on_default())
         .usage(styling::AnsiColor::Yellow.on_default())
         .literal(styling::AnsiColor::BrightGreen.on_default())
         .placeholder(styling::AnsiColor::BrightMagenta.on_default());
-    let after_help = format!(
-        "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson\n\nAvailable export formats now: {}\n\nPlugin exporters are discovered from LJX_EXPORTER_PATH, then ./exporters, then <exe>/exporters, then <exe>/../lib/logjet/exporters.",
-        formats.join(", ")
-    );
+    let after_help = "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson";
 
     Cli::command()
         .arg_required_else_help(true)
         .styles(styles)
         .about(format!("{} - {}", appname.bright_magenta().bold(), "offline toolbox for .logjet streams"))
         .override_usage(format!("{appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT>"))
+        .mut_arg("export", |arg| arg.help(&export_help).long_help(&export_help))
         .after_help(after_help)
 }
 
@@ -60,6 +69,10 @@ fn parse_export_name(value: &str) -> std::result::Result<String, String> {
     } else {
         Err("export format must use only lowercase letters, digits, '-' or '_'".to_string())
     }
+}
+
+fn built_in_export_formats() -> Vec<String> {
+    ExportFormat::value_variants().iter().filter_map(|value| value.to_possible_value().map(|pv| pv.get_name().to_string())).collect()
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

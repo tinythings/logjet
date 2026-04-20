@@ -31,5 +31,8 @@ fn top_level_export_parses() {
 #[test]
 fn help_lists_current_export_formats() {
     let help = build_cli().render_long_help().to_string();
-    assert!(help.contains("Available export formats now: ndjson"));
+    assert!(help.contains("-x, --export <FORMAT>  Export one .logjet input to a built-in or plugin format: ndjson"));
+    assert!(!help.contains("Built-in export formats:"));
+    assert!(!help.contains("Discovered plugin export formats:"));
+    assert!(!help.contains("All export formats now:"));
 }
