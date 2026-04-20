@@ -19,3 +19,6 @@ jobs:
 
       - name: Build release binaries
         run: make
+
+      - name: Smoke test release exporter loading
+        run: make test-exporter-release-smoke

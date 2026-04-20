@@ -5,6 +5,7 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 DEFAULT_TOOLCHAIN=$(awk -F'"' '/channel = / { print $2; exit }' "$ROOT_DIR/rust-toolchain.toml")
 HOST_TOOLCHAIN=${HOST_TOOLCHAIN:-$DEFAULT_TOOLCHAIN}
 PLUGIN_TOOLCHAIN=${PLUGIN_TOOLCHAIN:-stable}
+PROFILE=${PROFILE:-debug}
 INPUT=${INPUT:-$ROOT_DIR/logs/cpp-demo.logjet}
 
 sanitize() {
@@ -13,9 +14,10 @@ sanitize() {
 
 host_tag=$(sanitize "$HOST_TOOLCHAIN")
 plugin_tag=$(sanitize "$PLUGIN_TOOLCHAIN")
-host_target_dir=${HOST_TARGET_DIR:-$ROOT_DIR/target/abi-matrix/host-$host_tag}
-plugin_target_dir=${PLUGIN_TARGET_DIR:-$ROOT_DIR/target/abi-matrix/plugin-$plugin_tag}
-run_dir=${RUN_DIR:-$ROOT_DIR/target/abi-matrix/run-host-$host_tag-plugin-$plugin_tag}
+profile_tag=$(sanitize "$PROFILE")
+host_target_dir=${HOST_TARGET_DIR:-$ROOT_DIR/target/abi-matrix/$profile_tag-host-$host_tag}
+plugin_target_dir=${PLUGIN_TARGET_DIR:-$ROOT_DIR/target/abi-matrix/$profile_tag-plugin-$plugin_tag}
+run_dir=${RUN_DIR:-$ROOT_DIR/target/abi-matrix/run-$profile_tag-host-$host_tag-plugin-$plugin_tag}
 
 ensure_toolchain() {
     local tc=$1
@@ -40,20 +42,26 @@ shared_library_name() {
 ensure_toolchain "$HOST_TOOLCHAIN"
 ensure_toolchain "$PLUGIN_TOOLCHAIN"
 
+build_args=()
+profile_dir=$PROFILE
+if [[ "$PROFILE" != "debug" ]]; then
+    build_args+=(--profile "$PROFILE")
+fi
+
 mkdir -p "$run_dir"
 output="$run_dir/cpp-demo.parquet"
 rm -f "$output"
 
 pushd "$ROOT_DIR" >/dev/null
 
-echo "[abi-matrix] building ljx with toolchain $HOST_TOOLCHAIN"
-cargo +"$HOST_TOOLCHAIN" build -p ljx --target-dir "$host_target_dir"
+echo "[abi-matrix] building ljx with toolchain $HOST_TOOLCHAIN profile=$PROFILE"
+cargo +"$HOST_TOOLCHAIN" build -p ljx --target-dir "$host_target_dir" "${build_args[@]}"
 
-echo "[abi-matrix] building ljx-parquet-exporter with toolchain $PLUGIN_TOOLCHAIN"
-cargo +"$PLUGIN_TOOLCHAIN" build -p ljx-parquet-exporter --target-dir "$plugin_target_dir"
+echo "[abi-matrix] building ljx-parquet-exporter with toolchain $PLUGIN_TOOLCHAIN profile=$PROFILE"
+cargo +"$PLUGIN_TOOLCHAIN" build -p ljx-parquet-exporter --target-dir "$plugin_target_dir" "${build_args[@]}"
 
-host_bin="$host_target_dir/debug/ljx"
-plugin_so="$plugin_target_dir/debug/$(shared_library_name)"
+host_bin="$host_target_dir/$profile_dir/ljx"
+plugin_so="$plugin_target_dir/$profile_dir/$(shared_library_name)"
 
 if [[ ! -x "$host_bin" ]]; then
     echo "Host binary missing: $host_bin" >&2
