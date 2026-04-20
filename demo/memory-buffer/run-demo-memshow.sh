@@ -7,7 +7,7 @@ LJD="$TARGET_DIR/ljd"
 EMITTER="$TARGET_DIR/otlp-bofh-emitter"
 COLLECTOR="$TARGET_DIR/otlp-demo-collector"
 FORWARDER="$TARGET_DIR/otlp-wire-forwarder"
-CONFIG="$SCRIPT_DIR/ljd-memshow.conf"
+CONFIG="$SCRIPT_DIR/logjetd-memshow.conf"
 
 for bin in "$LJD" "$EMITTER" "$COLLECTOR" "$FORWARDER"; do
     if [ ! -x "$bin" ]; then
@@ -39,8 +39,8 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     "$EMITTER" 127.0.0.1:4318 --once --message "this message #$i must be kept"
 done
 
-echo "sending 7 BOFH flood messages"
-"$EMITTER" 127.0.0.1:4318 --count 7 --interval-ms 0
+echo "sending 5 BOFH flood messages"
+"$EMITTER" 127.0.0.1:4318 --count 5 --interval-ms 0
 
 echo "starting collector on 127.0.0.1:4320"
 "$COLLECTOR" 127.0.0.1:4320 &
