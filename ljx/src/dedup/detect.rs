@@ -106,5 +106,5 @@ fn strip_json_prefix(body: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "detect_utst.rs"]
+#[path = "../../tests/unit/dedup/detect_utst.rs"]
 mod detect_utst;

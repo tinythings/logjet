@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn parse_rfc3164_basic() {
     let p = parse_syslog("<13>Oct 11 22:14:15 myhost su: pam_unix failed");
-    assert_eq!(p.severity, LJ_SEVERITY_INFO); // facility=1(user), sev=5(notice)
+    assert_eq!(p.severity, LJ_SEVERITY_INFO);
     assert_eq!(p.facility_text, "user");
     assert_eq!(p.hostname, "myhost");
     assert_eq!(p.app_name, "su");
@@ -15,7 +15,7 @@ fn parse_rfc3164_basic() {
 #[test]
 fn parse_rfc3164_with_pid() {
     let p = parse_syslog("<34>Oct 11 22:14:15 box sshd[1234]: accepted key");
-    assert_eq!(p.severity, LJ_SEVERITY_FATAL); // facility=4(auth), sev=2(crit)
+    assert_eq!(p.severity, LJ_SEVERITY_FATAL);
     assert_eq!(p.facility_text, "auth");
     assert_eq!(p.hostname, "box");
     assert_eq!(p.app_name, "sshd");
@@ -25,7 +25,7 @@ fn parse_rfc3164_with_pid() {
 #[test]
 fn parse_rfc5424_prefix() {
     let p = parse_syslog("<165>1 2023-10-11T22:14:15Z myhost myapp - - - boom");
-    assert_eq!(p.severity, LJ_SEVERITY_INFO); // facility=20(local4), sev=5(notice)
+    assert_eq!(p.severity, LJ_SEVERITY_INFO);
     assert_eq!(p.facility_text, "local4");
 }
 

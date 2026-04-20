@@ -788,5 +788,5 @@ fn preallocate_file(file: &File, len: u64) {
 }
 
 #[cfg(test)]
-#[path = "spool_utst.rs"]
+#[path = "../tests/unit/spool_utst.rs"]
 mod spool_utst;

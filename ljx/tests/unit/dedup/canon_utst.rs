@@ -26,7 +26,6 @@ fn make_group(body: &str, service: &str, severity: i32) -> DedupGroup {
 
 #[test]
 fn canon_merges_near_duplicate_json() {
-    // Two JSON bodies differing only by a large request ID.
     let g1 = make_group(r#"{"type":"actionResponse","requestId":123456,"code":200}"#, "svc", 9);
     let g2 = make_group(r#"{"type":"actionResponse","requestId":789012,"code":200}"#, "svc", 9);
     let result = canon_dedup(vec![g1, g2]);
@@ -38,7 +37,6 @@ fn canon_merges_near_duplicate_json() {
 
 #[test]
 fn canon_merges_near_duplicate_freetext() {
-    // Same structure, different hex ID.
     let g1 = make_group("route updated id 48574a68 complete", "svc", 9);
     let g2 = make_group("route updated id 187cc17b complete", "svc", 9);
     let result = canon_dedup(vec![g1, g2]);
@@ -72,13 +70,11 @@ fn canon_keeps_different_structures_separate() {
     let g1 = make_group(r#"{"type":"update","code":200}"#, "svc", 9);
     let g2 = make_group(r#"{"type":"error","code":500}"#, "svc", 9);
     let result = canon_dedup(vec![g1, g2]);
-    // Different small integers (200 vs 500) → different canonical forms.
     assert_eq!(result.len(), 2);
 }
 
 #[test]
 fn canon_respects_bucket_boundaries() {
-    // Same body, different services → different buckets → no merge.
     let g1 = make_group("route updated id 48574a68", "svc-a", 9);
     let g2 = make_group("route updated id 187cc17b", "svc-b", 9);
     let result = canon_dedup(vec![g1, g2]);
@@ -87,7 +83,6 @@ fn canon_respects_bucket_boundaries() {
 
 #[test]
 fn canon_fewer_groups_than_exact() {
-    // 5 groups that are exact-different but canon-same.
     let groups: Vec<_> = (0..5).map(|i: u64| make_group(&format!("request id={:08x} done", 0xdead0000_u64 + i), "svc", 9)).collect();
     let result = canon_dedup(groups);
     assert_eq!(result.len(), 1);

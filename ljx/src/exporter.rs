@@ -594,5 +594,5 @@ fn record_kind_label(record_type: RecordType) -> &'static str {
 }
 
 #[cfg(test)]
-#[path = "exporter_utst.rs"]
+#[path = "../tests/unit/exporter_utst.rs"]
 mod exporter_utst;

@@ -18,8 +18,9 @@ fn ljx_exports_cpp_demo_to_parquet_and_preserves_rows() -> io::Result<()> {
     ensure_export_artifacts_exist()?;
 
     let dir = TestDir::new("ljx-export-parquet")?;
-    let input = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("logs").join("cpp-demo.logjet");
+    let input = dir.path().join("cpp-demo.logjet");
     let output = dir.path().join("cpp-demo.parquet");
+    write_cpp_demo_fixture(&input)?;
     let expected = decode_expected_rows(&input)?;
 
     let export = run_ljx_export(&input, &output)?;
@@ -153,6 +154,18 @@ fn write_large_logjet_fixture(path: &Path, count: u64) -> io::Result<()> {
     let mut writer = LogjetWriter::with_config(file, WriterConfig { codec: Codec::Lz4, ..WriterConfig::default() });
     for i in 0..count {
         let payload = encode_logs_request(&format!("large-row-{i}"), Some("ljx-export-it"))?;
+        writer.push(RecordType::Logs, i + 1, 1_700_000_000_000_000_000 + i, &payload).map_err(io::Error::other)?;
+    }
+    let mut file = writer.into_inner().map_err(io::Error::other)?;
+    file.flush()?;
+    Ok(())
+}
+
+fn write_cpp_demo_fixture(path: &Path) -> io::Result<()> {
+    let file = File::create(path)?;
+    let mut writer = LogjetWriter::with_config(file, WriterConfig { codec: Codec::Lz4, ..WriterConfig::default() });
+    for i in 0..25u64 {
+        let payload = encode_logs_request(&format!("cpp-demo-row-{i}"), Some("hello-cpp"))?;
         writer.push(RecordType::Logs, i + 1, 1_700_000_000_000_000_000 + i, &payload).map_err(io::Error::other)?;
     }
     let mut file = writer.into_inner().map_err(io::Error::other)?;

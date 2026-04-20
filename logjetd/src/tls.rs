@@ -134,5 +134,5 @@ fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
 }
 
 #[cfg(test)]
-#[path = "tls_utst.rs"]
+#[path = "../tests/unit/tls_utst.rs"]
 mod tls_utst;

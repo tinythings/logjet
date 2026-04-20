@@ -237,5 +237,5 @@ impl From<OutputCodec> for logjet::Codec {
 }
 
 #[cfg(test)]
-#[path = "cli_utst.rs"]
+#[path = "../tests/unit/cli_utst.rs"]
 mod cli_utst;

@@ -722,5 +722,5 @@ fn normalise_path(path: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "replay_utst.rs"]
+#[path = "../tests/unit/replay_utst.rs"]
 mod replay_utst;

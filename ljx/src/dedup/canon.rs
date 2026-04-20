@@ -70,5 +70,5 @@ pub(crate) fn canonicalise_body(body: &str) -> (String, String) {
 }
 
 #[cfg(test)]
-#[path = "canon_utst.rs"]
+#[path = "../../tests/unit/dedup/canon_utst.rs"]
 mod canon_utst;

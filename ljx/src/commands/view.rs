@@ -3069,5 +3069,5 @@ fn write_export_selection_to_temp_logjet(scan: &mut ActiveScan, entries: &[Entry
 }
 
 #[cfg(test)]
-#[path = "view_ut.rs"]
+#[path = "../../tests/unit/commands/view_ut.rs"]
 mod view_ut;

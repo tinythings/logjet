@@ -22,5 +22,5 @@ pub use record::{OwnedRecord, Record, RecordType};
 pub use writer::{LogjetWriter, WriterConfig};
 
 #[cfg(test)]
-#[path = "writer_utst.rs"]
+#[path = "../tests/unit/writer_utst.rs"]
 mod writer_utst;

@@ -342,8 +342,6 @@ fn file_config_with_codec(dir: &Path, codec: logjet::Codec) -> FileConfig {
     }
 }
 
-/// Dropping a spool MUST flush all pending data to disk — no silent data loss.
-/// This is critical for automotive/embedded: power loss can happen any time.
 #[test]
 fn drop_flushes_all_zstd() {
     let dir = unique_temp_dir("drop-zstd");
@@ -357,7 +355,6 @@ fn drop_flushes_all_zstd() {
                 .append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: 1_700_000_000_000_000_000 + seq, payload: vec![seq as u8; 200] })
                 .unwrap();
         }
-        // No explicit flush. Drop must handle it.
     }
 
     let recovered = count_readable_records(&dir);
@@ -405,8 +402,6 @@ fn drop_flushes_all_none() {
     fs::remove_dir_all(dir).unwrap();
 }
 
-/// Simulates the plugin client pattern: many rapid appends of variable sizes,
-/// then drop. Must recover every single record.
 #[test]
 fn drop_flushes_rapid_variable_payloads() {
     let dir = unique_temp_dir("drop-variable");
@@ -437,8 +432,6 @@ fn drop_flushes_rapid_variable_payloads() {
     fs::remove_dir_all(dir).unwrap();
 }
 
-/// Full pipeline: build_otlp_payload → FileSpool(Zstd) → read → protobuf decode.
-/// Uses realistic variable-sized records.
 #[test]
 fn plugin_protobuf_survives_spool_round_trip() {
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
@@ -448,8 +441,6 @@ fn plugin_protobuf_survives_spool_round_trip() {
     let config = file_config_with_codec(&dir, logjet::Codec::Zstd);
     let base_ts = 1_700_000_000_000_000_000u64;
 
-    // Build payloads of various sizes — matching real ingest patterns.
-
     let mut expected: Vec<(u64, Vec<u8>)> = Vec::new();
 
     {
@@ -457,11 +448,9 @@ fn plugin_protobuf_survives_spool_round_trip() {
 
         for seq in 1..=200u64 {
             let body_size = match seq % 10 {
-                0 => 3000, // large JSON-like body
-
-                1..=3 => 500, // medium
-
-                _ => 50, // small
+                0 => 3000,
+                1..=3 => 500,
+                _ => 50,
             };
 
             let body: String = (0..body_size).map(|i| (b'A' + (i % 26) as u8) as char).collect();
@@ -484,16 +473,13 @@ fn plugin_protobuf_survives_spool_round_trip() {
                 resource_attrs: &[],
                 scope_attrs: &[],
             });
-            // Sanity: must decode before storing.
             ExportLogsServiceRequest::decode(payload.as_slice()).unwrap_or_else(|e| panic!("seq={seq} pre-store decode failed: {e}"));
 
             spool.append(WireRecord { record_type: RecordType::Logs, seq, ts_unix_ns: base_ts + seq, payload: payload.clone() }).unwrap();
             expected.push((seq, payload));
         }
-        // Drop flushes.
     }
 
-    // Read back and verify every record decodes as valid protobuf.
     let mut recovered = 0usize;
     for entry in fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
@@ -523,7 +509,6 @@ fn plugin_protobuf_survives_spool_round_trip() {
     fs::remove_dir_all(dir).unwrap();
 }
 
-/// Proves that flush_pending before drop recovers everything, any codec.
 #[test]
 fn graceful_flush_recovers_all_zstd() {
     let dir = unique_temp_dir("graceful-zstd");

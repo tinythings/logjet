@@ -92,5 +92,5 @@ fn looks_numericish(token: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "canon_kv_utst.rs"]
+#[path = "../../tests/unit/dedup/canon_kv_utst.rs"]
 mod canon_kv_utst;

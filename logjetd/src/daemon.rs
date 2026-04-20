@@ -520,7 +520,7 @@ fn build_grpc_server_tls_config(ingest_tls: &IngestTlsConfig) -> io::Result<Serv
 }
 
 #[cfg(test)]
-#[path = "daemon_utst.rs"]
+#[path = "../tests/unit/daemon_utst.rs"]
 mod daemon_utst;
 
 fn flush_loop(spool: Arc<SharedSpool>) -> io::Result<()> {

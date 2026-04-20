@@ -266,4 +266,5 @@ fn cstring_lossy(s: &str) -> CString {
 }
 
 #[cfg(test)]
+#[path = "../tests/unit/tests.rs"]
 mod tests;

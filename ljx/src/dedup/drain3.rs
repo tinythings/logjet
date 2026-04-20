@@ -284,5 +284,5 @@ fn collect_cluster_ids(node: &Node, out: &mut Vec<i64>) {
 }
 
 #[cfg(test)]
-#[path = "drain3_utst.rs"]
+#[path = "../../tests/unit/dedup/drain3_utst.rs"]
 mod drain3_utst;

@@ -284,5 +284,5 @@ fn is_quoted(b: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-#[path = "canon_freetext_utst.rs"]
+#[path = "../../tests/unit/dedup/canon_freetext_utst.rs"]
 mod canon_freetext_utst;

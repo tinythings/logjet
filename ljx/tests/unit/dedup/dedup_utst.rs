@@ -55,7 +55,6 @@ fn make_batch(service: &str, records: Vec<LogRecord>) -> ExportLogsServiceReques
     }
 }
 
-/// Write batches into a .logjet buffer and return it as bytes.
 fn write_logjet(batches: &[ExportLogsServiceRequest]) -> Vec<u8> {
     let mut buf = Vec::new();
     {
@@ -71,7 +70,6 @@ fn write_logjet(batches: &[ExportLogsServiceRequest]) -> Vec<u8> {
     buf
 }
 
-/// Run dedup on raw logjet bytes, return output bytes.
 fn run_dedup(input_bytes: &[u8], behavior: DedupMode, match_mode: DedupMatchMode) -> Vec<u8> {
     let cursor = Cursor::new(input_bytes);
     let mut reader = LogjetReader::new(cursor);
@@ -85,7 +83,6 @@ fn run_dedup(input_bytes: &[u8], behavior: DedupMode, match_mode: DedupMatchMode
     out_buf
 }
 
-/// Decode all log groups from output bytes, returning (body, dedup.count) pairs.
 fn read_groups(output_bytes: &[u8]) -> Vec<(String, i64)> {
     let cursor = Cursor::new(output_bytes);
     let mut reader = LogjetReader::new(cursor);
@@ -173,7 +170,6 @@ fn different_severity_stays_separate() {
     let output = run_dedup(&input, DedupMode::Collapse, DedupMatchMode::Exact);
     let groups = read_groups(&output);
 
-    // Same body but different severity → different buckets → 2 groups.
     assert_eq!(groups.len(), 2);
     assert!(groups.iter().all(|(_, c)| *c == 1));
 }
@@ -229,7 +225,6 @@ fn timestamps_first_and_last_correct() {
     let batch = ExportLogsServiceRequest::decode(rec.payload.as_slice()).unwrap();
     let lr = &batch.resource_logs[0].scope_logs[0].log_records[0];
 
-    // time_unix_nano = first_seen (min), observed = last_seen (max).
     assert_eq!(lr.time_unix_nano, 100);
     assert_eq!(lr.observed_time_unix_nano, 900);
 
@@ -245,7 +240,6 @@ fn timestamps_first_and_last_correct() {
 
 #[test]
 fn passthrough_non_log_records() {
-    // Write a log batch + a metrics record.
     let batch = make_batch("svc", vec![make_log_record("placeholder", 9, 100)]);
     let mut buf = Vec::new();
     {
@@ -258,7 +252,6 @@ fn passthrough_non_log_records() {
 
     let output = run_dedup(&buf, DedupMode::Distinct, DedupMatchMode::Exact);
 
-    // Should have 2 records out: 1 deduped log + 1 passthrough metrics.
     let cursor = Cursor::new(&output);
     let mut reader = LogjetReader::new(cursor);
     let mut count = 0;

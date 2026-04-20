@@ -81,7 +81,6 @@ fn bracketed_prefix_with_json_suffix() {
 
 #[test]
 fn source_prefixed_empty_suffix_falls_through() {
-    // Only prefix, no actual body content after it.
     let d = detect("[111:222] fake.cpp:1: ");
     assert_ne!(d.shape, BodyShape::SourcePrefixed);
 }
@@ -94,7 +93,6 @@ fn free_text_catchall() {
 
 #[test]
 fn json_takes_priority_over_kv() {
-    // JSON with key=value-like content inside still detected as JSON.
     let d = detect(r#"{"fake=key":"alpha","other=thing":"beta"}"#);
     assert_eq!(d.shape, BodyShape::Json);
 }

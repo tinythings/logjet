@@ -378,5 +378,5 @@ mod hex {
 }
 
 #[cfg(test)]
-#[path = "dedup_utst.rs"]
+#[path = "../../tests/unit/dedup/dedup_utst.rs"]
 mod dedup_utst;

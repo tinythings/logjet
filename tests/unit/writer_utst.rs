@@ -32,16 +32,9 @@ fn round_trip(codec: Codec, payloads: &[Vec<u8>]) {
 /// Payloads at every nasty size boundary — varint edges, block boundaries, huge.
 fn harsh_payloads() -> Vec<Vec<u8>> {
     let sizes: Vec<usize> = vec![
-        // Tiny
-        0, 1, 2, 7, 8, 15, 16, // Varint boundaries
-        126, 127, 128, 129, 254, 255, 256, 257, // Larger varint boundaries
-        4095, 4096, 4097, 8191, 8192, 8193, 16383, 16384, 16385, 32767, 32768, 32769, // Block target boundary (64 KiB)
-        65534, 65535, 65536, 65537, // Sizes from the actual failure: 350, 477
-        349, 350, 351, 476, 477, 478, // Medium realistic
-        100, 200, 300, 500, 800, 1000, 1500, 2000, 3000, 4000, 5000, // Large realistic payloads
-        10000, 20000, 40000,  // Near double-block
-        130000, // Mix of all zeros, all 0xFF, protobuf-like patterns
-        64, 64, 64, 64,
+        0, 1, 2, 7, 8, 15, 16, 126, 127, 128, 129, 254, 255, 256, 257, 4095, 4096, 4097, 8191, 8192, 8193, 16383, 16384, 16385, 32767, 32768, 32769,
+        65534, 65535, 65536, 65537, 349, 350, 351, 476, 477, 478, 100, 200, 300, 500, 800, 1000, 1500, 2000, 3000, 4000, 5000, 10000, 20000, 40000,
+        130000, 64, 64, 64, 64,
     ];
 
     sizes
@@ -51,7 +44,6 @@ fn harsh_payloads() -> Vec<Vec<u8>> {
             let mut buf = vec![0u8; size];
             match i % 5 {
                 0 => {
-                    // Protobuf-like: field tags + varint lengths
                     for (j, b) in buf.iter_mut().enumerate() {
                         *b = [0x0a, 0xda, 0x03, 0x12, 0xbe, 0x03, 0x09, 0x80][j % 8];
                     }
@@ -59,13 +51,11 @@ fn harsh_payloads() -> Vec<Vec<u8>> {
                 1 => buf.fill(0xFF),
                 2 => buf.fill(0x00),
                 3 => {
-                    // High-entropy pseudorandom
                     for (j, b) in buf.iter_mut().enumerate() {
                         *b = (i.wrapping_mul(131) ^ j.wrapping_mul(251)) as u8;
                     }
                 }
                 _ => {
-                    // ASCII text (syslog-like)
                     for (j, b) in buf.iter_mut().enumerate() {
                         *b = b"the quick brown fox jumps over the lazy dog 0123456789\n"[j % 54];
                     }

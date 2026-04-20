@@ -2,8 +2,6 @@ use serde_json::json;
 
 use crate::dedup::canon_json::{canonicalise_json_to_string, normalise_key};
 
-// normalise_key
-
 #[test]
 fn normalise_key_camel_case() {
     assert_eq!(normalise_key("requestId"), "requestid");
@@ -26,12 +24,9 @@ fn normalise_key_dotted() {
 
 #[test]
 fn normalise_key_no_substring_match() {
-    // "timeout" normalises to "timeout", not "time" — exact match only.
     assert_eq!(normalise_key("timeout"), "timeout");
     assert_eq!(normalise_key("important"), "important");
 }
-
-// String values
 
 #[test]
 fn short_alpha_preserved() {
@@ -69,8 +64,6 @@ fn path_string_replaced() {
     assert!(canon.contains("\"_PATH_\""));
 }
 
-// Number values
-
 #[test]
 fn small_integer_preserved() {
     let input = r#"{"statusCode":200,"gear":3}"#;
@@ -83,8 +76,6 @@ fn small_integer_preserved() {
 fn large_integer_replaced() {
     let input = r#"{"offset":123456}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
-    // "offset" is in the denylist, so replaced regardless.
-    // But even without denylist, 123456 >= 1000 → 0.
     assert!(canon.contains(":0"));
 }
 
@@ -106,7 +97,6 @@ fn negative_large_replaced() {
 fn float_replaced() {
     let input = r#"{"latency":0.184}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
-    // "latency" is in denylist → 0. Even without denylist, float → 0.0.
     assert!(canon.contains(":0"));
 }
 
@@ -118,11 +108,8 @@ fn float_zero_and_one_preserved() {
     assert!(canon.contains("1.0"));
 }
 
-// Key denylist
-
 #[test]
 fn denylist_overrides_small_number() {
-    // "requestId" is in denylist → always normalised, even value=5.
     let input = r#"{"requestId":5}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains(":0"));
@@ -131,7 +118,6 @@ fn denylist_overrides_small_number() {
 
 #[test]
 fn non_denylist_small_number_preserved() {
-    // "statusCode" is NOT in denylist. 200 < 1000 → preserved.
     let input = r#"{"statusCode":200}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains("200"));
@@ -139,7 +125,6 @@ fn non_denylist_small_number_preserved() {
 
 #[test]
 fn denylist_with_underscore_key() {
-    // "request_id" normalises to "requestid" → in denylist.
     let input = r#"{"request_id":7}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
     assert!(canon.contains(":0"));
@@ -153,8 +138,6 @@ fn tasks_counter_is_normalised() {
     assert!(!canon.contains("\"tasks\":8"));
 }
 
-// Bool + null
-
 #[test]
 fn bool_and_null_preserved() {
     let input = r#"{"flag":true,"other":false,"empty":null}"#;
@@ -163,8 +146,6 @@ fn bool_and_null_preserved() {
     assert!(canon.contains("false"));
     assert!(canon.contains("null"));
 }
-
-// Arrays
 
 #[test]
 fn empty_array_preserved() {
@@ -199,8 +180,6 @@ fn mixed_array_collapsed() {
     assert!(canon.contains("mixed"));
 }
 
-// Sorted keys
-
 #[test]
 fn sorted_keys_deterministic() {
     let a = r#"{"z":1,"a":2,"m":3}"#;
@@ -208,7 +187,6 @@ fn sorted_keys_deterministic() {
     let canon_a = canonicalise_json_to_string(a).unwrap();
     let canon_b = canonicalise_json_to_string(b).unwrap();
     assert_eq!(canon_a, canon_b);
-    // "a" should come before "m" before "z".
     let pos_a = canon_a.find("\"a\"").unwrap();
     let pos_m = canon_a.find("\"m\"").unwrap();
     let pos_z = canon_a.find("\"z\"").unwrap();
@@ -216,18 +194,12 @@ fn sorted_keys_deterministic() {
     assert!(pos_m < pos_z);
 }
 
-// Nested objects: immediate parent key used
-
 #[test]
 fn nested_denylist_uses_immediate_key() {
-    // "response.time" — the immediate key is "time" → in denylist.
     let input = r#"{"response":{"time":42}}"#;
     let canon = canonicalise_json_to_string(input).unwrap();
-    // 42 < 1000 but "time" is in denylist → normalised.
     assert!(!canon.contains("42"));
 }
-
-// Structure preservation
 
 #[test]
 fn keys_never_touched() {
@@ -237,15 +209,11 @@ fn keys_never_touched() {
     assert!(canon.contains("Another-Key"));
 }
 
-// Invalid JSON returns None
-
 #[test]
 fn invalid_json_returns_none() {
     assert!(canonicalise_json_to_string("plain placeholder text").is_none());
     assert!(canonicalise_json_to_string("{broken").is_none());
 }
-
-// Full round-trip
 
 #[test]
 fn automotive_json_body() {
@@ -260,25 +228,13 @@ fn automotive_json_body() {
     });
     let canon = canonicalise_json_to_string(&input.to_string()).unwrap();
 
-    // Keys preserved.
     assert!(canon.contains("\"type\""));
     assert!(canon.contains("\"requestId\""));
     assert!(canon.contains("\"statusCode\""));
-
-    // "type": "fakeResponse" — short alpha → preserved.
     assert!(canon.contains("\"fakeResponse\""));
-
-    // "requestId" in denylist → 0.
-    // "statusCode" 200 < 1000, not in denylist → preserved.
     assert!(canon.contains("\"statusCode\":200"));
-
-    // UUID replaced.
     assert!(canon.contains("\"_UUID_\""));
-
-    // Bool + null preserved.
     assert!(canon.contains("true"));
     assert!(canon.contains("null"));
-
-    // Array collapsed to object shape.
     assert!(canon.contains("__arr"));
 }

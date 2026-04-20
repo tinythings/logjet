@@ -32,16 +32,13 @@ fn value_with_ip() {
 fn empty_key_treated_as_bare_token() {
     let input = "=weird normal=fine";
     let canon = canonicalise_kv(input);
-    // "=weird" has empty key → classified as bare token (compound).
     assert!(canon.contains("normal=fine"));
 }
 
 #[test]
 fn multiple_equals_in_value() {
-    // Split on first '=' only.
     let input = "filter=a=b=c level=5";
     let canon = canonicalise_kv(input);
-    // Key is "filter", value is "a=b=c" (compound with alpha).
     assert!(canon.starts_with("filter="));
     assert!(canon.contains("level=5"));
 }

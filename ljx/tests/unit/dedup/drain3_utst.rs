@@ -1,7 +1,5 @@
 use crate::dedup::drain3::{Drain, DrainConfig};
 
-/// Port of the Go reference test. Same 24 Kafka log lines, same extra
-/// delimiter ("_"), default config. Expects 5 clusters.
 #[test]
 fn go_reference_kafka_logs() {
     let cfg = DrainConfig { extra_delimiters: vec!["_".into()], ..DrainConfig::default() };
@@ -43,16 +41,11 @@ fn go_reference_kafka_logs() {
 
 #[test]
 fn similarity_threshold_respected() {
-    // High sim_th (0.9) means very similar messages needed to merge.
     let cfg = DrainConfig { sim_th: 0.9, ..DrainConfig::default() };
     let mut drain = Drain::new(cfg);
 
     drain.add_log_message("error in module alpha at line 42");
     drain.add_log_message("error in module beta at line 99");
-    // Only "alpha"→"beta" and "42"→"99" differ = 3/7 match = 0.43, below 0.9.
-    // Actually 5/7 match = 0.71... let me recalculate:
-    // "error" "in" "module" differ "at" "line" differ = 5 match, 2 differ = 5/7 ≈ 0.71
-    // Still below 0.9 → separate clusters.
     assert_eq!(drain.clusters().len(), 2);
 }
 
@@ -63,7 +56,6 @@ fn low_threshold_merges_dissimilar() {
 
     drain.add_log_message("error in module alpha at line 42");
     drain.add_log_message("error in module beta at line 99");
-    // 5/7 ≈ 0.71 > 0.3 → should merge.
     assert_eq!(drain.clusters().len(), 1);
 }
 

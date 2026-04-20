@@ -237,5 +237,5 @@ pub fn write_replay_ack<W: Write>(writer: &mut W, ack: &ReplayAck) -> io::Result
 }
 
 #[cfg(test)]
-#[path = "protocol_utst.rs"]
+#[path = "../tests/unit/protocol_utst.rs"]
 mod protocol_utst;

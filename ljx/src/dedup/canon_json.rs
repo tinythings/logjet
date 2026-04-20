@@ -215,5 +215,5 @@ fn looks_like_uuid(s: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "canon_json_utst.rs"]
+#[path = "../../tests/unit/dedup/canon_json_utst.rs"]
 mod canon_json_utst;

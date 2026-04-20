@@ -559,5 +559,5 @@ fn parse_buffer_limit(size: Option<&str>, messages: Option<usize>) -> Result<Buf
 }
 
 #[cfg(test)]
-#[path = "config_utst.rs"]
+#[path = "../tests/unit/config_utst.rs"]
 mod config_utst;

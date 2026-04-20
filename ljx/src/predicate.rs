@@ -241,5 +241,5 @@ impl From<RecordKind> for RecordType {
 }
 
 #[cfg(test)]
-#[path = "predicate_ut.rs"]
+#[path = "../tests/unit/predicate_ut.rs"]
 mod predicate_ut;

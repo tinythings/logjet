@@ -147,7 +147,6 @@ fn corrupted_payload_is_rejected_by_crc() {
     let mut bytes = Vec::new();
     write_record(&mut bytes, &record, false).unwrap();
 
-    // Flip one bit in the payload region (offset 32 is first payload byte)
     bytes[32] ^= 0x01;
 
     let err = read_record(&mut bytes.as_slice()).unwrap_err();
