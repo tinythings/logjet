@@ -64,8 +64,8 @@ typedef struct lj_log_record {
      *   - service_name  → Resource.attributes["service.name"]
      *   - scope_name    → InstrumentationScope.name
      *   - event_name    → LogRecord.event_name
-     *   - resource_attrs → Resource.attributes (e.g. esotrace.target, esotrace.process)
-     *   - scope_attrs    → InstrumentationScope.attributes (e.g. esotrace.thread, esotrace.channel)
+    *   - resource_attrs → Resource.attributes (e.g. demo.target, demo.process)
+    *   - scope_attrs    → InstrumentationScope.attributes (e.g. demo.thread, demo.channel)
      */
 
     /* OTel LogRecord.event_name; UTF-8, NUL-terminated, may be NULL */

@@ -2686,7 +2686,7 @@ fn modal_info_line(key: &str, value: String, key_width: usize, value_width: usiz
     }
 
     let (key_style, value_style) = if is_otlp_attribute_entry(key) && !is_standard_otlp_attribute_entry(key) {
-        // Custom attributes (esotrace.*): bold bright-cyan key, bold bright-white value
+        // Custom attributes (demo.*): bold bright-cyan key, bold bright-white value
         (
             Style::default().fg(Color::LightCyan).bg(bg).add_modifier(Modifier::BOLD),
             Style::default().fg(Color::White).bg(bg).add_modifier(Modifier::BOLD),
