@@ -1,4 +1,4 @@
-.PHONY: build dev devel check fix test test-unit test-integration setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo man
+.PHONY: build dev devel check fix test test-unit test-integration test-abi-matrix setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo man
 
 DEFAULT_TARGET := build
 ARM_TARGET ?= aarch64-unknown-linux-musl
@@ -52,6 +52,9 @@ test-integration: setup
 		cargo test -p ljd --test bridge_flows; \
 		cargo test -p logjet --test ljx_cli; \
 	fi
+
+test-abi-matrix: setup
+	bash scripts/test-exporter-abi-matrix.sh
 
 arm-devel: setup setup-arm
 	cargo build $(CORE_WORKSPACE) --target $(ARM_TARGET)

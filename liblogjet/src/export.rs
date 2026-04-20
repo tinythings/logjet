@@ -286,3 +286,7 @@ impl LjxExporterDescriptorV1 {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "export_ut.rs"]
+mod export_ut;
