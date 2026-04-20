@@ -118,3 +118,4 @@ These are demo credentials only. Do not use them anywhere real.
 - appliance replay listener uses the internal wire protocol inside TLS
 - remote `bridge` forwards OTLP logs to `collector.url`
 - OTLP ingest and OTLP collector export are still plain transport in this demo
+- this is intentional: `remote-drain-tls` secures only the daemon-to-daemon replay link, so the remote collector still uses `http://`; if you want HTTPS on the collector leg too, use the `secure-pipeline` demo instead
