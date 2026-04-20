@@ -517,6 +517,27 @@ fn export_prompt_defaults_to_ndjson_and_all() {
 }
 
 #[test]
+fn export_format_cycle_updates_filename_extension() {
+    let input = create_temp_path().unwrap();
+    write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "esotrace.log.utf8")]);
+
+    let mut app = make_view_app(input.clone());
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+    app.export_formats = vec![super::ExportFormatChoice::ndjson(), super::ExportFormatChoice::from_plugin_name("parquet".to_string())];
+    app.export_format_index = 0;
+    app.export_filename = "export-out.ndjson".to_string();
+    app.export_filename_cursor = app.export_filename.len();
+
+    app.cycle_export_format(1);
+
+    assert_eq!(app.current_export_format().label(), "parquet");
+    assert_eq!(app.export_filename, "export-out.parquet");
+
+    let _ = std::fs::remove_file(input);
+}
+
+#[test]
 fn export_prompt_supports_cursor_navigation_and_mid_string_editing() {
     let input = create_temp_path().unwrap();
     write_test_logjet_rows(&input, &[("alpha", &["AndroidGeoLocationListener"], "esotrace.log.utf8")]);
