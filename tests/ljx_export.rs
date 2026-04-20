@@ -49,7 +49,7 @@ fn ljx_exports_empty_input_to_empty_parquet() -> io::Result<()> {
     let dir = TestDir::new("ljx-export-empty")?;
     let input = dir.path().join("empty.logjet");
     let output = dir.path().join("empty.parquet");
-    fs::write(&input, [])?;
+    write_empty_logjet_fixture(&input)?;
 
     let export = run_ljx_export(&input, &output)?;
     if !export.status.success() {
@@ -62,7 +62,7 @@ fn ljx_exports_empty_input_to_empty_parquet() -> io::Result<()> {
 }
 
 #[test]
-fn ljx_fails_on_malformed_input_during_parquet_export() -> io::Result<()> {
+fn ljx_exports_unrecoverable_garbage_input_to_empty_parquet() -> io::Result<()> {
     ensure_export_artifacts_exist()?;
 
     let dir = TestDir::new("ljx-export-malformed")?;
@@ -71,9 +71,12 @@ fn ljx_fails_on_malformed_input_during_parquet_export() -> io::Result<()> {
     fs::write(&input, b"definitely not a logjet stream")?;
 
     let export = run_ljx_export(&input, &output)?;
-    assert!(!export.status.success());
-    let stderr = String::from_utf8_lossy(&export.stderr);
-    assert!(stderr.contains("failed reading") || stderr.contains("failed to") || stderr.contains("exporter"));
+    if !export.status.success() {
+        return Err(io::Error::other(format!("garbage export failed: {}", String::from_utf8_lossy(&export.stderr))));
+    }
+
+    let actual = read_parquet_rows(&output)?;
+    assert!(actual.is_empty());
     Ok(())
 }
 
@@ -157,6 +160,13 @@ fn write_large_logjet_fixture(path: &Path, count: u64) -> io::Result<()> {
     Ok(())
 }
 
+fn write_empty_logjet_fixture(path: &Path) -> io::Result<()> {
+    let file = File::create(path)?;
+    let mut file = LogjetWriter::new(file).into_inner().map_err(io::Error::other)?;
+    file.flush()?;
+    Ok(())
+}
+
 fn encode_logs_request(message: &str, service_name: Option<&str>) -> io::Result<Vec<u8>> {
     let resource_logs = ResourceLogs {
         resource: Some(opentelemetry_proto::tonic::resource::v1::Resource {
@@ -166,6 +176,7 @@ fn encode_logs_request(message: &str, service_name: Option<&str>) -> io::Result<
                 })
                 .unwrap_or_default(),
             dropped_attributes_count: 0,
+            entity_refs: Vec::new(),
         }),
         scope_logs: vec![ScopeLogs {
             scope: None,
@@ -192,9 +203,9 @@ fn encode_logs_request(message: &str, service_name: Option<&str>) -> io::Result<
 fn read_parquet_rows(path: &Path) -> io::Result<Vec<ParquetRow>> {
     let file = File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(io::Error::other)?;
-    let mut reader = builder.with_batch_size(1024).build().map_err(io::Error::other)?;
+    let reader = builder.with_batch_size(1024).build().map_err(io::Error::other)?;
     let mut rows = Vec::new();
-    while let Some(batch) = reader.next() {
+    for batch in reader {
         let batch = batch.map_err(io::Error::other)?;
         let sequence = batch
             .column_by_name("sequence")
