@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct LjAttribute {
     key: *const c_char,
     value: *const c_char,
+    value_type: i32,
 }
 
 #[repr(C)]
@@ -23,6 +24,13 @@ pub struct LjLogRecord {
     body: *const c_char,
     attributes: *const LjAttribute,
     attributes_len: usize,
+    event_name: *const c_char,
+    service_name: *const c_char,
+    scope_name: *const c_char,
+    resource_attrs: *const LjAttribute,
+    resource_attrs_len: usize,
+    scope_attrs: *const LjAttribute,
+    scope_attrs_len: usize,
 }
 
 pub type RecordCallback = unsafe extern "C" fn(*mut c_void, *const LjLogRecord);
@@ -35,6 +43,7 @@ const LJ_SEVERITY_INFO: i32 = 9;
 const LJ_SEVERITY_WARN: i32 = 13;
 const LJ_SEVERITY_ERROR: i32 = 17;
 const LJ_SEVERITY_FATAL: i32 = 21;
+const LJ_ATTR_STRING: i32 = 0;
 
 // ── Plugin context ──────────────────────────────────────────────────────────
 
@@ -230,9 +239,9 @@ fn emit_record(ctx: &SyslogPlugin, line: &[u8]) {
     let appname_val = cstring_lossy(parsed.app_name);
 
     let attrs = [
-        LjAttribute { key: facility_key.as_ptr(), value: facility_val.as_ptr() },
-        LjAttribute { key: hostname_key.as_ptr(), value: hostname_val.as_ptr() },
-        LjAttribute { key: appname_key.as_ptr(), value: appname_val.as_ptr() },
+        LjAttribute { key: facility_key.as_ptr(), value: facility_val.as_ptr(), value_type: LJ_ATTR_STRING },
+        LjAttribute { key: hostname_key.as_ptr(), value: hostname_val.as_ptr(), value_type: LJ_ATTR_STRING },
+        LjAttribute { key: appname_key.as_ptr(), value: appname_val.as_ptr(), value_type: LJ_ATTR_STRING },
     ];
 
     let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
@@ -244,6 +253,13 @@ fn emit_record(ctx: &SyslogPlugin, line: &[u8]) {
         body: body_c.as_ptr(),
         attributes: attrs.as_ptr(),
         attributes_len: attrs.len(),
+        event_name: std::ptr::null(),
+        service_name: std::ptr::null(),
+        scope_name: std::ptr::null(),
+        resource_attrs: std::ptr::null(),
+        resource_attrs_len: 0,
+        scope_attrs: std::ptr::null(),
+        scope_attrs_len: 0,
     };
 
     unsafe { cb(ctx.user, &record) };

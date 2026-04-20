@@ -1,7 +1,8 @@
 # File Replay Demo
 
 This demo replays recorded `.logjet` files into the OTLP collector mockup
-as fast as possible. This demo depends on the first demo.
+as fast as possible. On first run it generates its own BOFH-flavored
+`.logjet` input file locally.
 
 ## Build
 
@@ -15,24 +16,7 @@ That gives you:
 
 - `target/debug/ljd`
 - `target/debug/otlp-demo-collector`
-
-
-## Setup
-
-Run the first demo in [`../logjet-file`](../logjet-file) so it creates a
-`logs/` directory with files such as:
-
-- `bofh.logjet`
-- `bofh-1.logjet`
-- `bofh-2.logjet`
-
-Terminate messages recording manually (Ctrl+C). Then move or copy that `logs/`
-directory into this current directory:
-
-
-```bash
-mv ../logjet-file/logs ./logs
-```
+- `target/debug/otlp-bofh-logjet-generator`
 
 ## Run
 
@@ -45,8 +29,9 @@ From this directory:
 The script:
 
 1. starts the OTLP collector mockup
-2. runs `ljd --config ./logjetd.conf replay --path ./logs --name bofh.logjet`
-3. blasts all recorded OTLP batches to the collector
+2. creates `./logs/bofh.logjet` with generated OTLP log batches if it does not already exist
+3. runs `ljd --config ./logjetd.conf replay --path ./logs --name bofh.logjet`
+4. blasts all recorded OTLP batches to the collector
 
 Expected result:
 
@@ -54,6 +39,8 @@ Expected result:
 
 ## Notes
 
+- first run seeds `./logs/bofh.logjet`; later runs reuse it
+- set `BOFH_RECORD_COUNT` to change how many records are generated on first run
 - replay order is `bofh.logjet`, then `bofh-1.logjet`, then `bofh-2.logjet`, and so on
 - replay is immediate, no delay
 - the collector mockup accepts OTLP/HTTP `POST /v1/logs`

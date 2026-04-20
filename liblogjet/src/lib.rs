@@ -115,6 +115,11 @@ pub extern "C" fn lj_error_message() -> *const c_char {
 /// Creates an OTLP/HTTP logger.
 ///
 /// `endpoint` may be either `host:port` or `http://host:port[/path]`.
+///
+/// # Safety
+///
+/// `endpoint` and `service_name` must be valid pointers to NUL-terminated C
+/// strings for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_logger_new_http(endpoint: *const c_char, service_name: *const c_char, timeout_ms: u64) -> *mut lj_logger {
     unsafe { new_logger(endpoint, service_name, timeout_ms, BackendKind::Http) }
@@ -123,6 +128,11 @@ pub unsafe extern "C" fn lj_logger_new_http(endpoint: *const c_char, service_nam
 /// Creates an OTLP/gRPC logger.
 ///
 /// `endpoint` may be either `host:port` or a tonic-compatible URI.
+///
+/// # Safety
+///
+/// `endpoint` and `service_name` must be valid pointers to NUL-terminated C
+/// strings for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_logger_new_grpc(endpoint: *const c_char, service_name: *const c_char, timeout_ms: u64) -> *mut lj_logger {
     unsafe { new_logger(endpoint, service_name, timeout_ms, BackendKind::Grpc) }

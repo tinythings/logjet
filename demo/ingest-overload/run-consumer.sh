@@ -6,13 +6,34 @@ TARGET_DIR="$SCRIPT_DIR/../../target/debug"
 COLLECTOR="$TARGET_DIR/otlp-demo-collector"
 FORWARDER="$TARGET_DIR/otlp-wire-forwarder"
 
-for bin in "$COLLECTOR" "$FORWARDER"; do
+require_fresh_bin() {
+    bin=$1
+    shift
+
     if [ ! -x "$bin" ]; then
         echo "missing $bin"
         echo "build everything first with: make demo"
         exit 1
     fi
-done
+
+    for src in "$@"; do
+        if [ "$src" -nt "$bin" ]; then
+            echo "stale $bin"
+            echo "rebuild it first with: make demo"
+            exit 1
+        fi
+    done
+}
+
+require_fresh_bin "$COLLECTOR" \
+    "$SCRIPT_DIR/../src/bin/otlp-demo-collector.rs" \
+    "$SCRIPT_DIR/../src/lib.rs" \
+    "$SCRIPT_DIR/../Cargo.toml"
+
+require_fresh_bin "$FORWARDER" \
+    "$SCRIPT_DIR/../src/bin/otlp-wire-forwarder.rs" \
+    "$SCRIPT_DIR/../src/lib.rs" \
+    "$SCRIPT_DIR/../Cargo.toml"
 
 cd "$SCRIPT_DIR"
 
