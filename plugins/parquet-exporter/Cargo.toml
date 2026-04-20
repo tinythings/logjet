@@ -1,0 +1,17 @@
+[package]
+name = "ljx-parquet-exporter"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+arrow-array = "58.0.0"
+arrow-schema = "58.0.0"
+liblogjet = { path = "../../liblogjet" }
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs"] }
+parquet = { version = "58.0.0", default-features = false, features = ["arrow", "zstd"] }
+prost = "0.14"
+serde_json = "1"
