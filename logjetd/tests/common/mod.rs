@@ -362,7 +362,16 @@ fn write_http_response(stream: &mut TcpStream, status: u16, body: &str) -> io::R
 pub fn post_otlp_http(addr: &str, service_name: &str, message: &str) -> io::Result<()> {
     let batch = build_logs_request(service_name, message);
     let body = batch.encode_to_vec();
-    let mut stream = TcpStream::connect(addr)?;
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut stream = loop {
+        match TcpStream::connect(addr) {
+            Ok(stream) => break stream,
+            Err(err) if err.kind() == io::ErrorKind::ConnectionRefused && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => return Err(err),
+        }
+    };
     write!(
         stream,
         "POST /v1/logs HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
