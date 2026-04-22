@@ -219,6 +219,9 @@ pub struct ViewArgs {
 
     #[arg(long, default_value_t = false, help = "Show payload previews in hex")]
     pub hex_payload: bool,
+
+    #[arg(long, default_value_t = false, help = "Start in tail mode after the initial scan completes")]
+    pub tail: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

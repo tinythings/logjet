@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, RecordType, WriterConfig};
@@ -86,6 +88,40 @@ pub(super) fn scan_matches(
     }
 
     Ok((scanned, matched))
+}
+
+pub(super) fn follow_appended_matches(
+    input_path: &Path, predicate: crate::predicate::RecordPredicate, mut spool: File, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanUpdate>,
+) -> Result<()> {
+    let mut input = InputHandle::open(input_path)?;
+    input.seek(SeekFrom::End(0))?;
+    let mut reader = LogjetReader::new(input.into_buf_reader());
+    let mut tx_batch = Vec::with_capacity(SCAN_BATCH_SIZE);
+
+    while !cancel.load(Ordering::Relaxed) {
+        match reader.next_record()? {
+            Some(record) => {
+                if predicate.matches(&record) {
+                    tx_batch.push(write_spool_record(&mut spool, &record)?);
+                    if tx_batch.len() >= SCAN_BATCH_SIZE {
+                        tx.send(ScanUpdate::Batch(std::mem::take(&mut tx_batch))).map_err(|err| Error::Usage(err.to_string()))?;
+                    }
+                }
+            }
+            None => {
+                if !tx_batch.is_empty() {
+                    tx.send(ScanUpdate::Batch(std::mem::take(&mut tx_batch))).map_err(|err| Error::Usage(err.to_string()))?;
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+
+    if !tx_batch.is_empty() {
+        tx.send(ScanUpdate::Batch(tx_batch)).map_err(|err| Error::Usage(err.to_string()))?;
+    }
+
+    Ok(())
 }
 
 pub(crate) fn write_spool_record(file: &mut File, record: &OwnedRecord) -> Result<EntryMeta> {

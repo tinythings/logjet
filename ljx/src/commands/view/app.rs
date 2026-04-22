@@ -14,7 +14,8 @@ use ratatui::backend::CrosstermBackend;
 
 use super::detail::{export_ndjson_objects, format_summary, parse_export_selection, render_modal_message};
 use super::scan::{
-    open_temp_spool_pair, read_spool_record, remember_summary, scan_field_catalog, scan_matches, write_export_selection_to_temp_logjet,
+    follow_appended_matches, open_temp_spool_pair, read_spool_record, remember_summary, scan_field_catalog, scan_matches,
+    write_export_selection_to_temp_logjet,
 };
 use super::text::{char_count, delete_char_at, delete_char_before, insert_char_at};
 use super::types::{ActiveScan, DedupUpdate, ExportField, Focus, ScanUpdate, ViewApp, discover_export_format_choices};
@@ -54,6 +55,7 @@ impl ViewApp {
             list_offset: 0,
             modal_scroll: 0,
             modal_info_visible: false,
+            details_visible: false,
             detail_scroll: 0,
             summary_cache: std::collections::HashMap::new(),
             summary_order: std::collections::VecDeque::new(),
@@ -70,6 +72,11 @@ impl ViewApp {
             export_field: ExportField::Format,
             export_message: None,
             current_scan: None,
+            tail_on_launch: args.tail,
+            tail_mode: false,
+            tail_marker_index: None,
+            tail_rx: None,
+            tail_cancel: None,
             field_catalog: catalog,
             field_filter_state: None,
             active_field_filter: FieldFilter::default(),
@@ -104,6 +111,16 @@ impl ViewApp {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.tail_mode {
+            let continue_with_key =
+                matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End)
+                    && self.focus == Focus::List;
+            self.stop_tail_mode();
+            if !continue_with_key {
+                return Ok(false);
+            }
+        }
+
         if self.focus == Focus::List && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
             self.cancel_scan();
             return Ok(true);
@@ -135,6 +152,7 @@ impl ViewApp {
             KeyCode::PageUp => self.modal_scroll = self.modal_scroll.saturating_sub(10),
             KeyCode::PageDown => self.modal_scroll = self.modal_scroll.saturating_add(10),
             KeyCode::Char('i') | KeyCode::Char('I') => self.modal_info_visible = !self.modal_info_visible,
+            KeyCode::Char('t') | KeyCode::Char('T') => self.start_tail_mode()?,
             KeyCode::Left => {
                 self.move_selection(-1)?;
                 self.open_modal()?;
@@ -278,6 +296,8 @@ impl ViewApp {
             KeyCode::Char('s') | KeyCode::Char('S') => self.open_save_prompt()?,
             KeyCode::Char('e') | KeyCode::Char('E') => self.open_export_prompt()?,
             KeyCode::Char('d') | KeyCode::Char('D') => self.open_dedup_prompt(),
+            KeyCode::Char('i') | KeyCode::Char('I') => self.details_visible = !self.details_visible,
+            KeyCode::Char('t') | KeyCode::Char('T') => self.start_tail_mode()?,
             KeyCode::Up => self.move_selection(-1)?,
             KeyCode::Down => self.move_selection(1)?,
             KeyCode::PageUp => self.move_selection(-10)?,
@@ -318,6 +338,7 @@ impl ViewApp {
     }
 
     pub(super) fn apply_filter(&mut self) -> Result<()> {
+        self.stop_tail_mode();
         if let Some(scan) = self.current_scan.take() {
             scan.cancel();
             drop(scan.spool_reader);
@@ -563,18 +584,26 @@ impl ViewApp {
     }
 
     pub(crate) fn drain_scan_updates(&mut self) -> Result<()> {
-        let Some(scan) = &self.current_scan else {
+        if self.current_scan.is_none() {
             return Ok(());
-        };
-
-        let mut updates = Vec::new();
-        while let Ok(update) = scan.rx.try_recv() {
-            updates.push(update);
         }
 
-        let mut finished = false;
+        let mut updates = Vec::new();
+        if let Some(scan) = &self.current_scan {
+            while let Ok(update) = scan.rx.try_recv() {
+                updates.push(update);
+            }
+        }
+        if let Some(rx) = &self.tail_rx {
+            while let Ok(update) = rx.try_recv() {
+                updates.push(update);
+            }
+        }
+
+        let mut finished = self.current_scan.as_ref().map(|scan| scan.finished).unwrap_or(false);
         let mut should_refresh_selection = false;
         let mut status_override = None;
+        let mut stop_tail = false;
         {
             let Some(scan) = &mut self.current_scan else {
                 return Ok(());
@@ -584,7 +613,10 @@ impl ViewApp {
                     ScanUpdate::Batch(batch) => {
                         self.entries.extend(batch);
                         scan.matched = self.entries.len() as u64;
-                        if self.selected_detail.is_none() && !self.entries.is_empty() {
+                        if self.tail_mode && !self.entries.is_empty() {
+                            self.selected = self.entries.len() - 1;
+                            should_refresh_selection = true;
+                        } else if self.selected_detail.is_none() && !self.entries.is_empty() {
                             should_refresh_selection = true;
                         }
                     }
@@ -598,10 +630,15 @@ impl ViewApp {
                     ScanUpdate::Failed(message) => {
                         scan.finished = true;
                         finished = true;
+                        stop_tail = true;
                         status_override = Some(format!("Scan failed: {message}"));
                     }
                 }
             }
+        }
+
+        if stop_tail {
+            self.stop_tail_mode();
         }
 
         if should_refresh_selection {
@@ -610,6 +647,17 @@ impl ViewApp {
         if let Some(status) = status_override {
             self.status = status;
         }
+
+        if self.tail_on_launch && self.current_scan.as_ref().map(|scan| scan.finished).unwrap_or(false) && !self.tail_mode {
+            self.tail_on_launch = false;
+            self.start_tail_mode()?;
+            return Ok(());
+        }
+
+        if self.tail_mode {
+            return Ok(());
+        }
+
         if !finished {
             let matched = self.entries.len();
             self.status = if self.applied_query.is_empty() {
@@ -634,6 +682,12 @@ impl ViewApp {
         let detail = read_spool_record(&mut scan.spool_reader, self.entries[self.selected])?;
         self.selected_detail = Some(detail);
         self.detail_scroll = 0;
+        if self.focus == Focus::Modal {
+            if let Some(detail) = &self.selected_detail {
+                self.modal_text = Some(render_modal_message(detail, self.hex_payload));
+            }
+            self.modal_scroll = 0;
+        }
         Ok(())
     }
 
@@ -660,6 +714,60 @@ impl ViewApp {
         self.modal_scroll = 0;
         self.focus = Focus::Modal;
         Ok(())
+    }
+
+    fn start_tail_mode(&mut self) -> Result<()> {
+        if self.input == Path::new("-") {
+            self.status = "Tail mode needs a real file, not stdin.".to_string();
+            return Ok(());
+        }
+
+        let Some(scan) = &self.current_scan else {
+            self.status = "No active scan to tail.".to_string();
+            return Ok(());
+        };
+        if !scan.finished {
+            self.status = "Wait for the scan to finish before tailing.".to_string();
+            return Ok(());
+        }
+        if self.tail_mode {
+            return Ok(());
+        }
+
+        let mut predicate = parse_filter_query(&self.applied_query, self.filter_mode)?;
+        predicate.field_filter = self.active_field_filter.clone();
+        let spool_path = scan.spool_path.clone();
+        let input = self.input.clone();
+        let writer = OpenOptions::new().read(true).write(true).open(&spool_path)?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_worker = Arc::clone(&cancel);
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let result = follow_appended_matches(input.as_path(), predicate, writer, cancel_worker, tx.clone());
+            if let Err(err) = result {
+                let _ = tx.send(ScanUpdate::Failed(err.to_string()));
+            }
+        });
+
+        self.tail_mode = true;
+        self.tail_marker_index = self.entries.len().checked_sub(1);
+        self.tail_rx = Some(rx);
+        self.tail_cancel = Some(cancel);
+        if !self.entries.is_empty() {
+            self.selected = self.entries.len() - 1;
+            self.refresh_selected_detail()?;
+        }
+        Ok(())
+    }
+
+    fn stop_tail_mode(&mut self) {
+        if let Some(cancel) = self.tail_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.tail_rx = None;
+        self.tail_mode = false;
+        self.tail_marker_index = None;
     }
 
     fn open_field_filter(&mut self) {

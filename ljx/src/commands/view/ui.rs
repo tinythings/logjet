@@ -61,8 +61,12 @@ pub(super) fn status_help_spans(focus: Focus) -> Vec<Span<'static>> {
             status_text(" export  "),
             status_key("D"),
             status_text(" dedup  "),
+            status_key("T"),
+            status_text(" tail  "),
             status_key("F"),
             status_text(" field filter  "),
+            status_key("I"),
+            status_text(" info  "),
             status_key("UP/DOWN"),
             status_text(" navigate"),
         ],
@@ -78,11 +82,11 @@ pub(super) fn status_help_spans(focus: Focus) -> Vec<Span<'static>> {
 }
 
 pub(super) fn status_key(text: &str) -> Span<'static> {
-    Span::styled(text.to_string(), Style::default().fg(Color::White).bg(Color::Indexed(28)).add_modifier(Modifier::BOLD))
+    Span::styled(text.to_string(), Style::default().fg(Color::White).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD))
 }
 
 pub(super) fn status_text(text: &str) -> Span<'static> {
-    Span::styled(text.to_string(), Style::default().fg(Color::Black).bg(Color::Indexed(28)))
+    Span::styled(text.to_string(), Style::default().fg(Color::Black).bg(Color::Indexed(30)))
 }
 
 pub(super) fn draw_status_spans(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, width: u16, spans: &[Span<'static>]) {

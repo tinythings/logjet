@@ -15,16 +15,24 @@ impl ViewApp {
     pub(super) fn render(&mut self, frame: &mut Frame<'_>) {
         let areas = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(1)])
+            .constraints([Constraint::Length(1), Constraint::Min(10), Constraint::Length(1)])
             .split(frame.area());
 
         self.render_search(frame, areas[0]);
 
-        let body =
-            Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(64), Constraint::Percentage(36)]).split(areas[1]);
+        let body = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(if self.details_visible {
+                vec![Constraint::Percentage(64), Constraint::Percentage(36)]
+            } else {
+                vec![Constraint::Percentage(100), Constraint::Length(0)]
+            })
+            .split(areas[1]);
 
         self.render_list(frame, body[0]);
-        self.render_details(frame, body[1]);
+        if self.details_visible {
+            self.render_details(frame, body[1]);
+        }
         self.render_status(frame, areas[2]);
 
         match self.focus {
@@ -41,31 +49,37 @@ impl ViewApp {
     }
 
     fn render_search(&self, frame: &mut Frame<'_>, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
         let title = match self.filter_mode {
-            crate::predicate::FilterMode::Strings => " Filter (strings) ",
-            crate::predicate::FilterMode::Regex => " Filter (regex) ",
+            crate::predicate::FilterMode::Strings => "Filter (strings): ",
+            crate::predicate::FilterMode::Regex => "Filter (regex): ",
         };
-        let block = pane_block(title, self.focus == Focus::Search);
-        let paragraph = Paragraph::new(self.query_input.as_str()).block(block).style(Style::default().fg(Color::White));
-        frame.render_widget(paragraph, area);
+        let bar_style = Style::default().bg(Color::Indexed(30));
+        let title_style = Style::default().fg(Color::LightCyan).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD);
+        let input_style = Style::default().fg(Color::White).bg(Color::Indexed(30));
+
+        frame.buffer_mut().set_style(area, bar_style);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(title, title_style), Span::styled(self.query_input.as_str(), input_style)])).style(bar_style),
+            area,
+        );
 
         if self.focus == Focus::Search {
-            let x = area.x.saturating_add(self.query_input.chars().count() as u16 + 1);
-            let y = area.y.saturating_add(1);
+            let x = area.x.saturating_add(title.chars().count() as u16).saturating_add(self.query_input.chars().count() as u16);
+            let y = area.y;
             frame.set_cursor_position((x.min(area.right().saturating_sub(1)), y));
         }
     }
 
     fn render_list(&mut self, frame: &mut Frame<'_>, area: Rect) {
-        let block = pane_block(" Log entries ", self.focus == Focus::List);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        if inner.height == 0 {
+        if area.height == 0 {
             return;
         }
 
-        let visible_rows = inner.height as usize;
+        let visible_rows = area.height as usize;
         if self.selected < self.list_offset {
             self.list_offset = self.selected;
         } else if self.selected >= self.list_offset.saturating_add(visible_rows) && visible_rows > 0 {
@@ -80,10 +94,16 @@ impl ViewApp {
             )));
         } else {
             let end = (self.list_offset + visible_rows).min(self.entries.len());
-            let row_width = inner.width.saturating_sub(1) as usize;
+            let row_width = area.width.saturating_sub(1) as usize;
             for index in self.list_offset..end {
-                let style = if index == self.selected {
-                    Style::default().fg(Color::White).bg(Color::Indexed(28)).add_modifier(Modifier::BOLD)
+                let style = if self.tail_mode && self.tail_marker_index == Some(index) {
+                    Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)
+                } else if index == self.selected {
+                    if self.focus == Focus::Search {
+                        Style::default().fg(Color::Gray).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White).bg(Color::Indexed(28)).add_modifier(Modifier::BOLD)
+                    }
                 } else {
                     Style::default().fg(Color::White)
                 };
@@ -93,11 +113,11 @@ impl ViewApp {
         }
 
         let paragraph = Paragraph::new(Text::from(lines)).scroll((0, 0)).wrap(Wrap { trim: false }).style(Style::default().fg(Color::White));
-        frame.render_widget(paragraph, inner);
+        frame.render_widget(paragraph, area);
 
         if !self.entries.is_empty() {
             let mut scrollbar_state = ScrollbarState::new(self.entries.len()).position(self.selected.min(self.entries.len().saturating_sub(1)));
-            frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, &mut scrollbar_state);
+            frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), area, &mut scrollbar_state);
         }
     }
 
@@ -122,10 +142,15 @@ impl ViewApp {
             return;
         }
 
-        let bar_style = Style::default().bg(Color::Indexed(28));
+        let bar_style = Style::default().bg(Color::Indexed(30));
         let buf = frame.buffer_mut();
         buf.set_style(area, bar_style);
         let y = area.y;
+
+        if self.tail_mode {
+            draw_status_spans(buf, area.x, y, area.width, &[status_text("Tailing... Press any key to stop")]);
+            return;
+        }
 
         match self.focus {
             Focus::Modal => {
@@ -142,7 +167,9 @@ impl ViewApp {
                         status_key("LEFT/RIGHT"),
                         status_text(" prev/next   "),
                         status_key("I"),
-                        status_text(" info panel"),
+                        status_text(" info panel   "),
+                        status_key("T"),
+                        status_text(" tail"),
                     ],
                 );
                 return;
@@ -213,7 +240,7 @@ impl ViewApp {
 
         if status_width > 0 {
             let status_x = area.right().saturating_sub(status_width);
-            buf.set_stringn(status_x, y, status, status_width as usize, Style::default().fg(Color::LightGreen).bg(Color::Indexed(28)));
+            buf.set_stringn(status_x, y, status, status_width as usize, Style::default().fg(Color::LightGreen).bg(Color::Indexed(30)));
         }
     }
 
