@@ -47,6 +47,14 @@ fn grpc_url_is_supported() {
 }
 
 #[test]
+fn grpcs_url_is_supported() {
+    let endpoint = CollectorEndpoint::parse("grpcs://collector.starwars.test:4317").unwrap();
+    assert_eq!(endpoint.authority, "collector.starwars.test:4317");
+    assert!(endpoint.grpc);
+    assert!(endpoint.tls);
+}
+
+#[test]
 fn missing_authority_is_rejected() {
     let err = CollectorEndpoint::parse("http:///v1/logs").err().unwrap().to_string();
     assert!(err.contains("missing host:port"));
