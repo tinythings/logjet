@@ -47,7 +47,7 @@ expose a replay listener for downstream consumers over the current
 internal wire protocol
 .IP \[bu] 2
 connect to another \f[C]ljd\f[R] replay listener and forward backlog
-plus live records into an OTLP/HTTP collector
+plus live records into OTLP collectors
 .IP \[bu] 2
 optionally protect replay and bridge transport with TLS
 .IP \[bu] 2
@@ -57,7 +57,7 @@ inspect \f[C].logjet\f[R] files and directories
 .IP \[bu] 2
 list file-segment metadata for one rotated spool
 .IP \[bu] 2
-replay stored \f[C].logjet\f[R] files into an OTLP/HTTP collector as a
+replay stored \f[C].logjet\f[R] files into OTLP collectors as a
 one-shot operation
 .IP \[bu] 2
 prune oldest rotated file segments by file count or byte budget
@@ -131,7 +131,7 @@ ljd segments --path /var/lib/logjet --name app.logjet
 .SS replay
 .PP
 Read ordered \f[C].logjet\f[R] files from a directory and blast the
-stored OTLP log payloads into an OTLP/HTTP collector.
+stored OTLP log payloads into OTLP collectors.
 .PP
 Example:
 .IP
@@ -205,7 +205,7 @@ Keep only the newest segment set that fits within \f[I]bytes\f[R] during
 Show which files \f[C]prune\f[R] would remove without deleting them.
 .SS \f[C]--dest\f[R] \f[I]url-or-host:port\f[R]
 .PP
-Destination OTLP/HTTP collector for replay.
+Destination OTLP collector for replay.
 .PP
 Used only with the \f[C]replay\f[R] command.
 .PP
@@ -407,7 +407,7 @@ basic replay-client caps through \f[C]replay.max-clients\f[R]
 .IP \[bu] 2
 basic replay-client timeout through \f[C]replay.client-timeout-ms\f[R]
 .IP \[bu] 2
-continuous bridge mode from replay listener to OTLP/HTTP collectors
+continuous bridge mode from replay listener to OTLP collectors
 .IP \[bu] 2
 acknowledged drain mode through \f[C]upstream.mode: drain\f[R]
 .IP \[bu] 2
@@ -425,7 +425,7 @@ optional TLS on replay/bridge transport
 .IP \[bu] 2
 HTTPS OTLP collector export
 .IP \[bu] 2
-one-shot file replay to OTLP/HTTP collectors with
+one-shot file replay to OTLP collectors with
 \f[C]ljd replay\f[R]
 .IP \[bu] 2
 configurable replay destination via \f[C]collector.url\f[R]

@@ -103,27 +103,29 @@ upstream.
 - `ljd bridge` connects to another `ljd` replay listener
 - requests either `keep` or `drain` mode from the upstream side
 - continues forwarding newly replayed records
-- forwards OTLP log payloads to `collector.url`
+- forwards OTLP log payloads to every destination configured in `collector.url`
 - reconnects after disconnect using the last in-process forwarded sequence
 - can also load and save the last forwarded sequence through `upstream.state-file`
 - resets saved bridge sequence state automatically when upstream stream identity changes
 - source address comes from `--source` or `upstream.replay`
-- `upstream.mode: drain` removes upstream records after successful collector export and acknowledgement
+- `upstream.mode: drain` removes upstream records after successful export to every configured collector destination and acknowledgement
 - `backpressure.enabled: true` enables explicit bridge backpressure policy handling
 - `backpressure.mode: disconnect` uses collector timeouts as a fail-fast policy
 - `backpressure.mode: block` waits for the collector reply instead of timing out
 - `backpressure.mode: drop-newest` keeps the bridge live and drops newest records when the export queue is full
 - `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection
 - can optionally use TLS with `tls.*`
-- collector export can optionally use HTTPS with `collector.*`
+- collector export can use OTLP/HTTP, HTTPS, and plain OTLP/gRPC
+- `collector.*` TLS settings apply to HTTPS collector export
 
 ### File Blast Replay
 
 - `ljd replay --path ... --name ...`
 - reads ordered rotated `.logjet` files
-- sends stored OTLP log batches to a collector URL
+- sends stored OTLP log batches to the configured destination set
 - uses `collector.url` by default
 - `--dest` can override the collector destination
+- if `collector.url` is a list, replay fans out to every configured destination
 - sends as fast as possible, with no original timing preservation
 
 ### File Operational Tooling
@@ -188,14 +190,15 @@ What exists now:
 - TCP replay
 - per-client replay cursors
 - basic replay-client caps
-- continuous daemon-to-daemon bridge to OTLP/HTTP collectors
+- continuous daemon-to-daemon bridge to OTLP collectors
 - configurable keep-or-drain bridge mode
 - basic bridge backpressure policy
 - bounded bridge-side export queue
 - optional TLS on replay/bridge transport
 - TLS-enabled OTLP ingest
 - HTTPS collector export
-- one-shot file replay to OTLP/HTTP collectors
+- plain OTLP/gRPC collector export
+- one-shot file replay to OTLP collectors
 - in-memory ring buffering
 - `.logjet` file output with rotation
 - YAML config

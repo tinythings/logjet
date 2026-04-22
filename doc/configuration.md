@@ -150,15 +150,22 @@ Important:
 
 ### `collector.url`
 
-Default destination used by `ljd replay` when `--dest` is not provided.
+Default bridge and replay destination setting.
 
 Accepted forms:
 
-- full URL:
+- one destination string:
   - `http://127.0.0.1:4318/v1/logs`
   - `https://127.0.0.1:4318/v1/logs`
-- host and port only:
+  - `grpc://127.0.0.1:4317`
   - `127.0.0.1:4318`
+- a YAML list of destination strings:
+
+```yaml
+collector.url:
+  - http://127.0.0.1:4318/v1/logs
+  - grpc://127.0.0.1:4317
+```
 
 If only host and port are given, replay defaults to:
 
@@ -166,7 +173,28 @@ If only host and port are given, replay defaults to:
 /v1/logs
 ```
 
-If the URL starts with `https://`, collector export uses TLS.
+Scheme behaviour:
+
+- `http://`
+  - OTLP/HTTP export
+- `https://`
+  - OTLP/HTTP export over TLS
+- `grpc://`
+  - OTLP/gRPC export
+- bare `host:port`
+  - treated as OTLP/HTTP with `/v1/logs`
+
+Bridge fan-out behaviour:
+
+- `ljd bridge` sends each OTLP log batch to every configured collector destination
+- in `drain` mode, upstream acknowledgement happens only after every configured destination accepts the batch
+- if any destination fails, that batch is treated as failed and reconnect or retry logic takes over
+
+Replay behaviour:
+
+- `ljd replay` also uses `collector.url` when `--dest` is omitted
+- if `collector.url` is a list, replay sends each batch to every listed destination
+- `--dest` still overrides replay with one explicit destination
 
 ### `collector.timeout-ms`
 
@@ -174,11 +202,11 @@ Socket timeout in milliseconds used by `ljd replay` when posting stored
 OTLP payloads to `collector.url`.
 
 It is also used by `ljd bridge` when posting replayed OTLP payloads to the
-collector.
+configured collector destination set.
 
 ### `collector.ca-file`
 
-CA file used when `collector.url` starts with `https://`.
+CA file used when HTTPS collector export is configured.
 
 ### `collector.cert-file`
 
@@ -368,7 +396,7 @@ Important:
 
 - default is `keep`
 - use `drain` when replay should behave like a queue instead of a replayable backlog
-- in `drain` mode, the downstream bridge acknowledges each record only after successful collector export
+- in `drain` mode, the downstream bridge acknowledges each record only after successful export to every configured collector destination
 - in file mode, fully consumed closed segments are deleted; the current active segment stays logically empty until rotation or reopen
 
 ### `upstream.state-file`
@@ -380,7 +408,7 @@ Important:
 
 - default is unset
 - when set, bridge loads the saved sequence at start-up
-- bridge writes the new sequence after each successful collector export
+- bridge writes the new sequence after each successful export to every configured collector destination
 - this allows restart resume instead of restarting from sequence zero
 - the saved state also carries upstream stream identity
 - that lets bridge detect upstream restart or storage replacement and reset stale saved sequence state
@@ -570,8 +598,9 @@ If omitted:
 - set either `buffer.size` or `buffer.messages`, never both
 - `buffer.size` limits the rotating in-memory tail by bytes
 - `buffer.messages` limits the rotating in-memory tail by message count
+- `collector.url` can be one string or a YAML list of strings
 - `collector.url` is used by `ljd replay` when `--dest` is omitted
-- `collector.timeout-ms` controls replay and bridge HTTP socket timeout
+- `collector.timeout-ms` controls replay and bridge collector socket timeout
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to HTTPS collector export
 - `backpressure.enabled` enables bridge backpressure policy handling
 - `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
