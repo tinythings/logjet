@@ -61,6 +61,8 @@ It also contains scenario demos under subdirectories:
   - same remote-drain topology, but with TLS and mutual TLS on the replay link
 - [`secure-pipeline`](./secure-pipeline)
   - HTTPS OTLP ingest into `ljd`, then HTTPS collector export on replay
+- [`proxy-to-vector`](./proxy-to-vector)
+  - appliance-side `ljd` replayed through `ljd bridge` into Vector stdout over OTLP/HTTP or OTLP/gRPC
 
 ## Enjoy It
 
