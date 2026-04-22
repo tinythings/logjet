@@ -1,6 +1,7 @@
 /target
 *.logjet
 logs/
+*.log
 **/logs/
 TODO*
 .*
