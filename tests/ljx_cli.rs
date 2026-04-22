@@ -86,12 +86,8 @@ fn ljx_filters_real_ljd_output_from_mock_emitter() -> io::Result<()> {
     fs::write(&filtered_stdout, &stdout_output.stdout)?;
     assert_eq!(read_logjet_messages(&filtered_stdout)?, vec!["ERROR boom".to_string(), "eRrOr splash".to_string()]);
 
-    let invalid = run_ljx(["count".as_ref(), spool_path.as_os_str()], &["-F", "error", "-e", "panic"])?;
-    assert!(!invalid.status.success());
-    assert!(
-        String::from_utf8_lossy(&invalid.stderr).contains("cannot be used with")
-            || String::from_utf8_lossy(&invalid.stderr).contains("choose either")
-    );
+    assert_eq!(run_ljx_count(&spool_path, &["-F", "error", "-e", "splash", "-i"])?, "1");
+    assert_eq!(run_ljx_count(&spool_path, &["-F", "error", "-e", "panic", "-i"])?, "0");
 
     Ok(())
 }
