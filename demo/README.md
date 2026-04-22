@@ -45,6 +45,8 @@ It also contains scenario demos under subdirectories:
   - generate about 5K BOFH log entries, then export that `.logjet` file to Parquet through the external exporter plugin
 - [`tui-view`](./tui-view)
   - generate 1000 randomized log entries and open `ljx view` on the result
+- [`visual-logtail`](./visual-logtail)
+  - append one fresh log record every half second and open `ljx view --tail` on the live file
 - [`bridge-resume`](./bridge-resume)
   - consumer restart resumes from persisted sequence state without replaying from zero
 - [`upstream-reset-resume`](./upstream-reset-resume)
