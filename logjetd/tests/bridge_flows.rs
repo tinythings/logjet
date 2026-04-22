@@ -7,8 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    ChildGuard, MockCollector, MockGrpcCollector, STARWARS_GRPC_CA_PEM, TestDir, connect_replay_client, free_port, ljd_command, post_otlp_http,
-    read_replay_message, replay_messages, wait_for_tcp, wait_until,
+    ChildGuard, MockCollector, MockGrpcCollector, TestDir, connect_replay_client, free_port, ljd_command, post_otlp_http, read_replay_message,
+    replay_messages, wait_for_tcp, wait_until, write_fake_grpc_tls_files,
 };
 
 #[test]
@@ -133,7 +133,6 @@ fn bridge_keep_forwards_backlog_over_grpc() -> io::Result<()> {
     }
 
     let collector = MockGrpcCollector::start(collector_port)?;
-    wait_for_tcp(&format!("127.0.0.1:{collector_port}"), Duration::from_secs(5))?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -202,7 +201,7 @@ fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
     let collector_port = free_port()?;
-    let ca_path = dir.write("jedi-ca.pem", STARWARS_GRPC_CA_PEM)?;
+    let tls = write_fake_grpc_tls_files(&dir)?;
 
     let appliance_config = dir.write(
         "appliance.conf",
@@ -213,8 +212,8 @@ fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
     let bridge_config = dir.write(
         "bridge.conf",
         &format!(
-            "collector.url: grpcs://127.0.0.1:{collector_port}\ncollector.ca-file: {}\ncollector.server-name: collector.starwars.test\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
-            ca_path.display()
+            "collector.url: grpcs://127.0.0.1:{collector_port}\ncollector.ca-file: {}\ncollector.server-name: collector.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
+            tls.ca.display()
         ),
     )?;
 
@@ -230,8 +229,7 @@ fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
         post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-jedi", message)?;
     }
 
-    let collector = MockGrpcCollector::start_tls(collector_port)?;
-    wait_for_tcp(&format!("127.0.0.1:{collector_port}"), Duration::from_secs(5))?;
+    let collector = MockGrpcCollector::start_tls(collector_port, &tls)?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -240,6 +238,147 @@ fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
 
     wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 3))?;
     assert_eq!(collector.messages(), vec!["JEDI 001".to_string(), "JEDI 002".to_string(), "JEDI 003".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn bridge_keep_forwards_backlog_over_grpcs_mtls() -> io::Result<()> {
+    let dir = TestDir::new("bridge-keep-grpcs-mtls")?;
+    let ingest_port = free_port()?;
+    let replay_port = free_port()?;
+    let collector_port = free_port()?;
+    let tls = write_fake_grpc_tls_files(&dir)?;
+
+    let appliance_config = dir.write(
+        "appliance.conf",
+        &format!(
+            "output: buffer\nbuffer.messages: 64\ningest.protocol: otlp-http\ningest.listen: 127.0.0.1:{ingest_port}\nreplay.listen: 127.0.0.1:{replay_port}\n"
+        ),
+    )?;
+    let bridge_config = dir.write(
+        "bridge.conf",
+        &format!(
+            "collector.url: grpcs://127.0.0.1:{collector_port}\ncollector.ca-file: {}\ncollector.cert-file: {}\ncollector.key-file: {}\ncollector.server-name: collector.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
+            tls.ca.display(),
+            tls.client_cert.display(),
+            tls.client_key.display()
+        ),
+    )?;
+
+    let _appliance = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&appliance_config).arg("serve");
+        cmd
+    })?;
+    wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
+    wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
+
+    for message in ["SITH 001", "SITH 002", "SITH 003"] {
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-sith", message)?;
+    }
+
+    let collector = MockGrpcCollector::start_mtls(collector_port, &tls)?;
+    let _bridge = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&bridge_config).arg("bridge");
+        cmd
+    })?;
+
+    wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 3))?;
+    assert_eq!(collector.messages(), vec!["SITH 001".to_string(), "SITH 002".to_string(), "SITH 003".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn bridge_keep_rejects_grpcs_with_bad_ca() -> io::Result<()> {
+    let dir = TestDir::new("bridge-keep-grpcs-bad-ca")?;
+    let other = TestDir::new("bridge-keep-grpcs-bad-ca-other")?;
+    let ingest_port = free_port()?;
+    let replay_port = free_port()?;
+    let collector_port = free_port()?;
+    let tls = write_fake_grpc_tls_files(&dir)?;
+    let wrong_tls = write_fake_grpc_tls_files(&other)?;
+
+    let appliance_config = dir.write(
+        "appliance.conf",
+        &format!(
+            "output: buffer\nbuffer.messages: 64\ningest.protocol: otlp-http\ningest.listen: 127.0.0.1:{ingest_port}\nreplay.listen: 127.0.0.1:{replay_port}\n"
+        ),
+    )?;
+    let bridge_config = dir.write(
+        "bridge.conf",
+        &format!(
+            "collector.url: grpcs://127.0.0.1:{collector_port}\ncollector.ca-file: {}\ncollector.server-name: collector.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
+            wrong_tls.ca.display()
+        ),
+    )?;
+
+    let _appliance = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&appliance_config).arg("serve");
+        cmd
+    })?;
+    wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
+    wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
+
+    post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-bad-ca", "BAD CA 001")?;
+
+    let collector = MockGrpcCollector::start_tls(collector_port, &tls)?;
+    let _bridge = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&bridge_config).arg("bridge");
+        cmd
+    })?;
+
+    thread::sleep(Duration::from_millis(750));
+    assert!(collector.messages().is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn bridge_keep_rejects_grpcs_with_wrong_server_name() -> io::Result<()> {
+    let dir = TestDir::new("bridge-keep-grpcs-wrong-name")?;
+    let ingest_port = free_port()?;
+    let replay_port = free_port()?;
+    let collector_port = free_port()?;
+    let tls = write_fake_grpc_tls_files(&dir)?;
+
+    let appliance_config = dir.write(
+        "appliance.conf",
+        &format!(
+            "output: buffer\nbuffer.messages: 64\ningest.protocol: otlp-http\ningest.listen: 127.0.0.1:{ingest_port}\nreplay.listen: 127.0.0.1:{replay_port}\n"
+        ),
+    )?;
+    let bridge_config = dir.write(
+        "bridge.conf",
+        &format!(
+            "collector.url: grpcs://127.0.0.1:{collector_port}\ncollector.ca-file: {}\ncollector.server-name: wrong.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
+            tls.ca.display()
+        ),
+    )?;
+
+    let _appliance = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&appliance_config).arg("serve");
+        cmd
+    })?;
+    wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
+    wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
+
+    post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-wrong-name", "WRONG NAME 001")?;
+
+    let collector = MockGrpcCollector::start_tls(collector_port, &tls)?;
+    let _bridge = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&bridge_config).arg("bridge");
+        cmd
+    })?;
+
+    thread::sleep(Duration::from_millis(750));
+    assert!(collector.messages().is_empty());
 
     Ok(())
 }
