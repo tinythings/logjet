@@ -12,12 +12,12 @@ use prost::Message;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use tokio::runtime::{Builder, Runtime};
 use tonic::Request;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
 use crate::config::{BackpressureConfig, BackpressureMode, CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode};
 use crate::protocol::{ReplayAck, ReplayHello, ReplayRequest, read_record, read_replay_hello, write_replay_ack, write_replay_request};
 use crate::spool::list_named_segments;
-use crate::tls::{load_client_config, load_collector_client_config, parse_collector_server_name, parse_server_name};
+use crate::tls::{authority_host, load_client_config, load_collector_client_config, parse_collector_server_name, parse_server_name};
 
 pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorConfig) -> io::Result<u64> {
     let mut sent = 0u64;
@@ -461,8 +461,8 @@ impl io::Write for CollectorStream {
 
 /// Persistent HTTP/1.1 keep-alive connection to an OTLP collector.
 enum CollectorConnection {
-    Http(HttpCollectorConnection),
-    Grpc(GrpcCollectorConnection),
+    Http(Box<HttpCollectorConnection>),
+    Grpc(Box<GrpcCollectorConnection>),
 }
 
 struct MultiCollectorConnection {
@@ -480,6 +480,7 @@ struct HttpCollectorConnection {
 struct GrpcCollectorConnection {
     client: LogsServiceClient<Channel>,
     endpoint: CollectorEndpoint,
+    collector: CollectorConfig,
     timeout: Duration,
     runtime: Runtime,
 }
@@ -489,9 +490,9 @@ impl CollectorConnection {
         endpoint: &CollectorEndpoint, timeout: Duration, tls_client: Option<&Arc<ClientConfig>>, collector: &CollectorConfig,
     ) -> io::Result<Self> {
         if endpoint.grpc {
-            return GrpcCollectorConnection::connect(endpoint, timeout).map(Self::Grpc);
+            return GrpcCollectorConnection::connect(endpoint, timeout, collector).map(Box::new).map(Self::Grpc);
         }
-        HttpCollectorConnection::connect(endpoint, timeout, tls_client, collector).map(Self::Http)
+        HttpCollectorConnection::connect(endpoint, timeout, tls_client, collector).map(Box::new).map(Self::Http)
     }
 
     fn reconnect(&mut self) -> io::Result<()> {
@@ -524,7 +525,7 @@ impl MultiCollectorConnection {
     fn connect(endpoints: &[CollectorEndpoint], timeout: Duration, collector: &CollectorConfig) -> io::Result<Self> {
         let mut collectors = Vec::with_capacity(endpoints.len());
         for endpoint in endpoints {
-            let tls_client = if endpoint.tls { Some(load_collector_client_config(collector)?) } else { None };
+            let tls_client = if endpoint.tls && !endpoint.grpc { Some(load_collector_client_config(collector)?) } else { None };
             collectors.push(CollectorConnection::connect(endpoint, timeout, tls_client.as_ref(), collector)?);
         }
         Ok(Self { collectors })
@@ -575,15 +576,15 @@ impl HttpCollectorConnection {
 }
 
 impl GrpcCollectorConnection {
-    fn connect(endpoint: &CollectorEndpoint, timeout: Duration) -> io::Result<Self> {
+    fn connect(endpoint: &CollectorEndpoint, timeout: Duration, collector: &CollectorConfig) -> io::Result<Self> {
         let runtime =
             Builder::new_current_thread().enable_all().build().map_err(|err| io::Error::other(format!("failed to build gRPC runtime: {err}")))?;
-        let client = runtime.block_on(connect_grpc(endpoint, timeout))?;
-        Ok(Self { client, endpoint: endpoint.clone(), timeout, runtime })
+        let client = runtime.block_on(connect_grpc_with_collector(endpoint, timeout, Some(collector)))?;
+        Ok(Self { client, endpoint: endpoint.clone(), collector: collector.clone(), timeout, runtime })
     }
 
     fn reconnect(&mut self) -> io::Result<()> {
-        self.client = self.runtime.block_on(connect_grpc(&self.endpoint, self.timeout))?;
+        self.client = self.runtime.block_on(connect_grpc_with_collector(&self.endpoint, self.timeout, Some(&self.collector)))?;
         Ok(())
     }
 
@@ -774,6 +775,13 @@ impl CollectorEndpoint {
             return Ok(Self { authority: authority.to_string(), path: String::new(), tls: false, grpc: true });
         }
 
+        if let Some(authority) = input.strip_prefix("grpcs://") {
+            if authority.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "collector.url missing host:port"));
+            }
+            return Ok(Self { authority: authority.to_string(), path: String::new(), tls: true, grpc: true });
+        }
+
         if let Some(rest) = input.strip_prefix("http://") {
             let (authority, path) = split_authority_and_path(rest);
             if authority.is_empty() {
@@ -794,15 +802,25 @@ impl CollectorEndpoint {
     }
 }
 
-async fn connect_grpc(endpoint: &CollectorEndpoint, timeout: Duration) -> io::Result<LogsServiceClient<Channel>> {
-    Endpoint::from_shared(format!("http://{}", endpoint.authority))
+async fn connect_grpc_with_collector(
+    endpoint: &CollectorEndpoint, timeout: Duration, collector: Option<&CollectorConfig>,
+) -> io::Result<LogsServiceClient<Channel>> {
+    let mut client = Endpoint::from_shared(format!("{}://{}", if endpoint.tls { "https" } else { "http" }, endpoint.authority))
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?
         .timeout(timeout)
-        .connect_timeout(timeout)
-        .connect()
-        .await
-        .map(LogsServiceClient::new)
-        .map_err(|err| io::Error::other(format!("failed to connect gRPC collector: {err}")))
+        .connect_timeout(timeout);
+    if endpoint.tls {
+        let collector = collector.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing collector config for grpcs:// export"))?;
+        let ca_file = collector
+            .ca_file
+            .as_deref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "collector.ca-file is required for grpcs:// collector.url"))?;
+        let domain = collector.server_name.as_deref().unwrap_or_else(|| authority_host(&endpoint.authority));
+        client = client
+            .tls_config(ClientTlsConfig::new().ca_certificate(Certificate::from_pem(fs::read(ca_file)?)).domain_name(domain.to_string()))
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+    }
+    client.connect().await.map(LogsServiceClient::new).map_err(|err| io::Error::other(format!("failed to connect gRPC collector: {err}")))
 }
 
 fn split_authority_and_path(input: &str) -> (&str, &str) {
