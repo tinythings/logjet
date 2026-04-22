@@ -26,14 +26,28 @@ pub struct Cli {
     )]
     pub export: Option<String>,
 
+    #[arg(long, value_enum, value_name = "FORMAT", requires = "input", help = "Output format for top-level query mode")]
+    pub format: Option<ExportFormat>,
+
+    #[arg(
+        long,
+        value_name = "KEY[,KEY...]",
+        value_delimiter = ',',
+        help = "Limit NDJSON output to selected JSON keys; repeat or comma-separate keys"
+    )]
+    pub fields: Vec<String>,
+
     #[arg(short, long, value_name = "OUTPUT", requires = "export", help = "Output file or - for stdout")]
     pub output: Option<PathBuf>,
 
     #[arg(long = "force", requires = "export", help = "Overwrite output file if it already exists")]
     pub force: bool,
 
-    #[arg(value_name = "INPUT", requires = "export", help = "Input .logjet file or - for stdin")]
+    #[arg(value_name = "INPUT", help = "Input .logjet file or - for stdin")]
     pub input: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub predicate: PredicateArgs,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -51,13 +65,14 @@ pub fn build_cli() -> clap::Command {
         .usage(styling::AnsiColor::Yellow.on_default())
         .literal(styling::AnsiColor::BrightGreen.on_default())
         .placeholder(styling::AnsiColor::BrightMagenta.on_default());
-    let after_help = "Examples:\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson\n  ljx --export parquet telemetry.logjet -o telemetry.parquet --force";
+    let after_help = "Examples:\n  ljx telemetry.logjet\n  ljx telemetry.logjet -F error -i\n  ljx telemetry.logjet --fields body,timestamp,service_name -F error\n  ljx telemetry.logjet -e 'java\\..*\\.bs'\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson --fields body,timestamp\n  ljx --export parquet telemetry.logjet -o telemetry.parquet --force";
 
     Cli::command()
-        .arg_required_else_help(true)
         .styles(styles)
         .about(format!("{} - {}", appname.bright_magenta().bold(), "offline toolbox for .logjet streams"))
-        .override_usage(format!("{appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT> [--force]"))
+        .override_usage(format!(
+            "{appname} <INPUT> [--format <FORMAT>] [FILTER OPTIONS]\n  {appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT> [--force]"
+        ))
         .mut_arg("export", |arg| arg.help(&export_help).long_help(&export_help))
         .after_help(after_help)
 }
