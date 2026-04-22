@@ -103,9 +103,11 @@ Current behaviour:
 - can keep upstream records or drain them, depending on `upstream.mode`
 - stays attached and forwards new log records live
 - posts raw stored OTLP protobuf payloads to every destination configured in `collector.url`
-- supports OTLP/HTTP export, HTTPS export, and plain OTLP/gRPC export
+- supports OTLP/HTTP export, HTTPS export, plain OTLP/gRPC export, and gRPC export over TLS or mutual TLS
 - acknowledges records in `drain` mode only after successful export to every configured destination
 - can fan one upstream stream out to multiple downstream collectors from one `ljd` instance
+- mixed plain plus TLS fan-out works when every TLS destination can share one collector TLS client config
+- if TLS destinations need different CA roots, client certs, or server-name overrides, they must be split across separate `ljd` instances
 - reconnects after disconnect and resumes from the last forwarded sequence
 - can persist that sequence in `upstream.state-file`
 - detects upstream restart or storage replacement through replay stream identity

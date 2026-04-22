@@ -206,19 +206,73 @@ configured collector destination set.
 
 ### `collector.ca-file`
 
-CA file used when HTTPS collector export is configured.
+CA file used by every TLS collector destination in `collector.url`.
+
+Rules:
+
+- applies to `https://...` and `grpcs://...`
+- ignored for `http://...`, `grpc://...`, and bare `host:port`
+- one config value is shared across all TLS collector destinations in the same `ljd` process
+- if different TLS destinations need different CA roots, split them across separate `ljd` bridge or replay processes
 
 ### `collector.cert-file`
 
-Optional client certificate for HTTPS collector export.
+Optional client certificate used by every TLS collector destination in `collector.url`.
+
+Rules:
+
+- applies to `https://...` and `grpcs://...`
+- ignored for `http://...`, `grpc://...`, and bare `host:port`
+- must be paired with `collector.key-file`
+- one config value is shared across all TLS collector destinations in the same `ljd` process
+- if different TLS destinations need different client identities, split them across separate `ljd` bridge or replay processes
 
 ### `collector.key-file`
 
 Private key matching `collector.cert-file`.
 
+Rules:
+
+- applies to `https://...` and `grpcs://...`
+- ignored for `http://...`, `grpc://...`, and bare `host:port`
+- must be paired with `collector.cert-file`
+
 ### `collector.server-name`
 
-Override server name used for HTTPS collector certificate validation.
+Override server name used for TLS collector certificate validation.
+
+Rules:
+
+- applies to `https://...` and `grpcs://...`
+- ignored for `http://...`, `grpc://...`, and bare `host:port`
+- one override is shared across all TLS collector destinations in the same `ljd` process
+- use it only when every TLS destination can validate against the same override name
+- if different TLS destinations need different server names, split them across separate `ljd` bridge or replay processes
+
+### Mixed TLS fan-out rules
+
+One `collector.url` list may mix plain and TLS destinations, for example:
+
+```yaml
+collector.url:
+  - http://127.0.0.1:4318/v1/logs
+  - grpc://127.0.0.1:4317
+  - grpcs://collector.example:4317
+```
+
+Behaviour:
+
+- plain destinations ignore `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name`
+- TLS destinations share one collector TLS client configuration inside one `ljd` process
+- `https://...` and `grpcs://...` therefore reuse the same CA roots, optional client certificate, optional client key, and optional server-name override
+- mixed plain plus TLS fan-out is supported
+- mixed TLS fan-out is supported only when every TLS destination can use the same TLS client settings
+- if one TLS destination fails handshake or export, that batch is treated as failed for the whole fan-out set
+- in bridge `drain` mode, upstream acknowledgement waits until every configured destination accepts the batch
+
+Operational rule:
+
+- if destinations need different trust roots, different client certificates, or different server-name overrides, run separate `ljd` instances
 
 ### `ingest.max-batch-bytes`
 
@@ -601,7 +655,10 @@ If omitted:
 - `collector.url` can be one string or a YAML list of strings
 - `collector.url` is used by `ljd replay` when `--dest` is omitted
 - `collector.timeout-ms` controls replay and bridge collector socket timeout
-- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to HTTPS collector export
+- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to `https://...` and `grpcs://...` collector export
+- one collector TLS config is shared across all TLS collector destinations in one process
+- mixed plain plus TLS fan-out is supported
+- different TLS trust roots, client certs, or server-name overrides require separate `ljd` instances
 - `backpressure.enabled` enables bridge backpressure policy handling
 - `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
 - `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection

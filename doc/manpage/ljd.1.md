@@ -257,7 +257,10 @@ Rules:
 - `replay.client-timeout-ms` caps how long one replay client can block on socket I/O
 - `collector.url` configures bridge and replay destination URL or URL list
 - `collector.timeout-ms` configures replay and bridge socket timeout in milliseconds
-- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure HTTPS collector export
+- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure `https://...` and `grpcs://...` collector export
+- one collector TLS config is shared across all TLS collector destinations in one process
+- mixed plain plus TLS fan-out is supported
+- different TLS trust roots, client certs, or server-name overrides require separate `ljd` instances
 - `backpressure.enabled` enables bridge backpressure policy handling
 - `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
 - `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection
