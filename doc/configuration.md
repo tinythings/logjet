@@ -181,6 +181,8 @@ Scheme behaviour:
   - OTLP/HTTP export over TLS
 - `grpc://`
   - OTLP/gRPC export
+- `grpcs://`
+  - OTLP/gRPC export over TLS
 - bare `host:port`
   - treated as OTLP/HTTP with `/v1/logs`
 
@@ -248,6 +250,33 @@ Rules:
 - one override is shared across all TLS collector destinations in the same `ljd` process
 - use it only when every TLS destination can validate against the same override name
 - if different TLS destinations need different server names, split them across separate `ljd` bridge or replay processes
+
+### gRPC bridge TLS examples
+
+Plain TLS with server certificate validation:
+
+```yaml
+collector.url: grpcs://collector.example:4317
+collector.ca-file: /etc/logjet/collector-ca.pem
+collector.server-name: collector.example
+```
+
+Mutual TLS with client certificate authentication too:
+
+```yaml
+collector.url: grpcs://collector.example:4317
+collector.ca-file: /etc/logjet/collector-ca.pem
+collector.cert-file: /etc/logjet/collector.pem
+collector.key-file: /etc/logjet/collector.key
+collector.server-name: collector.example
+```
+
+Interpretation:
+
+- plain TLS means the bridge verifies the collector certificate and does not send a client certificate
+- mutual TLS means the bridge verifies the collector certificate and also sends its own client certificate
+- `collector.cert-file` and `collector.key-file` must be set together or both left unset
+- `collector.ca-file` is required for `grpcs://...`
 
 ### Mixed TLS fan-out rules
 

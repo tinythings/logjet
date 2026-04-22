@@ -260,6 +260,9 @@ Rules:
 - `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure `https://...` and `grpcs://...` collector export
 - one collector TLS config is shared across all TLS collector destinations in one process
 - mixed plain plus TLS fan-out is supported
+- `grpcs://...` with only `collector.ca-file` is plain TLS with server validation
+- `grpcs://...` with `collector.cert-file` and `collector.key-file` adds mutual TLS client authentication
+- if one TLS destination fails handshake or export, that batch fails for the whole fan-out set
 - different TLS trust roots, client certs, or server-name overrides require separate `ljd` instances
 - `backpressure.enabled` enables bridge backpressure policy handling
 - `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
