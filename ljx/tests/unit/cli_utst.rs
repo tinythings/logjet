@@ -36,8 +36,39 @@ fn top_level_export_force_parses() {
 }
 
 #[test]
+fn top_level_query_parses_literal_filter() {
+    let cli = Cli::try_parse_from(["ljx", "input.logjet", "-F", "error"]).expect("cli parses");
+    assert_eq!(cli.input, Some(PathBuf::from("input.logjet")));
+    assert!(matches!(cli.format, None));
+    assert_eq!(cli.predicate.fixed_string, vec!["error".to_string()]);
+}
+
+#[test]
+fn top_level_query_accepts_explicit_ndjson_format() {
+    let cli = Cli::try_parse_from(["ljx", "--format", "ndjson", "input.logjet", "-e", "error|panic"]).expect("cli parses");
+    assert_eq!(cli.input, Some(PathBuf::from("input.logjet")));
+    assert!(matches!(cli.format, Some(crate::cli::ExportFormat::Ndjson)));
+    assert_eq!(cli.predicate.grep, vec!["error|panic".to_string()]);
+}
+
+#[test]
+fn top_level_query_parses_repeated_literal_and_regex_filters() {
+    let cli = Cli::try_parse_from(["ljx", "input.logjet", "-F", "foo", "-F", "bar", "-e", "baz|qux", "-e", "zap"]).expect("cli parses");
+    assert_eq!(cli.predicate.fixed_string, vec!["foo".to_string(), "bar".to_string()]);
+    assert_eq!(cli.predicate.grep, vec!["baz|qux".to_string(), "zap".to_string()]);
+}
+
+#[test]
+fn top_level_query_parses_field_selection() {
+    let cli = Cli::try_parse_from(["ljx", "input.logjet", "--fields", "body,timestamp", "--fields", "service_name"]).expect("cli parses");
+    assert_eq!(cli.fields, vec!["body".to_string(), "timestamp".to_string(), "service_name".to_string()]);
+}
+
+#[test]
 fn help_lists_current_export_formats() {
     let help = build_cli().render_long_help().to_string();
+    assert!(help.contains("ljx <INPUT> [--format <FORMAT>] [FILTER OPTIONS]"));
+    assert!(help.contains("--fields <KEY[,KEY...]>"));
     assert!(help.contains("--export <FORMAT>"));
     assert!(help.contains("Export one .logjet input to a built-in or plugin format: ndjson"));
     assert!(!help.contains("Built-in export formats:"));
