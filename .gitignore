@@ -8,4 +8,5 @@ TODO*
 bsd*
 *.logjet
 /demo/*/*.state
+/demo/*/certs
 bridge.state
