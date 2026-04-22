@@ -12,7 +12,7 @@ use prost::Message;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use tokio::runtime::{Builder, Runtime};
 use tonic::Request;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 
 use crate::config::{BackpressureConfig, BackpressureMode, CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode};
 use crate::protocol::{ReplayAck, ReplayHello, ReplayRequest, read_record, read_replay_hello, write_replay_ack, write_replay_request};
@@ -816,9 +816,20 @@ async fn connect_grpc_with_collector(
             .as_deref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "collector.ca-file is required for grpcs:// collector.url"))?;
         let domain = collector.server_name.as_deref().unwrap_or_else(|| authority_host(&endpoint.authority));
-        client = client
-            .tls_config(ClientTlsConfig::new().ca_certificate(Certificate::from_pem(fs::read(ca_file)?)).domain_name(domain.to_string()))
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+        let tls = match (collector.cert_file.as_deref(), collector.key_file.as_deref()) {
+            (Some(cert_file), Some(key_file)) => ClientTlsConfig::new()
+                .ca_certificate(Certificate::from_pem(fs::read(ca_file)?))
+                .identity(Identity::from_pem(fs::read(cert_file)?, fs::read(key_file)?))
+                .domain_name(domain.to_string()),
+            (None, None) => ClientTlsConfig::new().ca_certificate(Certificate::from_pem(fs::read(ca_file)?)).domain_name(domain.to_string()),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "collector.cert-file and collector.key-file must either both be set or both be unset",
+                ));
+            }
+        };
+        client = client.tls_config(tls).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     }
     client.connect().await.map(LogsServiceClient::new).map_err(|err| io::Error::other(format!("failed to connect gRPC collector: {err}")))
 }
