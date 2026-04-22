@@ -10,6 +10,7 @@ http.address = "0.0.0.0:4418"
 
 [sources.otlp_grpcs.grpc.tls]
 enabled = true
+alpn_protocols = ["h2"]
 crt_file = "./certs/vector.pem"
 key_file = "./certs/vector.key"
 
