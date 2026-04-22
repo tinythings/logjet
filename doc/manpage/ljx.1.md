@@ -8,6 +8,8 @@ ljx - offline toolbox for inspecting and transforming `.logjet` files
 
 # SYNOPSIS
 
+`ljx` *input* [`--format` *format*] [`--fields` *key[,key...]*] [*predicate-options*]
+
 `ljx` `count` *input* [*predicate-options*]
 
 `ljx` `filter` *input* `-o` *output* [*predicate-options*] [`--codec` *codec*] [`--block-target-size` *bytes*]
@@ -133,7 +135,31 @@ Expected options:
 - `-F`, `--fixed-string` *text*
 - `-i`, `--ignore-case`
 
-`-e` and `-F` are mutually exclusive.
+Payload matchers are repeatable and combined with logical AND.
+
+- repeat `-F` to require multiple literal substrings
+- repeat `-e` to require multiple regex matches
+- mix `-F` and `-e` to require both literal and regex matches
+
+Within one `-e`, ordinary regex alternation still applies, so
+`-e 'foo|bar'` means one matcher that accepts either term.
+
+## Top-level NDJSON query options
+
+## `--format` *ndjson*
+
+Select the output format for top-level `ljx` *input* mode.
+
+Current top-level query mode supports `ndjson` and defaults to it.
+
+## `--fields` *key[,key...]* 
+
+Limit NDJSON output to selected JSON keys.
+
+Repeat the flag or use comma-separated values to accumulate keys.
+When omitted, all exported keys are written.
+
+`--fields` only applies to NDJSON output.
 
 ## Filter output options
 
@@ -201,6 +227,23 @@ ljx filter telemetry.logjet -o copy.logjet
 
 Use this for a straight record-aware rewrite.
 
+## 5b. Stream NDJSON to stdout
+
+```text
+ljx telemetry.logjet
+```
+
+Use this for quick terminal inspection or shell pipelines without starting the
+interactive TUI.
+
+## 5c. Stream only selected JSON keys
+
+```text
+ljx telemetry.logjet --fields body,timestamp,service_name
+```
+
+Use this when full OTLP-derived rows are too verbose for terminal work.
+
 ## 5a. Keep records containing a literal string
 
 ```text
@@ -233,7 +276,7 @@ ljx filter telemetry.logjet -o one-hour.logjet --ts-min 1700000000000000000 --ts
 
 Use this to extract a specific time window into a new `.logjet` file.
 
-## 9. Stream filtered output to stdout
+## 9. Stream filtered `.logjet` output to stdout
 
 ```text
 ljx filter telemetry.logjet -o - --type logs > only-logs.logjet
@@ -262,6 +305,16 @@ There are two user-facing modes:
 - `-e`, `--grep` for grep-style regex search
 
 Case-insensitive matching is enabled with `-i`, `--ignore-case`.
+
+Matchers can be repeated and are combined with AND semantics.
+
+Examples:
+
+```text
+ljx telemetry.logjet -F error -F customer-123
+ljx telemetry.logjet -e 'timeout|deadline exceeded' -e customer-123
+ljx telemetry.logjet -F error -e 'panic|fatal' -i
+```
 
 ## 12. Regex payload match: wildcard in the middle
 
@@ -294,6 +347,15 @@ ljx view telemetry.logjet
 ```
 
 Use this when you want a human-readable record listing.
+
+## 15a. Print NDJSON records for terminal inspection
+
+```text
+ljx telemetry.logjet -F error -i
+```
+
+Use this when you want structured records on stdout rather than the interactive
+TUI.
 
 ## 16. Print records with hex payload rendering
 

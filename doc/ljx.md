@@ -31,6 +31,7 @@ Core goals:
 
 Documented command set:
 
+- top-level query/export mode
 - `count`
 - `filter`
 - `stats`
@@ -65,6 +66,45 @@ why. If stdin is later supported by spooling to a temporary file, that behaviour
 should be documented as an explicit implementation choice.
 
 ## Command Intent
+
+## `ljx <input>`
+
+Stream one `.logjet` input as NDJSON to stdout.
+
+This is the fast path for shell pipelines and ad hoc inspection when the TUI is
+too heavy and rewriting another `.logjet` file is not what you want.
+
+Examples:
+
+```text
+ljx telemetry.logjet
+ljx telemetry.logjet -F error -i
+ljx telemetry.logjet -F error -e 'customer-123|customer-456' -i
+ljx telemetry.logjet --fields body,timestamp,service_name
+```
+
+Current behaviour:
+
+- default output format is `ndjson`
+- output goes to stdout
+- predicates are the same as `count` and `filter`
+- `--fields` limits NDJSON keys without changing match semantics
+
+For OTLP log records, NDJSON output includes the core record fields when
+present, including:
+
+- `body`
+- `timestamp`
+- `observed_timestamp`
+- `severity_text`
+- `severity_number`
+- `event_name`
+- `trace_id`
+- `span_id`
+- `flags`
+- `scope_name`
+- `scope_version`
+- flattened resource, scope, and record attributes such as `service_name`
 
 ## `ljx count`
 
@@ -112,7 +152,24 @@ Supported payload matching modes:
 - `-e`, `--grep` for grep-style regex matching
 - `-i`, `--ignore-case` to make either payload matcher case-insensitive
 
-`ljx` uses one payload matcher at a time. `-F` and `-e` are mutually exclusive.
+Payload matchers are repeatable and combined with logical AND:
+
+- repeated `-F` means every literal must match
+- repeated `-e` means every regex must match
+- `-F` and `-e` can be mixed, and all matchers must pass
+
+Examples:
+
+```text
+ljx telemetry.logjet -F error -F customer-123
+ljx telemetry.logjet -e 'timeout|deadline exceeded' -e 'customer-123|customer-456'
+ljx telemetry.logjet -F error -e 'panic|fatal' -i
+```
+
+Within one `-e`, normal regex alternation still applies, so:
+
+- `-e 'foo|bar'` means one regex matcher that accepts either term
+- `-e foo -e bar` means both regexes must match somewhere in the payload
 
 ## `ljx stats`
 
@@ -236,6 +293,7 @@ Important behaviour:
 - export is streaming and preserves input record order
 - the host owns the output file and passes bytes through callbacks to the plugin
 - if the output file already exists, `--force` is required to overwrite it
+- `--fields` is supported only for `ndjson` export and limits the exported JSON keys
 - plugin discovery order and ABI rules are documented in `doc/parquet/exporters-abi.md`
 - Parquet-specific usage, schema, installation, and limits are documented in
   `doc/parquet/export-parquet.md`
