@@ -222,7 +222,7 @@ fn temp_spool_reader_and_writer_use_independent_offsets() {
 }
 
 fn make_view_app(input: std::path::PathBuf) -> ViewApp {
-    ViewApp::new(ViewArgs { input, hex_payload: false }).expect("view app")
+    ViewApp::new(ViewArgs { input, hex_payload: false, tail: false }).expect("view app")
 }
 
 fn key(code: KeyCode) -> KeyEvent {
