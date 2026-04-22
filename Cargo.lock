@@ -1335,6 +1335,7 @@ dependencies = [
  "opentelemetry-proto",
  "parquet",
  "prost",
+ "rand 0.9.4",
  "zstd",
 ]
 
