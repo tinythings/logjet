@@ -23,7 +23,7 @@ fn empty_config_file_uses_defaults() {
     assert_eq!(config.replay_addr, "0.0.0.0:7002");
     assert_eq!(config.replay_max_clients, 32);
     assert_eq!(config.replay_client_timeout_ms, 10_000);
-    assert_eq!(config.collector.url, "http://127.0.0.1:4318/v1/logs");
+    assert_eq!(config.collector.urls, vec!["http://127.0.0.1:4318/v1/logs".to_string()]);
     assert_eq!(config.collector.timeout_ms, 10_000);
     assert!(!config.backpressure.enabled);
     assert_eq!(config.backpressure.mode, BackpressureMode::Disconnect);
@@ -93,7 +93,7 @@ fn file_mode_and_collector_settings_parse() {
     assert_eq!(config.tls.key_file.as_deref(), Some(Path::new("./node.key")));
     assert!(config.tls.require_client_cert);
     assert_eq!(config.tls.server_name.as_deref(), Some("appliance.internal"));
-    assert_eq!(config.collector.url, "https://127.0.0.1:4320/custom");
+    assert_eq!(config.collector.urls, vec!["https://127.0.0.1:4320/custom".to_string()]);
     assert!(config.backpressure.enabled);
     assert_eq!(config.backpressure.mode, BackpressureMode::Block);
     assert_eq!(config.backpressure.max_buffered_records, 23);
@@ -137,7 +137,7 @@ fn https_collector_fields_parse_without_file_mode() {
         "collector.url: https://collector.example:443/v1/logs\ncollector.ca-file: ./ca.pem\ncollector.server-name: collector.example\n",
     );
     let config = Config::load(&path).unwrap();
-    assert_eq!(config.collector.url, "https://collector.example:443/v1/logs");
+    assert_eq!(config.collector.urls, vec!["https://collector.example:443/v1/logs".to_string()]);
     assert_eq!(config.collector.ca_file.as_deref(), Some(Path::new("./ca.pem")));
     assert_eq!(config.collector.server_name.as_deref(), Some("collector.example"));
     fs::remove_file(path).unwrap();
@@ -149,6 +149,14 @@ fn upstream_mode_drain_parses() {
     let config = Config::load(&path).unwrap();
     assert_eq!(config.upstream.mode, UpstreamMode::Drain);
     assert_eq!(config.upstream.state_file.as_deref(), Some(Path::new("./bridge.state")));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn collector_url_list_parses() {
+    let path = write_temp_config("collector-list", "collector.url:\n  - http://127.0.0.1:4318/v1/logs\n  - grpc://127.0.0.1:4317\n");
+    let config = Config::load(&path).unwrap();
+    assert_eq!(config.collector.urls, vec!["http://127.0.0.1:4318/v1/logs".to_string(), "grpc://127.0.0.1:4317".to_string()]);
     fs::remove_file(path).unwrap();
 }
 

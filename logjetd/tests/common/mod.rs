@@ -7,11 +7,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::logs::v1::{
+    ExportLogsServiceRequest, ExportLogsServiceResponse,
+    logs_service_server::{LogsService, LogsServiceServer},
+};
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs, SeverityNumber};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
+use tokio::runtime::Builder;
+use tonic::{Request, Response, Status};
 
 const REPLAY_HELLO_MAGIC: [u8; 8] = *b"LJRPH001";
 const REPLAY_REQUEST_MAGIC: [u8; 8] = *b"LJRPL001";
@@ -145,6 +150,45 @@ impl MockCollector {
 
     pub fn messages(&self) -> Vec<String> {
         self.received.lock().unwrap().iter().flat_map(extract_messages).collect()
+    }
+}
+
+pub struct MockGrpcCollector {
+    received: Arc<Mutex<Vec<ExportLogsServiceRequest>>>,
+    _thread: thread::JoinHandle<()>,
+}
+
+impl MockGrpcCollector {
+    pub fn start(port: u16) -> io::Result<Self> {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let service = TestGrpcCollector { received: Arc::clone(&received) };
+        let addr = format!("127.0.0.1:{port}")
+            .parse()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC collector address: {err}")))?;
+        let thread = thread::spawn(move || {
+            let runtime = Builder::new_current_thread().enable_all().build().expect("gRPC test runtime");
+            runtime.block_on(async move {
+                tonic::transport::Server::builder().add_service(LogsServiceServer::new(service)).serve(addr).await.expect("gRPC collector server");
+            });
+        });
+        Ok(Self { received, _thread: thread })
+    }
+
+    pub fn messages(&self) -> Vec<String> {
+        self.received.lock().unwrap().iter().flat_map(extract_messages).collect()
+    }
+}
+
+#[derive(Clone)]
+struct TestGrpcCollector {
+    received: Arc<Mutex<Vec<ExportLogsServiceRequest>>>,
+}
+
+#[tonic::async_trait]
+impl LogsService for TestGrpcCollector {
+    async fn export(&self, request: Request<ExportLogsServiceRequest>) -> Result<Response<ExportLogsServiceResponse>, Status> {
+        self.received.lock().unwrap().push(request.into_inner());
+        Ok(Response::new(ExportLogsServiceResponse { partial_success: None }))
     }
 }
 

@@ -13,11 +13,8 @@ unsafe extern "C" fn capture_record(user: *mut c_void, record: *const LjLogRecor
     let captured = unsafe { &mut *(user as *mut Vec<CapturedRecord>) };
     let record = unsafe { &*record };
 
-    let severity_text = if record.severity_text.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(record.severity_text) }.to_string_lossy().into_owned()
-    };
+    let severity_text =
+        if record.severity_text.is_null() { String::new() } else { unsafe { CStr::from_ptr(record.severity_text) }.to_string_lossy().into_owned() };
     let body = if record.body.is_null() { String::new() } else { unsafe { CStr::from_ptr(record.body) }.to_string_lossy().into_owned() };
 
     let attrs = if record.attributes.is_null() || record.attributes_len == 0 {

@@ -7,8 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    ChildGuard, MockCollector, TestDir, connect_replay_client, free_port, ljd_command, post_otlp_http, read_replay_message, replay_messages,
-    wait_for_tcp, wait_until,
+    ChildGuard, MockCollector, MockGrpcCollector, TestDir, connect_replay_client, free_port, ljd_command, post_otlp_http, read_replay_message,
+    replay_messages, wait_for_tcp, wait_until,
 };
 
 #[test]
@@ -98,6 +98,100 @@ fn bridge_drain_consumes_upstream_records() -> io::Result<()> {
     assert_eq!(collector.messages(), vec!["DRAIN 001".to_string(), "DRAIN 002".to_string(), "DRAIN 003".to_string()]);
 
     wait_until(Duration::from_secs(5), || Ok(replay_messages(&format!("127.0.0.1:{replay_port}"), 0, 1)?.is_empty()))?;
+
+    Ok(())
+}
+
+#[test]
+fn bridge_keep_forwards_backlog_over_grpc() -> io::Result<()> {
+    let dir = TestDir::new("bridge-keep-grpc")?;
+    let ingest_port = free_port()?;
+    let replay_port = free_port()?;
+    let collector_port = free_port()?;
+
+    let appliance_config = dir.write(
+        "appliance.conf",
+        &format!(
+            "output: buffer\nbuffer.messages: 64\ningest.protocol: otlp-http\ningest.listen: 127.0.0.1:{ingest_port}\nreplay.listen: 127.0.0.1:{replay_port}\n"
+        ),
+    )?;
+    let bridge_config = dir.write(
+        "bridge.conf",
+        &format!("collector.url: grpc://127.0.0.1:{collector_port}\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
+    )?;
+
+    let _appliance = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&appliance_config).arg("serve");
+        cmd
+    })?;
+    wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
+    wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
+
+    for message in ["GRPC 001", "GRPC 002", "GRPC 003"] {
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-grpc", message)?;
+    }
+
+    let collector = MockGrpcCollector::start(collector_port)?;
+    wait_for_tcp(&format!("127.0.0.1:{collector_port}"), Duration::from_secs(5))?;
+    let _bridge = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&bridge_config).arg("bridge");
+        cmd
+    })?;
+
+    wait_until(Duration::from_secs(5), || Ok(collector.messages().len() >= 3))?;
+    assert_eq!(collector.messages(), vec!["GRPC 001".to_string(), "GRPC 002".to_string(), "GRPC 003".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn bridge_keep_fans_out_to_http_and_grpc() -> io::Result<()> {
+    let dir = TestDir::new("bridge-fanout")?;
+    let ingest_port = free_port()?;
+    let replay_port = free_port()?;
+    let http_port = free_port()?;
+    let grpc_port = free_port()?;
+
+    let appliance_config = dir.write(
+        "appliance.conf",
+        &format!(
+            "output: buffer\nbuffer.messages: 64\ningest.protocol: otlp-http\ningest.listen: 127.0.0.1:{ingest_port}\nreplay.listen: 127.0.0.1:{replay_port}\n"
+        ),
+    )?;
+    let bridge_config = dir.write(
+        "bridge.conf",
+        &format!(
+            "collector.url:\n  - http://127.0.0.1:{http_port}/v1/logs\n  - grpc://127.0.0.1:{grpc_port}\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"
+        ),
+    )?;
+
+    let _appliance = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&appliance_config).arg("serve");
+        cmd
+    })?;
+    wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
+    wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
+
+    for message in ["FANOUT 001", "FANOUT 002", "FANOUT 003"] {
+        post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-fanout", message)?;
+    }
+
+    let http = MockCollector::start(http_port)?;
+    let grpc = MockGrpcCollector::start(grpc_port)?;
+    wait_for_tcp(&format!("127.0.0.1:{http_port}"), Duration::from_secs(5))?;
+    wait_for_tcp(&format!("127.0.0.1:{grpc_port}"), Duration::from_secs(5))?;
+    let _bridge = ChildGuard::spawn({
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&bridge_config).arg("bridge");
+        cmd
+    })?;
+
+    wait_until(Duration::from_secs(5), || Ok(http.messages().len() >= 3 && grpc.messages().len() >= 3))?;
+    assert_eq!(http.messages(), vec!["FANOUT 001".to_string(), "FANOUT 002".to_string(), "FANOUT 003".to_string()]);
+    assert_eq!(grpc.messages(), vec!["FANOUT 001".to_string(), "FANOUT 002".to_string(), "FANOUT 003".to_string()]);
 
     Ok(())
 }
