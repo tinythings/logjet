@@ -36,8 +36,9 @@ The daemon provides:
 - basic replay-client caps
 - optional TLS on the replay/bridge transport
 - HTTPS collector export
+- plain OTLP/gRPC collector export
 - bridge-side restart recovery through persisted sequence state and upstream stream identity
-- one-shot file replay to OTLP/HTTP collectors
+- one-shot file replay to OTLP collectors
 - configurable backlog storage
 - in-memory ring buffer mode
 - file output mode with `.logjet` segment rotation
@@ -62,10 +63,10 @@ Typical flow:
 2. request records after a known sequence
 3. keep or drain retained backlog
 4. stay attached for live records
-5. forward raw OTLP protobuf payloads into an OTLP/HTTP collector
+5. forward raw OTLP protobuf payloads into one or more OTLP collectors
 
-`ljd` can also replay stored `.logjet` files later into an OTLP/HTTP
-collector without preserving original timing.
+`ljd` can also replay stored `.logjet` files later into OTLP collectors
+without preserving original timing.
 
 This is optimised for:
 

@@ -31,12 +31,13 @@ It can:
 - optionally run OTLP/HTTP ingest over HTTPS and OTLP/gRPC ingest over TLS
 - store raw OTLP protobuf payloads either in memory or in append-only `.logjet` files
 - expose a replay listener for downstream consumers over the current internal wire protocol
-- connect to another `ljd` replay listener and forward backlog plus live records into an OTLP/HTTP collector
+- connect to another `ljd` replay listener and forward backlog plus live records into OTLP collectors
 - optionally protect replay and bridge transport with TLS
 - optionally export to an HTTPS OTLP collector
+- export to a plain OTLP/gRPC collector
 - inspect `.logjet` files and directories
 - list file-segment metadata for one rotated spool
-- replay stored `.logjet` files into an OTLP/HTTP collector as a one-shot operation
+- replay stored `.logjet` files into OTLP collectors as a one-shot operation
 - prune oldest rotated file segments by file count or byte budget
 
 The daemon is designed for cheap hardware, limited RAM, unreliable storage, and
@@ -97,7 +98,7 @@ ljd segments --path /var/lib/logjet --name app.logjet
 ## replay
 
 Read ordered `.logjet` files from a directory and blast the stored OTLP log
-payloads into an OTLP/HTTP collector.
+payloads into OTLP collectors.
 
 Example:
 
@@ -168,11 +169,13 @@ Show which files `prune` would remove without deleting them.
 
 ## `--dest` *url-or-host:port*
 
-Destination OTLP/HTTP collector for replay.
+Destination OTLP collector for replay.
 
 Used only with the `replay` command.
 
 If a full `http://host:port/path` URL is given, replay uses that exact path.
+If `https://` is given, replay uses OTLP/HTTP over TLS.
+If `grpc://host:port` is given, replay uses OTLP/gRPC.
 If only `host:port` is given, replay defaults to `/v1/logs`.
 
 ## `--source` *host:port*
@@ -252,9 +255,15 @@ Rules:
 - `ingest.overload-report-ms` controls operator-visible overload summaries on stderr
 - `replay.max-clients` caps concurrent replay clients
 - `replay.client-timeout-ms` caps how long one replay client can block on socket I/O
-- `collector.url` configures replay destination URL
+- `collector.url` configures bridge and replay destination URL or URL list
 - `collector.timeout-ms` configures replay and bridge socket timeout in milliseconds
-- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure HTTPS collector export
+- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` configure `https://...` and `grpcs://...` collector export
+- one collector TLS config is shared across all TLS collector destinations in one process
+- mixed plain plus TLS fan-out is supported
+- `grpcs://...` with only `collector.ca-file` is plain TLS with server validation
+- `grpcs://...` with `collector.cert-file` and `collector.key-file` adds mutual TLS client authentication
+- if one TLS destination fails handshake or export, that batch fails for the whole fan-out set
+- different TLS trust roots, client certs, or server-name overrides require separate `ljd` instances
 - `backpressure.enabled` enables bridge backpressure policy handling
 - `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
 - `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection
@@ -303,7 +312,7 @@ Append-only file behaviour:
 - backlog-to-live replay handoff through direct ingest wakeups
 - basic replay-client caps through `replay.max-clients`
 - basic replay-client timeout through `replay.client-timeout-ms`
-- continuous bridge mode from replay listener to OTLP/HTTP collectors
+- continuous bridge mode from replay listener to OTLP collectors
 - acknowledged drain mode through `upstream.mode: drain`
 - persisted bridge resume through `upstream.state-file`
 - upstream restart and storage-replacement detection through replay stream identity
@@ -311,7 +320,8 @@ Append-only file behaviour:
 - bounded bridge-side exporter queue through `backpressure.max-buffered-records`
 - optional TLS on replay/bridge transport
 - HTTPS OTLP collector export
-- one-shot file replay to OTLP/HTTP collectors with `ljd replay`
+- plain OTLP/gRPC collector export
+- one-shot file replay to OTLP collectors with `ljd replay`
 - configurable replay destination via `collector.url`
 - inspection of `.logjet` files and directories
 

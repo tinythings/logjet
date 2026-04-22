@@ -7,11 +7,18 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::logs::v1::{
+    ExportLogsServiceRequest, ExportLogsServiceResponse,
+    logs_service_server::{LogsService, LogsServiceServer},
+};
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs, SeverityNumber};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
+use rcgen::{BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, SanType};
+use tokio::runtime::Builder;
+use tonic::transport::{Identity, ServerTlsConfig};
+use tonic::{Request, Response, Status};
 
 const REPLAY_HELLO_MAGIC: [u8; 8] = *b"LJRPH001";
 const REPLAY_REQUEST_MAGIC: [u8; 8] = *b"LJRPL001";
@@ -38,6 +45,55 @@ impl TestDir {
         fs::write(&path, body)?;
         Ok(path)
     }
+}
+
+pub struct GrpcTlsFiles {
+    pub ca: PathBuf,
+    pub client_cert: PathBuf,
+    pub client_key: PathBuf,
+    server_cert: PathBuf,
+    server_key: PathBuf,
+}
+
+pub fn write_fake_grpc_tls_files(dir: &TestDir) -> io::Result<GrpcTlsFiles> {
+    let ca = new_ca_cert()?;
+    let server = new_signed_cert(
+        "collector.test.invalid",
+        &[SanType::DnsName("collector.test.invalid".into()), SanType::IpAddress("127.0.0.1".parse().unwrap())],
+        ExtendedKeyUsagePurpose::ServerAuth,
+        &ca,
+    )?;
+    let client = new_signed_cert("client.test.invalid", &[SanType::DnsName("client.test.invalid".into())], ExtendedKeyUsagePurpose::ClientAuth, &ca)?;
+    Ok(GrpcTlsFiles {
+        ca: dir.write("grpc-ca.pem", &ca.serialize_pem().map_err(rcgen_err)?)?,
+        client_cert: dir.write("grpc-client.pem", &client.serialize_pem_with_signer(&ca).map_err(rcgen_err)?)?,
+        client_key: dir.write("grpc-client.key", &client.serialize_private_key_pem())?,
+        server_cert: dir.write("grpc-server.pem", &server.serialize_pem_with_signer(&ca).map_err(rcgen_err)?)?,
+        server_key: dir.write("grpc-server.key", &server.serialize_private_key_pem())?,
+    })
+}
+
+fn new_ca_cert() -> io::Result<Certificate> {
+    let mut params = CertificateParams::default();
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.distinguished_name = DistinguishedName::new();
+    params.distinguished_name.push(DnType::CommonName, "Fake Test CA");
+    Certificate::from_params(params).map_err(rcgen_err)
+}
+
+fn new_signed_cert(name: &str, sans: &[SanType], usage: ExtendedKeyUsagePurpose, ca: &Certificate) -> io::Result<Certificate> {
+    let mut params = CertificateParams::default();
+    params.distinguished_name = DistinguishedName::new();
+    params.distinguished_name.push(DnType::CommonName, name);
+    params.extended_key_usages = vec![usage];
+    params.subject_alt_names = sans.to_vec();
+    let cert = Certificate::from_params(params).map_err(rcgen_err)?;
+    let _ = cert.serialize_pem_with_signer(ca).map_err(rcgen_err)?;
+    Ok(cert)
+}
+
+fn rcgen_err(err: rcgen::Error) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, err.to_string())
 }
 
 impl Drop for TestDir {
@@ -148,6 +204,96 @@ impl MockCollector {
     }
 }
 
+pub struct MockGrpcCollector {
+    received: Arc<Mutex<Vec<ExportLogsServiceRequest>>>,
+    _thread: thread::JoinHandle<()>,
+}
+
+impl MockGrpcCollector {
+    pub fn start(port: u16) -> io::Result<Self> {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let service = TestGrpcCollector { received: Arc::clone(&received) };
+        let addr = format!("127.0.0.1:{port}")
+            .parse()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC collector address: {err}")))?;
+        let thread = thread::spawn(move || {
+            let runtime = Builder::new_current_thread().enable_all().build().expect("gRPC test runtime");
+            runtime.block_on(async move {
+                tonic::transport::Server::builder().add_service(LogsServiceServer::new(service)).serve(addr).await.expect("gRPC collector server");
+            });
+        });
+        Ok(Self { received, _thread: thread })
+    }
+
+    pub fn messages(&self) -> Vec<String> {
+        self.received.lock().unwrap().iter().flat_map(extract_messages).collect()
+    }
+
+    pub fn start_tls(port: u16, tls: &GrpcTlsFiles) -> io::Result<Self> {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let service = TestGrpcCollector { received: Arc::clone(&received) };
+        let server_cert = fs::read(&tls.server_cert)?;
+        let server_key = fs::read(&tls.server_key)?;
+        let addr = format!("127.0.0.1:{port}")
+            .parse()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC collector address: {err}")))?;
+        let thread = thread::spawn(move || {
+            let runtime = Builder::new_current_thread().enable_all().build().expect("gRPC TLS test runtime");
+            runtime.block_on(async move {
+                tonic::transport::Server::builder()
+                    .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(server_cert, server_key)))
+                    .expect("gRPC TLS config")
+                    .add_service(LogsServiceServer::new(service))
+                    .serve(addr)
+                    .await
+                    .expect("gRPC TLS collector server");
+            });
+        });
+        Ok(Self { received, _thread: thread })
+    }
+
+    pub fn start_mtls(port: u16, tls: &GrpcTlsFiles) -> io::Result<Self> {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let service = TestGrpcCollector { received: Arc::clone(&received) };
+        let ca = fs::read(&tls.ca)?;
+        let server_cert = fs::read(&tls.server_cert)?;
+        let server_key = fs::read(&tls.server_key)?;
+        let addr = format!("127.0.0.1:{port}")
+            .parse()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC collector address: {err}")))?;
+        let thread = thread::spawn(move || {
+            let runtime = Builder::new_current_thread().enable_all().build().expect("gRPC mTLS test runtime");
+            runtime.block_on(async move {
+                tonic::transport::Server::builder()
+                    .tls_config(
+                        ServerTlsConfig::new()
+                            .identity(Identity::from_pem(server_cert, server_key))
+                            .client_ca_root(tonic::transport::Certificate::from_pem(ca)),
+                    )
+                    .expect("gRPC mTLS config")
+                    .add_service(LogsServiceServer::new(service))
+                    .serve(addr)
+                    .await
+                    .expect("gRPC mTLS collector server");
+            });
+        });
+        Ok(Self { received, _thread: thread })
+    }
+}
+
+#[derive(Clone)]
+struct TestGrpcCollector {
+    received: Arc<Mutex<Vec<ExportLogsServiceRequest>>>,
+}
+
+#[tonic::async_trait]
+impl LogsService for TestGrpcCollector {
+    async fn export(&self, request: Request<ExportLogsServiceRequest>) -> Result<Response<ExportLogsServiceResponse>, Status> {
+        self.received.lock().unwrap().push(request.into_inner());
+        Ok(Response::new(ExportLogsServiceResponse { partial_success: None }))
+    }
+}
+
 fn handle_http_request(stream: &mut TcpStream, received: &Arc<Mutex<Vec<ExportLogsServiceRequest>>>, delay: Duration) -> io::Result<()> {
     let request = read_http_request(stream)?;
     if request.method != "POST" || request.path != "/v1/logs" {
@@ -216,7 +362,16 @@ fn write_http_response(stream: &mut TcpStream, status: u16, body: &str) -> io::R
 pub fn post_otlp_http(addr: &str, service_name: &str, message: &str) -> io::Result<()> {
     let batch = build_logs_request(service_name, message);
     let body = batch.encode_to_vec();
-    let mut stream = TcpStream::connect(addr)?;
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut stream = loop {
+        match TcpStream::connect(addr) {
+            Ok(stream) => break stream,
+            Err(err) if err.kind() == io::ErrorKind::ConnectionRefused && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => return Err(err),
+        }
+    };
     write!(
         stream,
         "POST /v1/logs HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

@@ -6,7 +6,7 @@ use crate::config::{BackpressureMode, CollectorConfig, UpstreamMode};
 use crate::protocol::ReplayHello;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -34,6 +34,23 @@ fn https_url_is_supported() {
     let endpoint = CollectorEndpoint::parse("https://127.0.0.1:4318/v1/logs").unwrap();
     assert_eq!(endpoint.authority, "127.0.0.1:4318");
     assert_eq!(endpoint.path, "/v1/logs");
+    assert!(endpoint.tls);
+    assert!(!endpoint.grpc);
+}
+
+#[test]
+fn grpc_url_is_supported() {
+    let endpoint = CollectorEndpoint::parse("grpc://127.0.0.1:4317").unwrap();
+    assert_eq!(endpoint.authority, "127.0.0.1:4317");
+    assert!(endpoint.grpc);
+    assert!(!endpoint.tls);
+}
+
+#[test]
+fn grpcs_url_is_supported() {
+    let endpoint = CollectorEndpoint::parse("grpcs://collector.starwars.test:4317").unwrap();
+    assert_eq!(endpoint.authority, "collector.starwars.test:4317");
+    assert!(endpoint.grpc);
     assert!(endpoint.tls);
 }
 
@@ -103,14 +120,13 @@ fn drop_newest_mode_reports_drop_when_export_queue_is_full() {
 
 fn test_collector_transport(mode: BackpressureMode, max_buffered_records: usize) -> CollectorTransport {
     CollectorTransport {
-        endpoint: CollectorEndpoint { authority: "127.0.0.1:4318".to_string(), path: "/v1/logs".to_string(), tls: false },
+        endpoints: vec![CollectorEndpoint { authority: "127.0.0.1:4318".to_string(), path: "/v1/logs".to_string(), tls: false, grpc: false }],
         timeout: std::time::Duration::from_millis(1000),
         backpressure_enabled: true,
         backpressure_mode: mode,
         max_buffered_records,
-        tls_client: None::<Arc<rustls::ClientConfig>>,
         collector: CollectorConfig {
-            url: "http://127.0.0.1:4318/v1/logs".to_string(),
+            urls: vec!["http://127.0.0.1:4318/v1/logs".to_string()],
             timeout_ms: 1000,
             ca_file: None,
             cert_file: None,

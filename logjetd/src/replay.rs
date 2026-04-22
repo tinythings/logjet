@@ -7,20 +7,22 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use logjet::{LogjetReader, ReaderConfig, RecordType};
-use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::logs::v1::{ExportLogsServiceRequest, logs_service_client::LogsServiceClient};
 use prost::Message;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
+use tokio::runtime::{Builder, Runtime};
+use tonic::Request;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 
 use crate::config::{BackpressureConfig, BackpressureMode, CollectorConfig, TlsConfig, UpstreamConfig, UpstreamMode};
 use crate::protocol::{ReplayAck, ReplayHello, ReplayRequest, read_record, read_replay_hello, write_replay_ack, write_replay_request};
 use crate::spool::list_named_segments;
-use crate::tls::{load_client_config, load_collector_client_config, parse_collector_server_name, parse_server_name};
+use crate::tls::{authority_host, load_client_config, load_collector_client_config, parse_collector_server_name, parse_server_name};
 
 pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorConfig) -> io::Result<u64> {
     let mut sent = 0u64;
-    let endpoint = CollectorEndpoint::parse(&collector.url)?;
-    let tls_client = if endpoint.tls { Some(load_collector_client_config(collector)?) } else { None };
-    let mut conn = CollectorConnection::connect(&endpoint, Duration::from_millis(collector.timeout_ms), tls_client.as_ref(), collector)?;
+    let endpoints = parse_collector_endpoints(collector)?;
+    let mut conn = MultiCollectorConnection::connect(&endpoints, Duration::from_millis(collector.timeout_ms), collector)?;
     let mut batcher = OtlpBatcher::new(collector.batch_size, collector.batch_timeout_ms);
 
     for segment in list_named_segments(path, name)? {
@@ -49,7 +51,7 @@ pub fn validate_replay_path(path: &Path, name: &str) -> io::Result<Vec<PathBuf>>
 pub fn bridge_wire_to_otlp_http(
     source: &str, collector: &CollectorConfig, backpressure: &BackpressureConfig, upstream: &UpstreamConfig, tls: &TlsConfig,
 ) -> io::Result<()> {
-    let endpoint = CollectorEndpoint::parse(&collector.url)?;
+    let endpoints = parse_collector_endpoints(collector)?;
     let connect_timeout = Duration::from_millis(upstream.connect_timeout_ms);
     let retry_delay = Duration::from_millis(upstream.retry_ms);
     let tls_client = if tls.enable { Some(load_client_config(tls)?) } else { None };
@@ -58,8 +60,7 @@ pub fn bridge_wire_to_otlp_http(
         backpressure_enabled: backpressure.enabled,
         backpressure_mode: backpressure.mode,
         max_buffered_records: backpressure.max_buffered_records,
-        tls_client: if endpoint.tls { Some(load_collector_client_config(collector)?) } else { None },
-        endpoint,
+        endpoints,
         collector: collector.clone(),
         upstream_mode: upstream.mode,
     };
@@ -393,16 +394,16 @@ struct CollectorEndpoint {
     authority: String,
     path: String,
     tls: bool,
+    grpc: bool,
 }
 
 #[derive(Clone)]
 struct CollectorTransport {
-    endpoint: CollectorEndpoint,
+    endpoints: Vec<CollectorEndpoint>,
     timeout: Duration,
     backpressure_enabled: bool,
     backpressure_mode: BackpressureMode,
     max_buffered_records: usize,
-    tls_client: Option<Arc<ClientConfig>>,
     collector: CollectorConfig,
     upstream_mode: UpstreamMode,
 }
@@ -423,8 +424,8 @@ impl CollectorTransport {
         )
     }
 
-    fn open_connection(&self) -> io::Result<CollectorConnection> {
-        CollectorConnection::connect(&self.endpoint, self.timeout, self.tls_client.as_ref(), &self.collector)
+    fn open_connection(&self) -> io::Result<MultiCollectorConnection> {
+        MultiCollectorConnection::connect(&self.endpoints, self.timeout, &self.collector)
     }
 }
 
@@ -459,7 +460,16 @@ impl io::Write for CollectorStream {
 }
 
 /// Persistent HTTP/1.1 keep-alive connection to an OTLP collector.
-struct CollectorConnection {
+enum CollectorConnection {
+    Http(Box<HttpCollectorConnection>),
+    Grpc(Box<GrpcCollectorConnection>),
+}
+
+struct MultiCollectorConnection {
+    collectors: Vec<CollectorConnection>,
+}
+
+struct HttpCollectorConnection {
     stream: CollectorStream,
     endpoint: CollectorEndpoint,
     timeout: Duration,
@@ -467,7 +477,69 @@ struct CollectorConnection {
     collector: CollectorConfig,
 }
 
+struct GrpcCollectorConnection {
+    client: LogsServiceClient<Channel>,
+    endpoint: CollectorEndpoint,
+    collector: CollectorConfig,
+    timeout: Duration,
+    runtime: Runtime,
+}
+
 impl CollectorConnection {
+    fn connect(
+        endpoint: &CollectorEndpoint, timeout: Duration, tls_client: Option<&Arc<ClientConfig>>, collector: &CollectorConfig,
+    ) -> io::Result<Self> {
+        if endpoint.grpc {
+            return GrpcCollectorConnection::connect(endpoint, timeout, collector).map(Box::new).map(Self::Grpc);
+        }
+        HttpCollectorConnection::connect(endpoint, timeout, tls_client, collector).map(Box::new).map(Self::Http)
+    }
+
+    fn reconnect(&mut self) -> io::Result<()> {
+        match self {
+            Self::Http(conn) => conn.reconnect(),
+            Self::Grpc(conn) => conn.reconnect(),
+        }
+    }
+
+    /// POST one OTLP payload, reconnecting once on transport failure.
+    fn post(&mut self, payload: &[u8]) -> io::Result<()> {
+        match self.post_inner(payload) {
+            Ok(()) => Ok(()),
+            Err(_first) => {
+                self.reconnect()?;
+                self.post_inner(payload)
+            }
+        }
+    }
+
+    fn post_inner(&mut self, payload: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Http(conn) => conn.post_inner(payload),
+            Self::Grpc(conn) => conn.post_inner(payload),
+        }
+    }
+}
+
+impl MultiCollectorConnection {
+    fn connect(endpoints: &[CollectorEndpoint], timeout: Duration, collector: &CollectorConfig) -> io::Result<Self> {
+        let mut collectors = Vec::with_capacity(endpoints.len());
+        for endpoint in endpoints {
+            let tls_client = if endpoint.tls && !endpoint.grpc { Some(load_collector_client_config(collector)?) } else { None };
+            collectors.push(CollectorConnection::connect(endpoint, timeout, tls_client.as_ref(), collector)?);
+        }
+        Ok(Self { collectors })
+    }
+
+    fn post(&mut self, payload: &[u8]) -> io::Result<()> {
+        for collector in &mut self.collectors {
+            collector.post(payload)?;
+        }
+        Ok(())
+    }
+}
+
+impl HttpCollectorConnection {
     fn connect(
         endpoint: &CollectorEndpoint, timeout: Duration, tls_client: Option<&Arc<ClientConfig>>, collector: &CollectorConfig,
     ) -> io::Result<Self> {
@@ -489,17 +561,6 @@ impl CollectorConnection {
         Ok(())
     }
 
-    /// POST one OTLP payload, reconnecting once on transport failure.
-    fn post(&mut self, payload: &[u8]) -> io::Result<()> {
-        match self.post_inner(payload) {
-            Ok(()) => Ok(()),
-            Err(_first) => {
-                self.reconnect()?;
-                self.post_inner(payload)
-            }
-        }
-    }
-
     fn post_inner(&mut self, payload: &[u8]) -> io::Result<()> {
         write!(
             self.stream,
@@ -511,6 +572,29 @@ impl CollectorConnection {
         self.stream.write_all(payload)?;
         self.stream.flush()?;
         read_http_response(&mut self.stream)
+    }
+}
+
+impl GrpcCollectorConnection {
+    fn connect(endpoint: &CollectorEndpoint, timeout: Duration, collector: &CollectorConfig) -> io::Result<Self> {
+        let runtime =
+            Builder::new_current_thread().enable_all().build().map_err(|err| io::Error::other(format!("failed to build gRPC runtime: {err}")))?;
+        let client = runtime.block_on(connect_grpc_with_collector(endpoint, timeout, Some(collector)))?;
+        Ok(Self { client, endpoint: endpoint.clone(), collector: collector.clone(), timeout, runtime })
+    }
+
+    fn reconnect(&mut self) -> io::Result<()> {
+        self.client = self.runtime.block_on(connect_grpc_with_collector(&self.endpoint, self.timeout, Some(&self.collector)))?;
+        Ok(())
+    }
+
+    fn post_inner(&mut self, payload: &[u8]) -> io::Result<()> {
+        let req = ExportLogsServiceRequest::decode(payload)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("invalid OTLP log batch: {err}")))?;
+        self.runtime
+            .block_on(self.client.export(Request::new(req)))
+            .map(|_| ())
+            .map_err(|err| io::Error::other(format!("collector gRPC export failed: {err}")))
     }
 }
 
@@ -587,7 +671,7 @@ impl OtlpBatcher {
     }
 
     /// Add a raw OTLP payload to the batch. Flushes to conn if batch is full.
-    fn add(&mut self, payload: &[u8], conn: &mut CollectorConnection) -> io::Result<()> {
+    fn add(&mut self, payload: &[u8], conn: &mut MultiCollectorConnection) -> io::Result<()> {
         if self.batch_size <= 1 {
             return conn.post(payload);
         }
@@ -602,7 +686,7 @@ impl OtlpBatcher {
     }
 
     /// Flush any pending records if the batch timeout has expired.
-    fn flush_if_expired(&mut self, conn: &mut CollectorConnection) -> io::Result<()> {
+    fn flush_if_expired(&mut self, conn: &mut MultiCollectorConnection) -> io::Result<()> {
         if self.pending_count > 0 && self.batch_timeout.as_millis() > 0 && self.first_added.is_some_and(|t| t.elapsed() >= self.batch_timeout) {
             self.flush(conn)?;
         }
@@ -610,7 +694,7 @@ impl OtlpBatcher {
     }
 
     /// Flush all pending records to the collector.
-    fn flush(&mut self, conn: &mut CollectorConnection) -> io::Result<()> {
+    fn flush(&mut self, conn: &mut MultiCollectorConnection) -> io::Result<()> {
         if self.pending_count == 0 {
             return Ok(());
         }
@@ -684,12 +768,26 @@ enum EnqueueOutcome {
 
 impl CollectorEndpoint {
     fn parse(input: &str) -> io::Result<Self> {
+        if let Some(authority) = input.strip_prefix("grpc://") {
+            if authority.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "collector.url missing host:port"));
+            }
+            return Ok(Self { authority: authority.to_string(), path: String::new(), tls: false, grpc: true });
+        }
+
+        if let Some(authority) = input.strip_prefix("grpcs://") {
+            if authority.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "collector.url missing host:port"));
+            }
+            return Ok(Self { authority: authority.to_string(), path: String::new(), tls: true, grpc: true });
+        }
+
         if let Some(rest) = input.strip_prefix("http://") {
             let (authority, path) = split_authority_and_path(rest);
             if authority.is_empty() {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "collector.url missing host:port"));
             }
-            return Ok(Self { authority: authority.to_string(), path: normalise_path(path), tls: false });
+            return Ok(Self { authority: authority.to_string(), path: normalise_path(path), tls: false, grpc: false });
         }
 
         if let Some(rest) = input.strip_prefix("https://") {
@@ -697,11 +795,43 @@ impl CollectorEndpoint {
             if authority.is_empty() {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "collector.url missing host:port"));
             }
-            return Ok(Self { authority: authority.to_string(), path: normalise_path(path), tls: true });
+            return Ok(Self { authority: authority.to_string(), path: normalise_path(path), tls: true, grpc: false });
         }
 
-        Ok(Self { authority: input.to_string(), path: "/v1/logs".to_string(), tls: false })
+        Ok(Self { authority: input.to_string(), path: "/v1/logs".to_string(), tls: false, grpc: false })
     }
+}
+
+async fn connect_grpc_with_collector(
+    endpoint: &CollectorEndpoint, timeout: Duration, collector: Option<&CollectorConfig>,
+) -> io::Result<LogsServiceClient<Channel>> {
+    let mut client = Endpoint::from_shared(format!("{}://{}", if endpoint.tls { "https" } else { "http" }, endpoint.authority))
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?
+        .timeout(timeout)
+        .connect_timeout(timeout);
+    if endpoint.tls {
+        let collector = collector.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing collector config for grpcs:// export"))?;
+        let ca_file = collector
+            .ca_file
+            .as_deref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "collector.ca-file is required for grpcs:// collector.url"))?;
+        let domain = collector.server_name.as_deref().unwrap_or_else(|| authority_host(&endpoint.authority));
+        let tls = match (collector.cert_file.as_deref(), collector.key_file.as_deref()) {
+            (Some(cert_file), Some(key_file)) => ClientTlsConfig::new()
+                .ca_certificate(Certificate::from_pem(fs::read(ca_file)?))
+                .identity(Identity::from_pem(fs::read(cert_file)?, fs::read(key_file)?))
+                .domain_name(domain.to_string()),
+            (None, None) => ClientTlsConfig::new().ca_certificate(Certificate::from_pem(fs::read(ca_file)?)).domain_name(domain.to_string()),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "collector.cert-file and collector.key-file must either both be set or both be unset",
+                ));
+            }
+        };
+        client = client.tls_config(tls).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+    }
+    client.connect().await.map(LogsServiceClient::new).map_err(|err| io::Error::other(format!("failed to connect gRPC collector: {err}")))
 }
 
 fn split_authority_and_path(input: &str) -> (&str, &str) {
@@ -719,6 +849,10 @@ fn normalise_path(path: &str) -> String {
     } else {
         format!("/{path}")
     }
+}
+
+fn parse_collector_endpoints(collector: &CollectorConfig) -> io::Result<Vec<CollectorEndpoint>> {
+    collector.urls.iter().map(|url| CollectorEndpoint::parse(url)).collect()
 }
 
 #[cfg(test)]

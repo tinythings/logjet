@@ -102,8 +102,15 @@ Current behaviour:
 - requests replay starting after the last sequence already forwarded
 - can keep upstream records or drain them, depending on `upstream.mode`
 - stays attached and forwards new log records live
-- posts raw stored OTLP protobuf payloads to `collector.url`
-- acknowledges records in `drain` mode only after successful collector export
+- posts raw stored OTLP protobuf payloads to every destination configured in `collector.url`
+- supports OTLP/HTTP export, HTTPS export, plain OTLP/gRPC export, and gRPC export over TLS or mutual TLS
+- `grpcs://...` uses server certificate validation through `collector.ca-file`
+- gRPC mutual TLS adds `collector.cert-file` plus `collector.key-file`
+- acknowledges records in `drain` mode only after successful export to every configured destination
+- can fan one upstream stream out to multiple downstream collectors from one `ljd` instance
+- mixed plain plus TLS fan-out works when every TLS destination can share one collector TLS client config
+- if TLS destinations need different CA roots, client certs, or server-name overrides, they must be split across separate `ljd` instances
+- if one TLS destination fails handshake or export, that batch is treated as failed for the full fan-out set
 - reconnects after disconnect and resumes from the last forwarded sequence
 - can persist that sequence in `upstream.state-file`
 - detects upstream restart or storage replacement through replay stream identity
@@ -133,12 +140,12 @@ Current behaviour:
 Current limitation:
 
 - TLS config is currently split between replay/bridge (`tls.*`) and OTLP ingest (`ingest.*`)
-- collector export uses HTTPS only when `collector.url` starts with `https://`
+- collector export uses HTTPS when a `collector.url` entry starts with `https://`
+- collector export uses plain OTLP/gRPC when a `collector.url` entry starts with `grpc://`
 
-### 7. One-shot file replay to OTLP/HTTP
+### 7. One-shot file replay to OTLP collectors
 
-`ljd` can replay stored `.logjet` files directly into an OTLP/HTTP
-collector with:
+`ljd` can replay stored `.logjet` files directly into OTLP collectors with:
 
 ```text
 ljd replay --path <dir> --name <base.logjet> [--dest <url-or-host:port>]
@@ -149,10 +156,11 @@ Current behaviour:
 - scans for `name.logjet`, `name-1.logjet`, `name-2.logjet`, and so on
 - replays them in that order
 - reads stored `logs` records
-- posts the raw OTLP protobuf payloads to `collector.url`
-- supports both `http://` and `https://` collector URLs
+- posts the raw OTLP protobuf payloads to every configured replay destination
+- supports `http://`, `https://`, and `grpc://` collector URLs
 - sends as fast as the destination socket allows, with no artificial delay
 - if `--dest` is omitted, replay uses `collector.url` from config
+- `--dest` still overrides replay with one explicit destination
 
 ### 8. YAML configuration
 

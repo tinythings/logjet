@@ -1,0 +1,20 @@
+[sources.otlp]
+type = "opentelemetry"
+grpc.address = "0.0.0.0:4317"
+http.address = "0.0.0.0:4318"
+
+[sources.otlp_grpcs]
+type = "opentelemetry"
+grpc.address = "0.0.0.0:4417"
+http.address = "0.0.0.0:4418"
+
+[sources.otlp_grpcs.grpc.tls]
+enabled = true
+alpn_protocols = ["h2"]
+crt_file = "./certs/vector.pem"
+key_file = "./certs/vector.key"
+
+[sinks.console_logs]
+type = "console"
+inputs = ["otlp.logs", "otlp_grpcs.logs"]
+encoding.codec = "json"

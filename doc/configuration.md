@@ -150,15 +150,22 @@ Important:
 
 ### `collector.url`
 
-Default destination used by `ljd replay` when `--dest` is not provided.
+Default bridge and replay destination setting.
 
 Accepted forms:
 
-- full URL:
+- one destination string:
   - `http://127.0.0.1:4318/v1/logs`
   - `https://127.0.0.1:4318/v1/logs`
-- host and port only:
+  - `grpc://127.0.0.1:4317`
   - `127.0.0.1:4318`
+- a YAML list of destination strings:
+
+```yaml
+collector.url:
+  - http://127.0.0.1:4318/v1/logs
+  - grpc://127.0.0.1:4317
+```
 
 If only host and port are given, replay defaults to:
 
@@ -166,7 +173,30 @@ If only host and port are given, replay defaults to:
 /v1/logs
 ```
 
-If the URL starts with `https://`, collector export uses TLS.
+Scheme behaviour:
+
+- `http://`
+  - OTLP/HTTP export
+- `https://`
+  - OTLP/HTTP export over TLS
+- `grpc://`
+  - OTLP/gRPC export
+- `grpcs://`
+  - OTLP/gRPC export over TLS
+- bare `host:port`
+  - treated as OTLP/HTTP with `/v1/logs`
+
+Bridge fan-out behaviour:
+
+- `ljd bridge` sends each OTLP log batch to every configured collector destination
+- in `drain` mode, upstream acknowledgement happens only after every configured destination accepts the batch
+- if any destination fails, that batch is treated as failed and reconnect or retry logic takes over
+
+Replay behaviour:
+
+- `ljd replay` also uses `collector.url` when `--dest` is omitted
+- if `collector.url` is a list, replay sends each batch to every listed destination
+- `--dest` still overrides replay with one explicit destination
 
 ### `collector.timeout-ms`
 
@@ -174,23 +204,104 @@ Socket timeout in milliseconds used by `ljd replay` when posting stored
 OTLP payloads to `collector.url`.
 
 It is also used by `ljd bridge` when posting replayed OTLP payloads to the
-collector.
+configured collector destination set.
 
 ### `collector.ca-file`
 
-CA file used when `collector.url` starts with `https://`.
+CA file used by every TLS collector destination in `collector.url`.
+
+Rules:
+
+- applies to `https://...` and `grpcs://...`
+- ignored for `http://...`, `grpc://...`, and bare `host:port`
+- one config value is shared across all TLS collector destinations in the same `ljd` process
+- if different TLS destinations need different CA roots, split them across separate `ljd` bridge or replay processes
 
 ### `collector.cert-file`
 
-Optional client certificate for HTTPS collector export.
+Optional client certificate used by every TLS collector destination in `collector.url`.
+
+Rules:
+
+- applies to `https://...` and `grpcs://...`
+- ignored for `http://...`, `grpc://...`, and bare `host:port`
+- must be paired with `collector.key-file`
+- one config value is shared across all TLS collector destinations in the same `ljd` process
+- if different TLS destinations need different client identities, split them across separate `ljd` bridge or replay processes
 
 ### `collector.key-file`
 
 Private key matching `collector.cert-file`.
 
+Rules:
+
+- applies to `https://...` and `grpcs://...`
+- ignored for `http://...`, `grpc://...`, and bare `host:port`
+- must be paired with `collector.cert-file`
+
 ### `collector.server-name`
 
-Override server name used for HTTPS collector certificate validation.
+Override server name used for TLS collector certificate validation.
+
+Rules:
+
+- applies to `https://...` and `grpcs://...`
+- ignored for `http://...`, `grpc://...`, and bare `host:port`
+- one override is shared across all TLS collector destinations in the same `ljd` process
+- use it only when every TLS destination can validate against the same override name
+- if different TLS destinations need different server names, split them across separate `ljd` bridge or replay processes
+
+### gRPC bridge TLS examples
+
+Plain TLS with server certificate validation:
+
+```yaml
+collector.url: grpcs://collector.example:4317
+collector.ca-file: /etc/logjet/collector-ca.pem
+collector.server-name: collector.example
+```
+
+Mutual TLS with client certificate authentication too:
+
+```yaml
+collector.url: grpcs://collector.example:4317
+collector.ca-file: /etc/logjet/collector-ca.pem
+collector.cert-file: /etc/logjet/collector.pem
+collector.key-file: /etc/logjet/collector.key
+collector.server-name: collector.example
+```
+
+Interpretation:
+
+- plain TLS means the bridge verifies the collector certificate and does not send a client certificate
+- mutual TLS means the bridge verifies the collector certificate and also sends its own client certificate
+- `collector.cert-file` and `collector.key-file` must be set together or both left unset
+- `collector.ca-file` is required for `grpcs://...`
+
+### Mixed TLS fan-out rules
+
+One `collector.url` list may mix plain and TLS destinations, for example:
+
+```yaml
+collector.url:
+  - http://127.0.0.1:4318/v1/logs
+  - grpc://127.0.0.1:4317
+  - grpcs://collector.example:4317
+```
+
+Behaviour:
+
+- plain destinations ignore `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name`
+- TLS destinations share one collector TLS client configuration inside one `ljd` process
+- `https://...` and `grpcs://...` therefore reuse the same CA roots, optional client certificate, optional client key, and optional server-name override
+- mixed plain plus TLS fan-out is supported
+- mixed TLS fan-out is supported only when every TLS destination can use the same TLS client settings
+- if one TLS destination fails handshake or export, that batch is treated as failed for the whole fan-out set
+- in bridge `drain` mode, upstream acknowledgement waits until every configured destination accepts the batch
+
+Operational rule:
+
+- if destinations need different trust roots, different client certificates, or different server-name overrides, run separate `ljd` instances
 
 ### `ingest.max-batch-bytes`
 
@@ -368,7 +479,7 @@ Important:
 
 - default is `keep`
 - use `drain` when replay should behave like a queue instead of a replayable backlog
-- in `drain` mode, the downstream bridge acknowledges each record only after successful collector export
+- in `drain` mode, the downstream bridge acknowledges each record only after successful export to every configured collector destination
 - in file mode, fully consumed closed segments are deleted; the current active segment stays logically empty until rotation or reopen
 
 ### `upstream.state-file`
@@ -380,7 +491,7 @@ Important:
 
 - default is unset
 - when set, bridge loads the saved sequence at start-up
-- bridge writes the new sequence after each successful collector export
+- bridge writes the new sequence after each successful export to every configured collector destination
 - this allows restart resume instead of restarting from sequence zero
 - the saved state also carries upstream stream identity
 - that lets bridge detect upstream restart or storage replacement and reset stale saved sequence state
@@ -570,9 +681,13 @@ If omitted:
 - set either `buffer.size` or `buffer.messages`, never both
 - `buffer.size` limits the rotating in-memory tail by bytes
 - `buffer.messages` limits the rotating in-memory tail by message count
+- `collector.url` can be one string or a YAML list of strings
 - `collector.url` is used by `ljd replay` when `--dest` is omitted
-- `collector.timeout-ms` controls replay and bridge HTTP socket timeout
-- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to HTTPS collector export
+- `collector.timeout-ms` controls replay and bridge collector socket timeout
+- `collector.ca-file`, `collector.cert-file`, `collector.key-file`, and `collector.server-name` apply to `https://...` and `grpcs://...` collector export
+- one collector TLS config is shared across all TLS collector destinations in one process
+- mixed plain plus TLS fan-out is supported
+- different TLS trust roots, client certs, or server-name overrides require separate `ljd` instances
 - `backpressure.enabled` enables bridge backpressure policy handling
 - `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
 - `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection

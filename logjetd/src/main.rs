@@ -143,14 +143,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let name = replay_name.ok_or("missing --name")?;
             let mut collector = config.collector;
             if let Some(dest) = replay_dest {
-                collector.url = dest;
+                collector.urls = vec![dest];
             }
             let files = validate_replay_path(&path, &name)?;
             if files.is_empty() {
                 return Err(format!("no replay files found for name '{}' in {}", name, path.display()).into());
             }
 
-            eprintln!("replaying {} file(s) from {} to {}", files.len(), path.display(), collector.url);
+            eprintln!("replaying {} file(s) from {} to {}", files.len(), path.display(), collector.describe_urls());
             let sent = replay_path_to_otlp_http(&path, &name, &collector)?;
             eprintln!("replayed {sent} OTLP log batch record(s)");
         }
@@ -161,7 +161,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 None => return Err("missing bridge source; set --source or upstream.replay".into()),
             };
 
-            eprintln!("bridging from {} to {}", source, config.collector.url);
+            eprintln!("bridging from {} to {}", source, config.collector.describe_urls());
             bridge_wire_to_otlp_http(&source, &config.collector, &config.backpressure, &config.upstream, &config.tls)?;
         }
         Some("prune") => {

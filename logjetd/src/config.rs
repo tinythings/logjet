@@ -77,7 +77,7 @@ pub enum FsyncPolicy {
 
 #[derive(Debug, Clone)]
 pub struct CollectorConfig {
-    pub url: String,
+    pub urls: Vec<String>,
     pub timeout_ms: u64,
     pub ca_file: Option<PathBuf>,
     pub cert_file: Option<PathBuf>,
@@ -161,6 +161,13 @@ pub enum SeverityFloor {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawCollectorUrls {
+    One(String),
+    Many(Vec<String>),
+}
+
+#[derive(Debug, Deserialize)]
 struct RawConfig {
     output: Option<String>,
     #[serde(rename = "buffer.size", default, deserialize_with = "deserialize_size_value")]
@@ -218,7 +225,7 @@ struct RawConfig {
     #[serde(rename = "wire.compression")]
     wire_compression: Option<bool>,
     #[serde(rename = "collector.url")]
-    collector_url: Option<String>,
+    collector_url: Option<RawCollectorUrls>,
     #[serde(rename = "collector.timeout-ms")]
     collector_timeout_ms: Option<u64>,
     #[serde(rename = "collector.ca-file")]
@@ -366,8 +373,19 @@ impl Config {
         if replay_client_timeout_ms == 0 {
             return Err("replay.client-timeout-ms must be greater than zero".into());
         }
+        let urls = match raw.collector_url {
+            Some(RawCollectorUrls::One(url)) => vec![url],
+            Some(RawCollectorUrls::Many(urls)) => urls,
+            None => vec!["http://127.0.0.1:4318/v1/logs".to_string()],
+        };
+        if urls.is_empty() {
+            return Err("collector.url list must not be empty".into());
+        }
+        if urls.iter().any(|url| url.trim().is_empty()) {
+            return Err("collector.url entries must not be empty".into());
+        }
         let collector = CollectorConfig {
-            url: raw.collector_url.unwrap_or_else(|| "http://127.0.0.1:4318/v1/logs".to_string()),
+            urls,
             timeout_ms: raw.collector_timeout_ms.unwrap_or(10_000),
             ca_file: raw.collector_ca_file,
             cert_file: raw.collector_cert_file,
@@ -466,6 +484,12 @@ impl Config {
             tls,
             storage,
         })
+    }
+}
+
+impl CollectorConfig {
+    pub fn describe_urls(&self) -> String {
+        self.urls.join(", ")
     }
 }
 
