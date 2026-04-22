@@ -7,4 +7,5 @@ TODO*
 .*
 bsd*
 *.logjet
+/demo/*/*.state
 bridge.state
