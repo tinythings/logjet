@@ -9,7 +9,20 @@ use super::detail::{
 };
 use super::text::{fit_to_width, trim_single_line};
 use super::types::{ExportField, Focus, ViewApp};
-use super::ui::{centered_rect, draw_status_spans, pane_block, render_save_error_message, status_help_spans, status_key, status_text};
+use super::ui::{
+    centered_rect, centered_rect_fixed_height, draw_status_spans, pane_block, render_save_error_message, status_help_spans, status_key, status_text,
+};
+
+const DEDUP_PROMPT_POPUP_HEIGHT: u16 = 8;
+const DEDUP_PROMPT_MIN_WIDTH: u16 = 58;
+const DEDUP_PROGRESS_POPUP_HEIGHT: u16 = 6;
+const DEDUP_PROGRESS_MIN_WIDTH: u16 = 52;
+const EXPORT_PROMPT_POPUP_HEIGHT: u16 = 10;
+const EXPORT_FORMAT_HELP: &str = "Format: use ←/→ or SPACE to choose (built-in + plugins)";
+const EXPORT_RANGE_HELP: &str = "Range:  a / all  |  c / current / 0  |  N  |  N-N";
+const EXPORT_ORDER_HELP: &str = "Uses the current filtered view order.";
+const EXPORT_FORMAT_HELP_WIDTH: u16 = 55;
+const EXPORT_PROMPT_MIN_WIDTH: u16 = EXPORT_FORMAT_HELP_WIDTH + 2;
 
 impl ViewApp {
     pub(super) fn render(&mut self, frame: &mut Frame<'_>) {
@@ -294,7 +307,7 @@ impl ViewApp {
     }
 
     fn render_export_prompt(&self, frame: &mut Frame<'_>) {
-        let area = centered_rect(62, 16, frame.area());
+        let area = centered_rect_fixed_height(62, EXPORT_PROMPT_MIN_WIDTH, EXPORT_PROMPT_POPUP_HEIGHT, frame.area());
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(Span::styled(
@@ -357,12 +370,8 @@ impl ViewApp {
         );
 
         frame.render_widget(
-            Paragraph::new(Text::from(vec![
-                Line::from("Format: use ←/→ or SPACE to choose (built-in + plugins)"),
-                Line::from("Range:  a / all  |  c / current / 0  |  N  |  N-N"),
-                Line::from("Uses the current filtered view order."),
-            ]))
-            .style(Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+            Paragraph::new(Text::from(vec![Line::from(EXPORT_FORMAT_HELP), Line::from(EXPORT_RANGE_HELP), Line::from(EXPORT_ORDER_HELP)]))
+                .style(Style::default().fg(Color::DarkGray).bg(Color::Gray)),
             Rect { x: inner.x, y: inner.y.saturating_add(5), width: inner.width, height: 3 },
         );
 
@@ -625,7 +634,7 @@ impl ViewApp {
     }
 
     fn render_dedup_prompt(&self, frame: &mut Frame<'_>) {
-        let area = centered_rect(52, 12, frame.area());
+        let area = centered_rect_fixed_height(52, DEDUP_PROMPT_MIN_WIDTH, DEDUP_PROMPT_POPUP_HEIGHT, frame.area());
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(Span::styled(" Deduplicate ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)))
@@ -686,7 +695,7 @@ impl ViewApp {
     }
 
     fn render_dedup_progress(&self, frame: &mut Frame<'_>) {
-        let area = centered_rect(52, 10, frame.area());
+        let area = centered_rect_fixed_height(52, DEDUP_PROGRESS_MIN_WIDTH, DEDUP_PROGRESS_POPUP_HEIGHT, frame.area());
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(Span::styled(" Deduplicating… ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)))
