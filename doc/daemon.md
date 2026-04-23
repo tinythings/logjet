@@ -71,11 +71,17 @@ ljd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - supports `ingest.protocol: wire`
 - supports `ingest.protocol: otlp-http`
 - supports `ingest.protocol: otlp-grpc`
+- supports `ingest.protocol: plugin` with `ingest.plugin-path`
 - supports TLS on OTLP/HTTP and OTLP/gRPC ingest with `ingest.*`
 - can rate-limit accepted ingest batches through `ingest.max-batches-per-second`
 - can keep higher-severity OTLP log batches during overload through `ingest.priority-severity-at-least`
 - can emit overload counters on stderr through `ingest.overload-report-ms`
 - stores raw OTLP protobuf bytes in configured storage
+
+For plugin ingest, explicit `ingest.plugin-path` values are loaded directly.
+Bare filenames are resolved through `LJD_INGEST_PLUGIN_PATH`, `./ingestors`,
+`<ljd bin>/ingestors`, `<ljd bin>/../lib/logjet/ingestors`, and on Unix also
+`/usr/lib/logjet/ingestors` plus `/usr/lib/logjet`.
 
 ### Replay
 

@@ -294,9 +294,18 @@ Important behaviour:
 - the host owns the output file and passes bytes through callbacks to the plugin
 - if the output file already exists, `--force` is required to overwrite it
 - `--fields` is supported only for `ndjson` export and limits the exported JSON keys
-- plugin discovery order and ABI rules are documented in `doc/parquet/exporters-abi.md`
-- Parquet-specific usage, schema, installation, and limits are documented in
-  `doc/parquet/export-parquet.md`
+
+Exporter plugin discovery order:
+
+1. entries from `LJX_EXPORTER_PATH`, split like a normal platform path list
+2. `./exporters`
+3. `<ljx executable directory>/exporters`
+4. `<ljx executable directory>/../lib/logjet/exporters`
+5. on Unix, `/usr/lib/logjet/exporters`
+6. on Unix, `/usr/lib/logjet`
+
+`LJX_EXPORTER_PATH` entries may be directories or direct shared-library paths.
+Directory roots are scanned for shared libraries.
 
 ## Implementation Notes
 
