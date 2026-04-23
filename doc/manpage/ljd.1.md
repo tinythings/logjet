@@ -10,6 +10,8 @@ ljd - OTLP ingest, `.logjet` storage, replay, and file blasting daemon
 
 `ljd` [`serve`] [`-c`|`--config` *path*]
 
+`ljd` [`-c`|`--config` *path*] `--plugins`
+
 `ljd` `inspect` *path*
 
 `ljd` `segments` `--path` *dir* `--name` *base.logjet*
@@ -37,6 +39,7 @@ It can:
 - export to a plain OTLP/gRPC collector
 - inspect `.logjet` files and directories
 - list file-segment metadata for one rotated spool
+- list visible ingest and export plugins
 - replay stored `.logjet` files into OTLP collectors as a one-shot operation
 - prune oldest rotated file segments by file count or byte budget
 
@@ -74,6 +77,17 @@ ljd --config ./logjetd.conf bridge --source 10.0.0.15:7002
 ```
 
 If `--source` is omitted, bridge uses `upstream.replay` from configuration.
+
+## --plugins
+
+List visible ingest and export plugins, then exit.
+
+Output is plain text with `ingestors:` and `exporters:` sections. Each plugin
+entry prints `name` and `display-name` on one tab-indented line, followed by
+the plugin path on the next line.
+
+If `-c` or `--config` is provided, configured ingest plugin locations such as
+`ingest.plugin-path` and `ingest.plugin-dir` are included in the ingest scan.
 
 ## inspect
 
@@ -132,6 +146,10 @@ ljd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-ru
 ## `-c`, `--config` *path*
 
 Load configuration from *path* instead of `/etc/logjet.conf`.
+
+## `--plugins`
+
+List visible ingest and export plugins, then exit.
 
 ## `-h`, `--help`
 

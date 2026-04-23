@@ -32,6 +32,18 @@ Explicit config path:
 ljd --config /path/to/logjet.conf
 ```
 
+List visible ingest and export plugins:
+
+```bash
+ljd --plugins
+```
+
+The plugin listing is plain text. Each plugin entry prints `name` and
+`display-name` on one tab-indented line, followed by the plugin path on the
+next line. If `--config` is provided, configured ingest plugin locations such
+as `ingest.plugin-path` and `ingest.plugin-dir` are included in the ingest
+scan.
+
 Inspect a file or directory:
 
 ```bash

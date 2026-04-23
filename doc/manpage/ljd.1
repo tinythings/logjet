@@ -4,12 +4,15 @@
 .hy
 .SH NAME
 .PP
-ljd - OTLP ingest, \f[C].logjet\f[R] storage, replay, and file
-blasting daemon
+ljd - OTLP ingest, \f[C].logjet\f[R] storage, replay, and file blasting
+daemon
 .SH SYNOPSIS
 .PP
 \f[C]ljd\f[R] [\f[C]serve\f[R]] [\f[C]-c\f[R]|\f[C]--config\f[R]
 \f[I]path\f[R]]
+.PP
+\f[C]ljd\f[R] [\f[C]-c\f[R]|\f[C]--config\f[R] \f[I]path\f[R]]
+\f[C]--plugins\f[R]
 .PP
 \f[C]ljd\f[R] \f[C]inspect\f[R] \f[I]path\f[R]
 .PP
@@ -53,12 +56,16 @@ optionally protect replay and bridge transport with TLS
 .IP \[bu] 2
 optionally export to an HTTPS OTLP collector
 .IP \[bu] 2
+export to a plain OTLP/gRPC collector
+.IP \[bu] 2
 inspect \f[C].logjet\f[R] files and directories
 .IP \[bu] 2
 list file-segment metadata for one rotated spool
 .IP \[bu] 2
-replay stored \f[C].logjet\f[R] files into OTLP collectors as a
-one-shot operation
+list visible ingest and export plugins
+.IP \[bu] 2
+replay stored \f[C].logjet\f[R] files into OTLP collectors as a one-shot
+operation
 .IP \[bu] 2
 prune oldest rotated file segments by file count or byte budget
 .PP
@@ -81,11 +88,11 @@ OTLP/gRPC ingest is supported with \f[C]ingest.protocol: otlp-grpc\f[R]
 .IP \[bu] 2
 a replay listener socket is exposed for downstream clients
 .IP \[bu] 2
-replay sends retained backlog first, then hands the same client
-directly into live wakeups from ingest
+replay sends retained backlog first, then hands the same client directly
+into live wakeups from ingest
 .IP \[bu] 2
-replay keeps an explicit cursor per client across buffer eviction,
-drain cleanup, and file rotation
+replay keeps an explicit cursor per client across buffer eviction, drain
+cleanup, and file rotation
 .IP \[bu] 2
 replay listener traffic currently uses the internal framed protocol, not
 OTLP egress
@@ -105,6 +112,18 @@ ljd --config ./logjetd.conf bridge --source 10.0.0.15:7002
 .PP
 If \f[C]--source\f[R] is omitted, bridge uses \f[C]upstream.replay\f[R]
 from configuration.
+.SS \[en]plugins
+.PP
+List visible ingest and export plugins, then exit.
+.PP
+Output is plain text with \f[C]ingestors:\f[R] and \f[C]exporters:\f[R]
+sections.
+Each plugin entry prints \f[C]name\f[R] and \f[C]display-name\f[R] on
+one tab-indented line, followed by the plugin path on the next line.
+.PP
+If \f[C]-c\f[R] or \f[C]--config\f[R] is provided, configured ingest
+plugin locations such as \f[C]ingest.plugin-path\f[R] and
+\f[C]ingest.plugin-dir\f[R] are included in the ingest scan.
 .SS inspect
 .PP
 Inspect a \f[C].logjet\f[R] file or a directory containing
@@ -171,6 +190,9 @@ ljd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-ru
 .PP
 Load configuration from \f[I]path\f[R] instead of
 \f[C]/etc/logjet.conf\f[R].
+.SS \f[C]--plugins\f[R]
+.PP
+List visible ingest and export plugins, then exit.
 .SS \f[C]-h\f[R], \f[C]--help\f[R]
 .PP
 Print usage information.
@@ -211,12 +233,13 @@ Used only with the \f[C]replay\f[R] command.
 .PP
 If a full \f[C]http://host:port/path\f[R] URL is given, replay uses that
 exact path.
+If \f[C]https://\f[R] is given, replay uses OTLP/HTTP over TLS.
+If \f[C]grpc://host:port\f[R] is given, replay uses OTLP/gRPC.
 If only \f[C]host:port\f[R] is given, replay defaults to
 \f[C]/v1/logs\f[R].
 .SS \f[C]--source\f[R] \f[I]host:port\f[R]
 .PP
-Upstream \f[C]ljd\f[R] replay listener for the \f[C]bridge\f[R]
-command.
+Upstream \f[C]ljd\f[R] replay listener for the \f[C]bridge\f[R] command.
 .PP
 If omitted, \f[C]bridge\f[R] uses \f[C]upstream.replay\f[R] from
 configuration.
@@ -301,8 +324,9 @@ for file-mode archive housekeeping
 \f[C]ingest.protocol\f[R] supports \f[C]wire\f[R], \f[C]otlp-http\f[R],
 \f[C]otlp-grpc\f[R], and \f[C]plugin\f[R]
 .IP \[bu] 2
-\f[C]ingest.plugin-path\f[R] or \f[C]ingest.plugin\f[R]/\f[C]ingest.use\f[R]
-is required with \f[C]ingest.protocol: plugin\f[R]
+\f[C]ingest.plugin-path\f[R] or
+\f[C]ingest.plugin\f[R]/\f[C]ingest.use\f[R] is required with
+\f[C]ingest.protocol: plugin\f[R]
 .IP \[bu] 2
 bare plugin filenames are searched in \f[C]LJD_INGEST_PLUGIN_PATH\f[R],
 \f[C]./ingestors\f[R], paths relative to the \f[C]ljd\f[R] executable,
@@ -331,14 +355,33 @@ summaries on stderr
 \f[C]replay.client-timeout-ms\f[R] caps how long one replay client can
 block on socket I/O
 .IP \[bu] 2
-\f[C]collector.url\f[R] configures replay destination URL
+\f[C]collector.url\f[R] configures bridge and replay destination URL or
+URL list
 .IP \[bu] 2
 \f[C]collector.timeout-ms\f[R] configures replay and bridge socket
 timeout in milliseconds
 .IP \[bu] 2
 \f[C]collector.ca-file\f[R], \f[C]collector.cert-file\f[R],
 \f[C]collector.key-file\f[R], and \f[C]collector.server-name\f[R]
-configure HTTPS collector export
+configure \f[C]https://...\f[R] and \f[C]grpcs://...\f[R] collector
+export
+.IP \[bu] 2
+one collector TLS config is shared across all TLS collector destinations
+in one process
+.IP \[bu] 2
+mixed plain plus TLS fan-out is supported
+.IP \[bu] 2
+\f[C]grpcs://...\f[R] with only \f[C]collector.ca-file\f[R] is plain TLS
+with server validation
+.IP \[bu] 2
+\f[C]grpcs://...\f[R] with \f[C]collector.cert-file\f[R] and
+\f[C]collector.key-file\f[R] adds mutual TLS client authentication
+.IP \[bu] 2
+if one TLS destination fails handshake or export, that batch fails for
+the whole fan-out set
+.IP \[bu] 2
+different TLS trust roots, client certs, or server-name overrides
+require separate \f[C]ljd\f[R] instances
 .IP \[bu] 2
 \f[C]backpressure.enabled\f[R] enables bridge backpressure policy
 handling
@@ -439,8 +482,9 @@ optional TLS on replay/bridge transport
 .IP \[bu] 2
 HTTPS OTLP collector export
 .IP \[bu] 2
-one-shot file replay to OTLP collectors with
-\f[C]ljd replay\f[R]
+plain OTLP/gRPC collector export
+.IP \[bu] 2
+one-shot file replay to OTLP collectors with \f[C]ljd replay\f[R]
 .IP \[bu] 2
 configurable replay destination via \f[C]collector.url\f[R]
 .IP \[bu] 2

@@ -631,6 +631,10 @@ Built-in ingest plugin descriptor names are `syslog`, `logcat`, and `stress`.
 `ingest.use` and `ingest.plugin` are aliases; if both are present they must
 have the same value.
 
+Use `ljd --plugins` to list the ingest and export plugins visible from the
+current environment. Passing `--config` includes configured ingest plugin
+locations such as `ingest.plugin-path` and `ingest.plugin-dir` in that listing.
+
 ### `ingest.tls-enable`
 
 Enable TLS for OTLP ingest listeners.
