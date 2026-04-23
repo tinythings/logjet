@@ -39,7 +39,7 @@ fn top_level_export_force_parses() {
 fn top_level_query_parses_literal_filter() {
     let cli = Cli::try_parse_from(["ljx", "input.logjet", "-F", "error"]).expect("cli parses");
     assert_eq!(cli.input, Some(PathBuf::from("input.logjet")));
-    assert!(matches!(cli.format, None));
+    assert!(cli.format.is_none());
     assert_eq!(cli.predicate.fixed_string, vec!["error".to_string()]);
 }
 
