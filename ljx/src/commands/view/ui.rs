@@ -24,6 +24,19 @@ pub(super) fn centered_rect(width_percent: u16, height_percent: u16, area: Rect)
         .split(popup[1])[1]
 }
 
+pub(super) fn centered_rect_fixed_height(width_percent: u16, min_width: u16, height: u16, area: Rect) -> Rect {
+    let width_percent = width_percent.min(100);
+    let width = (area.width.saturating_mul(width_percent) / 100).max(min_width).min(area.width);
+    let height = height.min(area.height);
+
+    Rect::new(
+        area.x.saturating_add(area.width.saturating_sub(width) / 2),
+        area.y.saturating_add(area.height.saturating_sub(height) / 2),
+        width,
+        height,
+    )
+}
+
 pub(super) fn pane_block<'a>(title: &'a str, active: bool) -> Block<'a> {
     let title_style = if active { Style::default().fg(Color::Black).bg(Color::LightGreen) } else { Style::default().fg(Color::Gray) };
     let border_style = if active { Style::default().fg(Color::LightGreen) } else { Style::default().fg(Color::Gray) };
