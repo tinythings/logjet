@@ -223,6 +223,7 @@ tls.key-file: /etc/logjet/node.key
 tls.require-client-cert: false
 tls.server-name: appliance.internal
 ingest.protocol: otlp-http
+ingest.plugin-path: liblj_syslog_ingest.so
 ingest.listen: 127.0.0.1:4318
 ingest.tls-enable: false
 ingest.ca-file: /etc/logjet/ingest-ca.pem
@@ -247,7 +248,8 @@ Rules:
 - `buffer.keep` applies only to memory mode
 - file mode always keeps all rotated files
 - `segments` and `prune` provide explicit operator tooling for file-mode archive housekeeping
-- `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
+- `ingest.protocol` supports `wire`, `otlp-http`, `otlp-grpc`, and `plugin`
+- `ingest.plugin-path` is required with `ingest.protocol: plugin`; bare filenames are searched in `LJD_INGEST_PLUGIN_PATH`, `./ingestors`, paths relative to the `ljd` executable, `/usr/lib/logjet/ingestors`, and `/usr/lib/logjet`
 - `ingest.max-batch-bytes` rejects oversized OTLP or wire payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling
 - `ingest.max-batches-per-second` caps accepted ingest batches per second

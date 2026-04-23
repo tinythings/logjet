@@ -63,4 +63,5 @@ LIMIT 20;
 - the demo uses `--force` so reruns overwrite the previous output
 - reruns also regenerate the `.logjet` input before exporting
 - this is export only; it does not load data back into logjet
+- exporter plugins are searched via `LJX_EXPORTER_PATH`, `./exporters`, paths relative to the `ljx` executable, and on Unix in `/usr/lib/logjet/exporters` and `/usr/lib/logjet`
 - if plugin discovery breaks, try printing `LJX_EXPORTER_PATH` first

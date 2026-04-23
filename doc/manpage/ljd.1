@@ -262,6 +262,7 @@ tls.key-file: /etc/logjet/node.key
 tls.require-client-cert: false
 tls.server-name: appliance.internal
 ingest.protocol: otlp-http
+ingest.plugin-path: liblj_syslog_ingest.so
 ingest.listen: 127.0.0.1:4318
 ingest.tls-enable: false
 ingest.ca-file: /etc/logjet/ingest-ca.pem
@@ -296,7 +297,13 @@ file mode always keeps all rotated files
 for file-mode archive housekeeping
 .IP \[bu] 2
 \f[C]ingest.protocol\f[R] supports \f[C]wire\f[R], \f[C]otlp-http\f[R],
-and \f[C]otlp-grpc\f[R]
+\f[C]otlp-grpc\f[R], and \f[C]plugin\f[R]
+.IP \[bu] 2
+\f[C]ingest.plugin-path\f[R] is required with
+\f[C]ingest.protocol: plugin\f[R]; bare filenames are searched in
+\f[C]LJD_INGEST_PLUGIN_PATH\f[R], \f[C]./ingestors\f[R], paths relative
+to the \f[C]ljd\f[R] executable, \f[C]/usr/lib/logjet/ingestors\f[R],
+and \f[C]/usr/lib/logjet\f[R]
 .IP \[bu] 2
 \f[C]ingest.max-batch-bytes\f[R] rejects oversized OTLP or wire payloads
 before they are stored

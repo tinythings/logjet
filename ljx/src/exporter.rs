@@ -114,7 +114,6 @@ pub(crate) struct LoadedExporter {
     path: PathBuf,
     format_name: String,
     display_name: String,
-    default_extension: String,
     capabilities: u64,
     create: unsafe extern "C" fn(host: *const LjxExportHostV1, init: *const LjxExportInitV1) -> *mut LjxExporterCtx,
     write_record: unsafe extern "C" fn(ctx: *mut LjxExporterCtx, record: *const LjxExportRecordV1) -> i32,
@@ -149,7 +148,6 @@ impl LoadedExporter {
             path: path.to_path_buf(),
             format_name: validated.format_name,
             display_name: validated.display_name,
-            default_extension: validated.default_extension,
             capabilities: validated.capabilities,
             create: validated.create,
             write_record: validated.write_record,
@@ -161,16 +159,12 @@ impl LoadedExporter {
 
     /// Runs one export through this plugin.
     pub(crate) fn export(&self, input: &Path, output: &Path, overwrite: bool, options: &[(&str, &str)]) -> Result<()> {
-        eprintln!(
-            "ljx export: plugin loaded path={} format={} display={} ext={} caps=0x{:x} output={}",
-            self.path.display(),
-            self.format_name,
-            self.display_name,
-            self.default_extension,
-            self.capabilities,
-            output.display()
-        );
+        self.export_with_progress(input, output, overwrite, options, |_| {})
+    }
 
+    pub(crate) fn export_with_progress(
+        &self, input: &Path, output: &Path, overwrite: bool, options: &[(&str, &str)], mut progress: impl FnMut(u64),
+    ) -> Result<()> {
         if self.capabilities & LJX_EXPORT_CAP_STREAMING == 0 {
             return Err(Error::Usage(format!(
                 "exporter `{}` from {} is not marked as streaming-capable and cannot be used by ljx export",
@@ -195,18 +189,9 @@ impl LoadedExporter {
         };
         let init = init_storage.as_abi();
 
-        eprintln!(
-            "ljx export: started input={} output={} plugin={} format={}",
-            input.display(),
-            output.display(),
-            self.path.display(),
-            self.format_name
-        );
-
         // SAFETY: host/init pointers stay valid for the lifetime of the plugin context.
         let ctx = unsafe { (self.create)(&host, &init) };
         if ctx.is_null() {
-            eprintln!("ljx export: create failed input={} plugin={}", input.display(), self.path.display());
             return Err(Error::Usage(format!(
                 "failed to start exporter `{}` from {} for input {}: create returned NULL",
                 self.display_name,
@@ -215,8 +200,8 @@ impl LoadedExporter {
             )));
         }
         let guard = PluginCtxGuard { exporter: self, ctx };
-        let mut processed = 0u64;
         let mut loop_error = None;
+        let mut processed = 0u64;
 
         loop {
             let next = reader.next_record().map_err(|err| Error::Usage(format!("failed reading {}: {err}", input.display())));
@@ -249,12 +234,15 @@ impl LoadedExporter {
                 break;
             }
             processed += 1;
+            if processed == 1 || processed.is_multiple_of(128) {
+                progress(processed);
+            }
         }
+        progress(processed);
 
         // SAFETY: ctx belongs to this plugin and remains valid until guard drop.
         let finish_status = unsafe { (self.finish)(guard.ctx) };
         if let Some(err) = loop_error {
-            eprintln!("ljx export: failed input={} plugin={} processed={processed}", input.display(), self.path.display());
             if finish_status != LJX_EXPORT_STATUS_OK {
                 return Err(Error::Usage(format!(
                     "{}; exporter finalisation also failed: {}",
@@ -265,11 +253,9 @@ impl LoadedExporter {
             return Err(err);
         }
         if finish_status != LJX_EXPORT_STATUS_OK {
-            eprintln!("ljx export: finish failed input={} plugin={} processed={processed}", input.display(), self.path.display());
             return Err(self.status_error(input, guard.ctx, finish_status, None, "finish export"));
         }
         if let Some(err) = sink.last_error.take() {
-            eprintln!("ljx export: callback write failure input={} plugin={} processed={processed}", input.display(), self.path.display());
             return Err(Error::Usage(format!(
                 "exporter `{}` from {} failed writing output {} for input {}: {err}",
                 self.display_name,
@@ -281,12 +267,6 @@ impl LoadedExporter {
         sink.writer
             .flush()
             .map_err(|err| Error::Usage(format!("failed flushing output {} after exporting {}: {err}", output.display(), input.display())))?;
-        eprintln!(
-            "ljx export: completed input={} output={} plugin={} total_records={processed}",
-            input.display(),
-            output.display(),
-            self.path.display()
-        );
         Ok(())
     }
 
@@ -456,6 +436,11 @@ fn collect_search_roots() -> (Vec<PathBuf>, Vec<String>) {
         push_unique_path(&mut roots, dir.join("exporters"));
         push_unique_path(&mut roots, dir.join("../lib/logjet/exporters"));
     }
+    #[cfg(unix)]
+    {
+        push_unique_path(&mut roots, PathBuf::from("/usr/lib/logjet/exporters"));
+        push_unique_path(&mut roots, PathBuf::from("/usr/lib/logjet"));
+    }
 
     (roots, diagnostics)
 }
@@ -511,6 +496,7 @@ fn non_empty_or(value: String, fallback: &str) -> String {
 struct ValidatedDescriptor {
     format_name: String,
     display_name: String,
+    #[allow(dead_code)]
     default_extension: String,
     capabilities: u64,
     create: unsafe extern "C" fn(host: *const LjxExportHostV1, init: *const LjxExportInitV1) -> *mut LjxExporterCtx,

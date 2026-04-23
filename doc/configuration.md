@@ -35,7 +35,8 @@ tls.cert-file: /etc/logjet/node.pem
 tls.key-file: /etc/logjet/node.key
 tls.require-client-cert: false
 tls.server-name: appliance.internal
-ingest.protocol: otlp-http   # "wire", "otlp-http", or "otlp-grpc"
+ingest.protocol: otlp-http   # "wire", "otlp-http", "otlp-grpc", or "plugin"
+ingest.plugin-path: liblj_syslog_ingest.so
 ingest.listen: 127.0.0.1:7001
 ingest.tls-enable: false
 ingest.ca-file: /etc/logjet/ingest-ca.pem
@@ -576,9 +577,33 @@ Values:
 - `otlp-grpc`
   - OTLP over gRPC
   - accepts the standard logs `Export` RPC
+- `plugin`
+  - loads an ingest plugin shared library
+  - passive plugins receive bytes from the `ingest.listen` TCP listener
+  - active plugins own their input source through `lj_ingest_fetch`
 
 If you want a normal OpenTelemetry producer to send logs directly to `ljd`,
 use either `otlp-http` or `otlp-grpc`.
+
+### `ingest.plugin-path`
+
+Shared-library path used when `ingest.protocol: plugin`.
+
+If the value is an explicit path such as `./plugins/liblj_syslog_ingest.so` or
+`/opt/logjet/liblj_syslog_ingest.so`, `ljd` loads that path directly.
+
+If the value is a bare filename such as `liblj_syslog_ingest.so`, `ljd`
+searches these roots in order:
+
+1. entries from `LJD_INGEST_PLUGIN_PATH`, split like a normal platform path list
+2. `./ingestors`
+3. `<ljd executable directory>/ingestors`
+4. `<ljd executable directory>/../lib/logjet/ingestors`
+5. on Unix, `/usr/lib/logjet/ingestors`
+6. on Unix, `/usr/lib/logjet`
+
+Use the `ingestors` subdirectory for packaged ingest plugins. `/usr/lib/logjet`
+is also checked for simple system installs.
 
 ### `ingest.tls-enable`
 
@@ -659,6 +684,7 @@ If omitted:
 - `tls.require-client-cert: false`
 - `tls.server-name: unset`
 - `ingest.protocol: wire`
+- `ingest.plugin-path: unset`
 - `ingest.listen: 127.0.0.1:7001`
 - `ingest.tls-enable: false`
 - `ingest.ca-file: unset`
@@ -706,7 +732,8 @@ If omitted:
 - `replay.max-clients` caps concurrent replay clients
 - `replay.client-timeout-ms` caps how long one replay client can block on socket I/O
 - `tls.*` controls optional TLS on the replay listener and bridge source connection
-- `ingest.protocol` supports `wire`, `otlp-http`, and `otlp-grpc`
+- `ingest.protocol` supports `wire`, `otlp-http`, `otlp-grpc`, and `plugin`
+- `ingest.plugin-path` is required when `ingest.protocol: plugin`
 - `file.*` settings are ignored unless `output: file`
 - `buffer.*` settings are ignored unless `output: buffer`
 - `file.path` is treated as a directory, not a full file path
