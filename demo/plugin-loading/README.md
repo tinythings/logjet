@@ -78,14 +78,19 @@ See `logjetd.conf` — the key fields:
 
 ```yaml
 ingest.protocol: plugin
-ingest.plugin-path: ../../target/debug/liblj_syslog_ingest.so
+ingest.plugin-path: ../../target/debug
+ingest.use: syslog
 ingest.listen: 127.0.0.1:5514
 ```
 
-`ingest.plugin-path` may be an explicit path, as shown above, or a bare shared
-library filename. Bare filenames are searched in `LJD_INGEST_PLUGIN_PATH`,
-`./ingestors`, paths relative to the `ljd` executable, and on Unix in
-`/usr/lib/logjet/ingestors` and `/usr/lib/logjet`.
+`ingest.plugin-path` can be a directory when paired with `ingest.use`.
+`ljd` scans the directory and selects the plugin whose descriptor name matches.
+Direct `.so` paths and bare shared-library filenames are still supported.
+
+```yaml
+ingest.protocol: plugin
+ingest.plugin-path: /opt/plugins/liblj_syslog_ingest.so
+```
 
 ## Notes
 

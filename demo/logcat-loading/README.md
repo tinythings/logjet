@@ -66,10 +66,15 @@ I/MyApp(1234): hello world
 
 ljd detects the mode automatically at dlopen time.
 
-`ingest.plugin-path` can point directly at a `.so`, or it can be a bare shared
-library filename. Bare filenames are searched in `LJD_INGEST_PLUGIN_PATH`,
-`./ingestors`, paths relative to the `ljd` executable, and on Unix in
-`/usr/lib/logjet/ingestors` and `/usr/lib/logjet`.
+This demo selects the plugin by descriptor name from the local build directory:
+
+```yaml
+ingest.protocol: plugin
+ingest.plugin-path: ../../target/debug
+ingest.use: logcat
+```
+
+Direct `.so` paths and bare shared-library filenames are still supported.
 
 ## Notes
 
