@@ -10,8 +10,12 @@ pub struct Config {
     pub ingest_tls: IngestTlsConfig,
     pub ingest_limits: IngestLimits,
     pub ingest_overload: IngestOverloadConfig,
-    /// Path to the ingest plugin shared library (.so). Required when protocol = plugin.
+    /// Path to one ingest plugin shared library, or a search directory when paired with `ingest_plugin_name`.
     pub ingest_plugin_path: Option<PathBuf>,
+    /// Optional directory to scan when selecting an ingest plugin by descriptor name.
+    pub ingest_plugin_dir: Option<PathBuf>,
+    /// Optional descriptor name selected from `ingest_plugin_dir` and system plugin roots.
+    pub ingest_plugin_name: Option<String>,
     pub replay_addr: String,
     pub replay_max_clients: usize,
     pub replay_client_timeout_ms: u64,
@@ -216,6 +220,12 @@ struct RawConfig {
     ingest_overload_report_ms: Option<u64>,
     #[serde(rename = "ingest.plugin-path")]
     ingest_plugin_path: Option<PathBuf>,
+    #[serde(rename = "ingest.plugin-dir")]
+    ingest_plugin_dir: Option<PathBuf>,
+    #[serde(rename = "ingest.plugin")]
+    ingest_plugin: Option<String>,
+    #[serde(rename = "ingest.use")]
+    ingest_use: Option<String>,
     #[serde(rename = "replay.listen")]
     replay_addr: Option<String>,
     #[serde(rename = "replay.max-clients")]
@@ -300,6 +310,9 @@ impl Config {
                 ingest_priority_severity_floor: None,
                 ingest_overload_report_ms: None,
                 ingest_plugin_path: None,
+                ingest_plugin_dir: None,
+                ingest_plugin: None,
+                ingest_use: None,
                 replay_addr: None,
                 replay_max_clients: None,
                 replay_client_timeout_ms: None,
@@ -341,8 +354,16 @@ impl Config {
             other => return Err(format!("invalid ingest protocol: {other}").into()),
         };
         let ingest_plugin_path = raw.ingest_plugin_path;
-        if ingest_protocol == IngestProtocol::Plugin && ingest_plugin_path.is_none() {
-            return Err("ingest.plugin-path is required when ingest.protocol = plugin".into());
+        let ingest_plugin_dir = raw.ingest_plugin_dir;
+        let ingest_plugin_name = match (raw.ingest_plugin, raw.ingest_use) {
+            (Some(plugin), Some(alias)) if plugin != alias => {
+                return Err("ingest.plugin and ingest.use must match when both are set".into());
+            }
+            (Some(plugin), _) | (_, Some(plugin)) => Some(plugin),
+            (None, None) => None,
+        };
+        if ingest_protocol == IngestProtocol::Plugin && ingest_plugin_path.is_none() && ingest_plugin_name.is_none() {
+            return Err("ingest.plugin-path or ingest.plugin is required when ingest.protocol = plugin".into());
         }
         let ingest_tls = IngestTlsConfig {
             enable: raw.ingest_tls_enable.unwrap_or(false),
@@ -474,6 +495,8 @@ impl Config {
             ingest_limits,
             ingest_overload,
             ingest_plugin_path,
+            ingest_plugin_dir,
+            ingest_plugin_name,
             replay_addr,
             replay_max_clients,
             replay_client_timeout_ms,

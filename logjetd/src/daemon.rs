@@ -212,6 +212,8 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
         config.config.ingest_tls,
         config.config.ingest_limits,
         config.config.ingest_plugin_path,
+        config.config.ingest_plugin_dir,
+        config.config.ingest_plugin_name,
         ingest_policy,
         spool,
         next_seq,
@@ -222,13 +224,13 @@ pub fn serve(config: DaemonConfig) -> io::Result<()> {
 #[allow(clippy::too_many_arguments)]
 fn ingest_loop(
     bind_addr: String, protocol: IngestProtocol, ingest_tls: IngestTlsConfig, ingest_limits: IngestLimits, plugin_path: Option<PathBuf>,
-    ingest_policy: Arc<SharedIngestPolicy>, spool: Arc<SharedSpool>, next_seq: Arc<AtomicU64>,
+    plugin_dir: Option<PathBuf>, plugin_name: Option<String>, ingest_policy: Arc<SharedIngestPolicy>, spool: Arc<SharedSpool>,
+    next_seq: Arc<AtomicU64>,
 ) -> io::Result<()> {
     let limiter = Arc::new(ConnectionLimiter::new(ingest_limits.max_clients));
     match protocol {
         IngestProtocol::Plugin => {
-            let path = plugin_path.ok_or_else(|| io::Error::other("ingest.plugin-path is required for plugin protocol"))?;
-            let path = crate::plugin::resolve_ingest_plugin_path(&path);
+            let path = crate::plugin::resolve_ingest_plugin(plugin_path.as_deref(), plugin_dir.as_deref(), plugin_name.as_deref())?;
             return crate::plugin::plugin_ingest_loop(&bind_addr, &path, spool, next_seq);
         }
         IngestProtocol::Wire => {
