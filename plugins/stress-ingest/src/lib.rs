@@ -36,6 +36,36 @@ const LJ_ATTR_STRING: i32 = 0;
 
 type RecordCallback = unsafe extern "C" fn(*mut c_void, *const LjLogRecord);
 
+#[repr(C)]
+pub struct LjIngestDescriptorV1 {
+    struct_size: u32,
+    abi_major: u32,
+    abi_minor: u32,
+    name: *const c_char,
+    display_name: *const c_char,
+    mode: u32,
+    reserved: [u64; 8],
+}
+
+struct IngestDescriptor(LjIngestDescriptorV1);
+
+unsafe impl Sync for IngestDescriptor {}
+
+static STRESS_INGEST_DESCRIPTOR: IngestDescriptor = IngestDescriptor(LjIngestDescriptorV1 {
+    struct_size: std::mem::size_of::<LjIngestDescriptorV1>() as u32,
+    abi_major: 1,
+    abi_minor: 0,
+    name: b"stress\0".as_ptr().cast::<c_char>(),
+    display_name: b"Stress generator\0".as_ptr().cast::<c_char>(),
+    mode: 1,
+    reserved: [0; 8],
+});
+
+#[unsafe(no_mangle)]
+pub extern "C" fn lj_ingest_descriptor_v1() -> *const LjIngestDescriptorV1 {
+    &STRESS_INGEST_DESCRIPTOR.0
+}
+
 // ── Plugin context ──────────────────────────────────────────────────────────
 
 pub struct StressPlugin {
