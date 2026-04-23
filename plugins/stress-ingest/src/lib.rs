@@ -55,8 +55,8 @@ static STRESS_INGEST_DESCRIPTOR: IngestDescriptor = IngestDescriptor(LjIngestDes
     struct_size: std::mem::size_of::<LjIngestDescriptorV1>() as u32,
     abi_major: 1,
     abi_minor: 0,
-    name: b"stress\0".as_ptr().cast::<c_char>(),
-    display_name: b"Stress generator\0".as_ptr().cast::<c_char>(),
+    name: c"stress".as_ptr(),
+    display_name: c"Stress generator".as_ptr(),
     mode: 1,
     reserved: [0; 8],
 });

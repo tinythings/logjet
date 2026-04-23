@@ -60,8 +60,8 @@ static LOGCAT_INGEST_DESCRIPTOR: IngestDescriptor = IngestDescriptor(LjIngestDes
     struct_size: std::mem::size_of::<LjIngestDescriptorV1>() as u32,
     abi_major: 1,
     abi_minor: 0,
-    name: b"logcat\0".as_ptr().cast::<c_char>(),
-    display_name: b"Android logcat\0".as_ptr().cast::<c_char>(),
+    name: c"logcat".as_ptr(),
+    display_name: c"Android logcat".as_ptr(),
     mode: 1,
     reserved: [0; 8],
 });

@@ -54,8 +54,8 @@ static SYSLOG_INGEST_DESCRIPTOR: IngestDescriptor = IngestDescriptor(LjIngestDes
     struct_size: std::mem::size_of::<LjIngestDescriptorV1>() as u32,
     abi_major: 1,
     abi_minor: 0,
-    name: b"syslog\0".as_ptr().cast::<c_char>(),
-    display_name: b"Syslog\0".as_ptr().cast::<c_char>(),
+    name: c"syslog".as_ptr(),
+    display_name: c"Syslog".as_ptr(),
     mode: 0,
     reserved: [0; 8],
 });
