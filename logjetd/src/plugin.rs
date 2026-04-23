@@ -4,16 +4,75 @@
 //! `liblogjet.h`, accepts raw TCP connections, feeds bytes into the plugin
 //! parser, and appends parsed records to the spool.
 
+use std::env;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::io::{self, BufReader, Read};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::protocol::WireRecord;
+
+pub fn resolve_ingest_plugin_path(path: &Path) -> PathBuf {
+    if path.exists() || path.parent().is_some_and(|parent| !parent.as_os_str().is_empty()) {
+        return path.to_path_buf();
+    }
+
+    resolve_ingest_plugin_path_from_roots(path, &collect_ingest_plugin_search_roots())
+}
+
+fn resolve_ingest_plugin_path_from_roots(path: &Path, roots: &[PathBuf]) -> PathBuf {
+    if path.exists() || path.parent().is_some_and(|parent| !parent.as_os_str().is_empty()) {
+        return path.to_path_buf();
+    }
+
+    for root in roots {
+        let candidate = root.join(path);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    path.to_path_buf()
+}
+
+fn collect_ingest_plugin_search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Some(raw) = env::var_os("LJD_INGEST_PLUGIN_PATH") {
+        for entry in env::split_paths(&raw) {
+            if !entry.as_os_str().is_empty() {
+                push_unique_path(&mut roots, entry);
+            }
+        }
+    }
+
+    if let Ok(cwd) = env::current_dir() {
+        push_unique_path(&mut roots, cwd.join("ingestors"));
+    }
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        push_unique_path(&mut roots, dir.join("ingestors"));
+        push_unique_path(&mut roots, dir.join("../lib/logjet/ingestors"));
+    }
+    #[cfg(unix)]
+    {
+        push_unique_path(&mut roots, PathBuf::from("/usr/lib/logjet/ingestors"));
+        push_unique_path(&mut roots, PathBuf::from("/usr/lib/logjet"));
+    }
+
+    roots
+}
+
+fn push_unique_path(roots: &mut Vec<PathBuf>, path: PathBuf) {
+    if !roots.iter().any(|existing| existing == &path) {
+        roots.push(path);
+    }
+}
 
 // ── C ABI types mirroring liblogjet.h ───────────────────────────────────────
 
@@ -355,4 +414,52 @@ fn run_active_plugin(handle: &PluginHandle, spool: Arc<super::daemon::SharedSpoo
         return Err(io::Error::other(format!("lj_ingest_fetch returned error code {rc}")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::resolve_ingest_plugin_path_from_roots;
+
+    #[test]
+    fn ingest_plugin_resolver_finds_bare_filename_in_search_roots() -> io::Result<()> {
+        let dir = TempDir::new("ingest-plugin-resolve")?;
+        let plugin = dir.path.join("liblj_syslog_ingest.so");
+        fs::write(&plugin, b"fake")?;
+
+        let resolved = resolve_ingest_plugin_path_from_roots(Path::new("liblj_syslog_ingest.so"), std::slice::from_ref(&dir.path));
+        assert_eq!(resolved, plugin);
+        Ok(())
+    }
+
+    #[test]
+    fn ingest_plugin_resolver_preserves_explicit_relative_path() {
+        let path = Path::new("./plugins/liblj_syslog_ingest.so");
+        let roots = [PathBuf::from("/usr/lib/logjet/ingestors")];
+
+        assert_eq!(resolve_ingest_plugin_path_from_roots(path, &roots), path);
+    }
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> io::Result<Self> {
+            let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+            let path = std::env::temp_dir().join(format!("logjet-{label}-{nanos}-{}", std::process::id()));
+            fs::create_dir_all(&path)?;
+            Ok(Self { path })
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }

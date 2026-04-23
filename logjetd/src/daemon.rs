@@ -228,6 +228,7 @@ fn ingest_loop(
     match protocol {
         IngestProtocol::Plugin => {
             let path = plugin_path.ok_or_else(|| io::Error::other("ingest.plugin-path is required for plugin protocol"))?;
+            let path = crate::plugin::resolve_ingest_plugin_path(&path);
             return crate::plugin::plugin_ingest_loop(&bind_addr, &path, spool, next_seq);
         }
         IngestProtocol::Wire => {
