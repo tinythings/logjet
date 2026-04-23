@@ -7,7 +7,7 @@ fn sample_record(payload: &[u8]) -> OwnedRecord {
 
 #[test]
 fn fixed_string_match_is_literal() {
-    let predicate = PredicateArgs { fixed_string: Some("java.crap.failed".to_string()), ..PredicateArgs::default() }.build().unwrap();
+    let predicate = PredicateArgs { fixed_string: vec!["java.crap.failed".to_string()], ..PredicateArgs::default() }.build().unwrap();
 
     assert!(predicate.matches(&sample_record(b"xxx java.crap.failed yyy")));
     assert!(!predicate.matches(&sample_record(b"javaXcrapXfailed")));
@@ -15,7 +15,7 @@ fn fixed_string_match_is_literal() {
 
 #[test]
 fn regex_match_supports_wildcards() {
-    let predicate = PredicateArgs { grep: Some(r"java\..*\.bs".to_string()), ..PredicateArgs::default() }.build().unwrap();
+    let predicate = PredicateArgs { grep: vec![r"java\..*\.bs".to_string()], ..PredicateArgs::default() }.build().unwrap();
 
     assert!(predicate.matches(&sample_record(b"java.very.long.bs")));
     assert!(!predicate.matches(&sample_record(b"java.very.long.cs")));
@@ -23,8 +23,8 @@ fn regex_match_supports_wildcards() {
 
 #[test]
 fn ignore_case_applies_to_fixed_string_and_regex() {
-    let fixed = PredicateArgs { fixed_string: Some("error".to_string()), ignore_case: true, ..PredicateArgs::default() }.build().unwrap();
-    let regex = PredicateArgs { grep: Some("error".to_string()), ignore_case: true, ..PredicateArgs::default() }.build().unwrap();
+    let fixed = PredicateArgs { fixed_string: vec!["error".to_string()], ignore_case: true, ..PredicateArgs::default() }.build().unwrap();
+    let regex = PredicateArgs { grep: vec!["error".to_string()], ignore_case: true, ..PredicateArgs::default() }.build().unwrap();
 
     let record = sample_record(b"prefix eRrOr suffix");
     assert!(fixed.matches(&record));
@@ -39,7 +39,7 @@ fn matcher_combines_with_record_fields() {
         seq_max: Some(45),
         ts_min: Some(1_699_999_999),
         ts_max: Some(1_700_000_001),
-        fixed_string: Some("hello".to_string()),
+        fixed_string: vec!["hello".to_string()],
         ..PredicateArgs::default()
     }
     .build()
@@ -51,9 +51,37 @@ fn matcher_combines_with_record_fields() {
 
 #[test]
 fn invalid_regex_is_reported() {
-    let error = PredicateArgs { grep: Some("(".to_string()), ..PredicateArgs::default() }.build().unwrap_err();
+    let error = PredicateArgs { grep: vec!["(".to_string()], ..PredicateArgs::default() }.build().unwrap_err();
 
     assert!(error.to_string().contains("invalid payload matcher"));
+}
+
+#[test]
+fn repeated_fixed_strings_are_combined_with_and_semantics() {
+    let predicate = PredicateArgs { fixed_string: vec!["foo".to_string(), "bar".to_string()], ..PredicateArgs::default() }.build().unwrap();
+
+    assert!(predicate.matches(&sample_record(b"prefix foo and bar suffix")));
+    assert!(!predicate.matches(&sample_record(b"only foo here")));
+}
+
+#[test]
+fn repeated_regexes_are_combined_with_and_semantics() {
+    let predicate = PredicateArgs { grep: vec!["foo".to_string(), "bar|baz".to_string()], ..PredicateArgs::default() }.build().unwrap();
+
+    assert!(predicate.matches(&sample_record(b"foo plus baz")));
+    assert!(predicate.matches(&sample_record(b"bar comes with foo")));
+    assert!(!predicate.matches(&sample_record(b"foo alone")));
+}
+
+#[test]
+fn fixed_string_and_regex_can_be_mixed() {
+    let predicate =
+        PredicateArgs { fixed_string: vec!["customer-123".to_string()], grep: vec!["error|panic".to_string()], ..PredicateArgs::default() }
+            .build()
+            .unwrap();
+
+    assert!(predicate.matches(&sample_record(b"panic for customer-123")));
+    assert!(!predicate.matches(&sample_record(b"panic for customer-999")));
 }
 
 #[test]

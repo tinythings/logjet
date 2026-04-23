@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use clap::{ArgGroup, Args, CommandFactory, FromArgMatches, Parser, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, ValueEnum};
 use logjet::{OwnedRecord, RecordType};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use prost::Message;
@@ -67,34 +67,29 @@ impl FieldFilter {
 }
 
 #[derive(Debug, Clone, Args, Default)]
-#[command(group(
-    ArgGroup::new("payload_match")
-        .args(["grep", "fixed_string"])
-        .multiple(false)
-))]
 pub struct PredicateArgs {
-    #[arg(long = "type", value_enum)]
+    #[arg(long = "type", value_enum, help = "Match only one record type")]
     pub record_type: Option<RecordKind>,
 
-    #[arg(long)]
+    #[arg(long, help = "Match records with sequence >= this value")]
     pub seq_min: Option<u64>,
 
-    #[arg(long)]
+    #[arg(long, help = "Match records with sequence <= this value")]
     pub seq_max: Option<u64>,
 
-    #[arg(long)]
+    #[arg(long, help = "Match records with timestamp >= this unix-ns value")]
     pub ts_min: Option<u64>,
 
-    #[arg(long)]
+    #[arg(long, help = "Match records with timestamp <= this unix-ns value")]
     pub ts_max: Option<u64>,
 
-    #[arg(short = 'e', long = "grep", value_name = "PATTERN")]
-    pub grep: Option<String>,
+    #[arg(short = 'e', long = "grep", value_name = "PATTERN", help = "Regex payload matcher; repeat for AND semantics")]
+    pub grep: Vec<String>,
 
-    #[arg(short = 'F', long = "fixed-string", value_name = "TEXT")]
-    pub fixed_string: Option<String>,
+    #[arg(short = 'F', long = "fixed-string", value_name = "TEXT", help = "Literal payload matcher; repeat for AND semantics")]
+    pub fixed_string: Vec<String>,
 
-    #[arg(short = 'i', long = "ignore-case")]
+    #[arg(short = 'i', long = "ignore-case", help = "Apply case-insensitive matching to all payload matchers")]
     pub ignore_case: bool,
 }
 
@@ -105,7 +100,7 @@ pub struct RecordPredicate {
     seq_max: Option<u64>,
     ts_min: Option<u64>,
     ts_max: Option<u64>,
-    payload_matcher: Option<PayloadMatcher>,
+    payload_matchers: Vec<PayloadMatcher>,
     pub field_filter: FieldFilter,
 }
 
@@ -115,15 +110,25 @@ struct PayloadMatcher {
 }
 
 impl PredicateArgs {
+    pub fn has_filters(&self) -> bool {
+        self.record_type.is_some()
+            || self.seq_min.is_some()
+            || self.seq_max.is_some()
+            || self.ts_min.is_some()
+            || self.ts_max.is_some()
+            || !self.grep.is_empty()
+            || !self.fixed_string.is_empty()
+            || self.ignore_case
+    }
+
     pub fn build(self) -> Result<RecordPredicate> {
-        let payload_matcher = match (self.grep, self.fixed_string) {
-            (Some(pattern), None) => Some(PayloadMatcher::new(&pattern, false, self.ignore_case)?),
-            (None, Some(text)) => Some(PayloadMatcher::new(&text, true, self.ignore_case)?),
-            (None, None) => None,
-            (Some(_), Some(_)) => {
-                return Err(Error::Usage("choose either -e/--grep or -F/--fixed-string, not both".to_string()));
-            }
-        };
+        let mut payload_matchers = Vec::with_capacity(self.grep.len() + self.fixed_string.len());
+        for pattern in self.grep {
+            payload_matchers.push(PayloadMatcher::new(&pattern, false, self.ignore_case)?);
+        }
+        for text in self.fixed_string {
+            payload_matchers.push(PayloadMatcher::new(&text, true, self.ignore_case)?);
+        }
 
         Ok(RecordPredicate {
             record_type: self.record_type.map(Into::into),
@@ -131,7 +136,7 @@ impl PredicateArgs {
             seq_max: self.seq_max,
             ts_min: self.ts_min,
             ts_max: self.ts_max,
-            payload_matcher,
+            payload_matchers,
             field_filter: FieldFilter::default(),
         })
     }
@@ -152,8 +157,8 @@ pub fn parse_filter_query(query: &str, mode: FilterMode) -> Result<RecordPredica
     // Bare text in the TUI stays ergonomic and depends on the active filter mode.
     if !trimmed.starts_with('-') {
         return match mode {
-            FilterMode::Strings => PredicateArgs { fixed_string: Some(trimmed.to_string()), ..PredicateArgs::default() }.build(),
-            FilterMode::Regex => PredicateArgs { grep: Some(trimmed.to_string()), ..PredicateArgs::default() }.build(),
+            FilterMode::Strings => PredicateArgs { fixed_string: vec![trimmed.to_string()], ..PredicateArgs::default() }.build(),
+            FilterMode::Regex => PredicateArgs { grep: vec![trimmed.to_string()], ..PredicateArgs::default() }.build(),
         };
     }
 
@@ -195,10 +200,10 @@ impl RecordPredicate {
         {
             return false;
         }
-        if let Some(matcher) = &self.payload_matcher
-            && !matcher.is_match(&record.payload)
-        {
-            return false;
+        for matcher in &self.payload_matchers {
+            if !matcher.is_match(&record.payload) {
+                return false;
+            }
         }
         if !self.field_filter.matches_payload(&record.payload) {
             return false;

@@ -606,6 +606,8 @@ fn export_current_results_writes_ndjson_from_filtered_view() {
     assert_eq!(docs.len(), 2);
     assert_eq!(docs[0]["body"], "second gps");
     assert_eq!(docs[0]["event_name"], "demo.log.utf8");
+    assert_eq!(docs[0]["severity_text"], "INFO");
+    assert_eq!(docs[0]["severity_number"], 9);
     assert_eq!(docs[0]["demo_channel"][0], "AndroidGeoLocationListener");
     assert_eq!(docs[1]["body"], "third gps");
 
@@ -637,6 +639,7 @@ fn export_current_results_can_export_selected_row_only() {
     let docs = read_ndjson(&output);
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0]["body"], "second gps");
+    assert_eq!(docs[0]["severity_text"], "INFO");
 
     let _ = std::fs::remove_file(input);
     let _ = std::fs::remove_file(output);

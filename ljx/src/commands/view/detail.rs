@@ -341,20 +341,62 @@ pub(super) fn export_ndjson_objects(detail: &DetailRecord) -> Vec<JsonValue> {
             let scope_attrs = scope_logs.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]);
             for record in &scope_logs.log_records {
                 let mut obj = JsonMap::new();
-                obj.insert(
-                    "body".to_string(),
-                    JsonValue::String(record.body.as_ref().map(|v| format_any_value(Some(v))).filter(|s| !s.is_empty()).unwrap_or_default()),
-                );
-                obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.time_unix_nano.max(detail.meta.ts_unix_ns))));
-                if !record.event_name.is_empty() {
-                    obj.insert("event_name".to_string(), JsonValue::String(record.event_name.clone()));
+                if let Some(scope) = &scope_logs.scope {
+                    if !scope.name.is_empty() {
+                        obj.insert("scope_name".to_string(), JsonValue::String(scope.name.clone()));
+                    }
+                    if !scope.version.is_empty() {
+                        obj.insert("scope_version".to_string(), JsonValue::String(scope.version.clone()));
+                    }
                 }
+                insert_otlp_log_fields(&mut obj, record, detail.meta.ts_unix_ns);
                 flatten_otlp_attrs_into_json(&mut obj, resource_attrs);
                 flatten_otlp_attrs_into_json(&mut obj, scope_attrs);
                 flatten_otlp_attrs_into_json(&mut obj, &record.attributes);
                 out.push(JsonValue::Object(obj));
             }
         }
+    }
+    out
+}
+
+fn insert_otlp_log_fields(
+    target: &mut JsonMap<String, JsonValue>, record: &opentelemetry_proto::tonic::logs::v1::LogRecord, fallback_ts_unix_ns: u64,
+) {
+    target.insert(
+        "body".to_string(),
+        JsonValue::String(record.body.as_ref().map(|v| format_any_value(Some(v))).filter(|s| !s.is_empty()).unwrap_or_default()),
+    );
+    target.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.time_unix_nano.max(fallback_ts_unix_ns))));
+    if record.observed_time_unix_nano > 0 {
+        target.insert("observed_timestamp".to_string(), JsonValue::String(format_timestamp(record.observed_time_unix_nano)));
+    }
+    if record.severity_number != 0 {
+        target.insert("severity_number".to_string(), JsonValue::Number(record.severity_number.into()));
+    }
+    if !record.severity_text.is_empty() {
+        target.insert("severity_text".to_string(), JsonValue::String(record.severity_text.clone()));
+    }
+    if record.flags != 0 {
+        target.insert("flags".to_string(), JsonValue::Number(record.flags.into()));
+    }
+    if !record.event_name.is_empty() {
+        target.insert("event_name".to_string(), JsonValue::String(record.event_name.clone()));
+    }
+    if !record.trace_id.is_empty() {
+        target.insert("trace_id".to_string(), JsonValue::String(hex_encode(&record.trace_id)));
+    }
+    if !record.span_id.is_empty() {
+        target.insert("span_id".to_string(), JsonValue::String(hex_encode(&record.span_id)));
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
 }
