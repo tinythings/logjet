@@ -31,6 +31,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut matches = command.get_matches_mut();
     let cli = Cli::from_arg_matches_mut(&mut matches)?;
 
+    if cli.plugins {
+        let config = Config::load(&cli.config)?;
+        plugin::print_visible_plugins(config.ingest_plugin_dir.as_deref(), config.ingest_plugin_path.as_deref())?;
+        return Ok(());
+    }
+
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => {
             let config = Config::load(&cli.config)?;

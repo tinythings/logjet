@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    ingest_plugin_label, legacy_ingest_plugin_name_matches, normalise_legacy_plugin_stem, read_ingest_descriptor, resolve_ingest_plugin,
-    resolve_ingest_plugin_path_from_roots,
+    ingest_plugin_label, legacy_ingest_plugin_name, legacy_ingest_plugin_name_matches, list_visible_ingest_plugins, normalise_legacy_plugin_stem,
+    read_ingest_descriptor, resolve_ingest_plugin, resolve_ingest_plugin_path_from_roots,
 };
 
 #[test]
@@ -60,7 +60,21 @@ fn legacy_ingest_plugin_filename_stems_match_requested_name() {
     assert_eq!(normalise_legacy_plugin_stem("lj-syslog-ingest"), "syslog");
     assert_eq!(normalise_legacy_plugin_stem("libcustom_ingest"), "custom");
     assert!(legacy_ingest_plugin_name_matches(Path::new("libcustom_ingest.so"), "custom"));
+    assert_eq!(legacy_ingest_plugin_name(Path::new("libcustom_ingest.so")).as_deref(), Some("custom"));
+    assert_eq!(legacy_ingest_plugin_name(Path::new("libcustom.so")), None);
     assert_eq!(ingest_plugin_label(Path::new("libcustom_ingest.so")), "custom");
+}
+
+#[test]
+fn visible_ingest_listing_keeps_legacy_ingestors_but_skips_unrelated_libraries() -> io::Result<()> {
+    let dir = TempDir::new("visible-ingest-plugins")?;
+    fs::write(dir.path.join("libcustom_ingest.so"), b"fake")?;
+    fs::write(dir.path.join("libunrelated.so"), b"fake")?;
+
+    let plugins = list_visible_ingest_plugins(Some(&dir.path), None);
+    assert!(plugins.iter().any(|plugin| plugin.name == "custom"));
+    assert!(!plugins.iter().any(|plugin| plugin.name == "unrelated"));
+    Ok(())
 }
 
 struct TempDir {

@@ -24,6 +24,9 @@ pub struct Cli {
     )]
     pub config: PathBuf,
 
+    #[arg(long = "plugins", global = true, help = "List visible ingest and export plugins, then exit")]
+    pub plugins: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -106,14 +109,14 @@ pub fn build_cli() -> clap::Command {
         .literal(styling::AnsiColor::BrightGreen.on_default())
         .placeholder(styling::AnsiColor::BrightMagenta.on_default());
     let after_help = format!(
-        "Examples:\n  {appname} --config ./logjetd.conf\n  {appname} inspect /var/lib/logjet\n  {appname} segments --path /var/lib/logjet --name app.logjet\n  {appname} replay --path /var/lib/logjet --name app.logjet --dest http://127.0.0.1:4318/v1/logs\n  {appname} prune --path /var/lib/logjet --name app.logjet --keep-files 2 --dry-run\n  {appname} bridge --source 10.0.0.15:7002"
+        "Examples:\n  {appname} --config ./logjetd.conf\n  {appname} --plugins\n  {appname} inspect /var/lib/logjet\n  {appname} segments --path /var/lib/logjet --name app.logjet\n  {appname} replay --path /var/lib/logjet --name app.logjet --dest http://127.0.0.1:4318/v1/logs\n  {appname} prune --path /var/lib/logjet --name app.logjet --keep-files 2 --dry-run\n  {appname} bridge --source 10.0.0.15:7002"
     );
 
     Cli::command()
         .styles(styles)
         .about(format!("{} - {}", appname.bright_magenta().bold(), "telemetry daemon for ingest, replay, and spool management"))
         .override_usage(format!(
-            "{appname} [serve] [-c|--config <PATH>]\n  {appname} inspect [--verify-otlp] <PATH>\n  {appname} segments --path <DIR> --name <BASE.LOGJET>\n  {appname} replay [-c|--config <PATH>] --path <DIR> --name <BASE.LOGJET> [--dest <URL-OR-HOST:PORT>]\n  {appname} prune --path <DIR> --name <BASE.LOGJET> [--keep-files <N> | --keep-bytes <BYTES>] [--dry-run]\n  {appname} bridge [-c|--config <PATH>] [--source <HOST:PORT>]"
+            "{appname} [serve] [-c|--config <PATH>] [--plugins]\n  {appname} inspect [--verify-otlp] <PATH>\n  {appname} segments --path <DIR> --name <BASE.LOGJET>\n  {appname} replay [-c|--config <PATH>] --path <DIR> --name <BASE.LOGJET> [--dest <URL-OR-HOST:PORT>]\n  {appname} prune --path <DIR> --name <BASE.LOGJET> [--keep-files <N> | --keep-bytes <BYTES>] [--dry-run]\n  {appname} bridge [-c|--config <PATH>] [--source <HOST:PORT>]"
         ))
         .after_help(after_help)
 }
