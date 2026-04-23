@@ -15,7 +15,7 @@ use opentelemetry_proto::tonic::common::v1::AnyValue;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use prost::Message;
 
-use super::types::{ActiveScan, DetailRecord, EntryMeta, FieldCatalog, SCAN_BATCH_SIZE, ScanUpdate};
+use super::types::{ActiveScan, DetailRecord, EntryMeta, FieldCatalog, ListRowSummary, SCAN_BATCH_SIZE, ScanUpdate};
 use crate::error::{Error, Result};
 use crate::input::InputHandle;
 
@@ -164,7 +164,7 @@ pub(crate) fn open_temp_spool_pair() -> Result<(PathBuf, File, File)> {
     Ok((spool_path, spool_reader, spool_writer))
 }
 
-pub(super) fn remember_summary(cache: &mut HashMap<usize, String>, order: &mut VecDeque<usize>, index: usize, summary: String) {
+pub(super) fn remember_summary(cache: &mut HashMap<usize, ListRowSummary>, order: &mut VecDeque<usize>, index: usize, summary: ListRowSummary) {
     cache.insert(index, summary);
     order.push_back(index);
     while order.len() > super::types::SUMMARY_CACHE_LIMIT {

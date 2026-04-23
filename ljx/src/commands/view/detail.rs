@@ -117,6 +117,23 @@ pub(crate) fn extract_otlp_log_message(payload: &[u8]) -> Option<String> {
     None
 }
 
+pub(crate) fn extract_otlp_log_severity(payload: &[u8]) -> Option<String> {
+    let batch = ExportLogsServiceRequest::decode(payload).ok()?;
+    for resource_logs in &batch.resource_logs {
+        for scope_logs in &resource_logs.scope_logs {
+            for log_record in &scope_logs.log_records {
+                if !log_record.severity_text.is_empty() {
+                    return Some(log_record.severity_text.clone());
+                }
+                if let Some(severity) = severity_number_label(log_record.severity_number) {
+                    return Some(severity.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn render_modal_message(detail: &DetailRecord, hex_payload: bool) -> String {
     if let Some(message) = extract_otlp_log_message(&detail.payload) {
         return message;
@@ -597,7 +614,7 @@ fn key_value_line(label: &str, value: String, value_style: Style) -> Line<'stati
     Line::from(vec![Span::styled(format!("{label:<12} "), Style::default().fg(Color::Indexed(136))), Span::styled(value, value_style)])
 }
 
-fn severity_style(value: &str) -> Style {
+pub(super) fn severity_style(value: &str) -> Style {
     let upper = value.to_ascii_uppercase();
     let color = if upper.contains("ERROR") || upper.contains("ERR") || upper.contains("FATAL") {
         Color::LightRed
@@ -615,12 +632,37 @@ fn severity_style(value: &str) -> Style {
     Style::default().fg(color).add_modifier(Modifier::BOLD)
 }
 
+pub(super) fn severity_initial(value: &str) -> String {
+    value.chars().find(|c| c.is_ascii_alphabetic()).map(|c| c.to_ascii_uppercase().to_string()).unwrap_or_else(|| " ".to_string())
+}
+
 pub(super) fn format_timestamp(ts_unix_ns: u64) -> String {
     let secs = (ts_unix_ns / 1_000_000_000) as i64;
     let nanos = (ts_unix_ns % 1_000_000_000) as u32;
     match Utc.timestamp_opt(secs, nanos).single() {
         Some(ts) => ts.format("%Y-%m-%d %H:%M:%S.%f UTC").to_string(),
         None => ts_unix_ns.to_string(),
+    }
+}
+
+pub(super) fn format_syslog_timestamp(ts_unix_ns: u64) -> String {
+    let secs = (ts_unix_ns / 1_000_000_000) as i64;
+    let nanos = (ts_unix_ns % 1_000_000_000) as u32;
+    match Utc.timestamp_opt(secs, nanos).single() {
+        Some(ts) => ts.format("%b %e %H:%M:%S").to_string(),
+        None => format!("{ts_unix_ns:<15}").chars().take(15).collect(),
+    }
+}
+
+fn severity_number_label(value: i32) -> Option<&'static str> {
+    match value {
+        1..=4 => Some("TRACE"),
+        5..=8 => Some("DEBUG"),
+        9..=12 => Some("INFO"),
+        13..=16 => Some("WARN"),
+        17..=20 => Some("ERROR"),
+        21..=24 => Some("FATAL"),
+        _ => None,
     }
 }
 

@@ -5,7 +5,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 
 use super::detail::{
-    fit_line, fit_modal_body, modal_info_line, render_detail_lines, render_modal_footer, render_modal_footer_placeholder, render_modal_info_entries,
+    fit_line, fit_modal_body, format_syslog_timestamp, modal_info_line, render_detail_lines, render_modal_footer, render_modal_footer_placeholder,
+    render_modal_info_entries, severity_initial, severity_style,
 };
 use super::text::{fit_to_width, trim_single_line};
 use super::types::{ExportField, Focus, ViewApp};
@@ -23,6 +24,8 @@ const EXPORT_RANGE_HELP: &str = "Range:  a / all  |  c / current / 0  |  N  |  N
 const EXPORT_ORDER_HELP: &str = "Uses the current filtered view order.";
 const EXPORT_FORMAT_HELP_WIDTH: u16 = 55;
 const EXPORT_PROMPT_MIN_WIDTH: u16 = EXPORT_FORMAT_HELP_WIDTH + 2;
+const LIST_TIMESTAMP_WIDTH: usize = 15;
+const LIST_SEVERITY_WIDTH: usize = 1;
 
 impl ViewApp {
     pub(super) fn render(&mut self, frame: &mut Frame<'_>) {
@@ -109,7 +112,7 @@ impl ViewApp {
             let end = (self.list_offset + visible_rows).min(self.entries.len());
             let row_width = area.width.saturating_sub(1) as usize;
             for index in self.list_offset..end {
-                let style = if self.tail_mode && self.tail_marker_index == Some(index) {
+                let row_style = if self.tail_mode && self.tail_marker_index == Some(index) {
                     Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)
                 } else if index == self.selected {
                     if self.focus == Focus::Search {
@@ -120,8 +123,14 @@ impl ViewApp {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                let summary = self.summary_for(index).unwrap_or_else(|_| "<failed to render summary>".to_string());
-                lines.push(Line::from(Span::styled(fit_line(&summary, row_width), style)));
+                let summary = self
+                    .summary_for(index)
+                    .unwrap_or_else(|_| super::types::ListRowSummary { message: "<failed to render summary>".to_string(), severity: None });
+                if self.details_visible {
+                    lines.push(Line::from(Span::styled(fit_line(&summary.message, row_width), row_style)));
+                } else {
+                    lines.push(self.render_list_table_row(index, &summary, row_width, row_style));
+                }
             }
         }
 
@@ -132,6 +141,24 @@ impl ViewApp {
             let mut scrollbar_state = ScrollbarState::new(self.entries.len()).position(self.selected.min(self.entries.len().saturating_sub(1)));
             frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), area, &mut scrollbar_state);
         }
+    }
+
+    fn render_list_table_row(&self, index: usize, summary: &super::types::ListRowSummary, row_width: usize, row_style: Style) -> Line<'static> {
+        let timestamp = format_syslog_timestamp(self.entries[index].ts_unix_ns);
+        let timestamp = fit_to_width(&timestamp, LIST_TIMESTAMP_WIDTH);
+        let severity = summary.severity.as_deref().unwrap_or("");
+        let severity_style = severity_style(severity).bg(row_style.bg.unwrap_or(Color::Reset));
+        let severity = fit_to_width(&severity_initial(severity), LIST_SEVERITY_WIDTH);
+        let prefix_width = LIST_TIMESTAMP_WIDTH + 1 + LIST_SEVERITY_WIDTH + 2;
+        let message_width = row_width.saturating_sub(prefix_width);
+
+        Line::from(vec![
+            Span::styled(timestamp, row_style.fg(Color::LightBlue)),
+            Span::styled(" ", row_style),
+            Span::styled(severity, severity_style),
+            Span::styled("  ", row_style),
+            Span::styled(fit_line(&summary.message, message_width), row_style),
+        ])
     }
 
     fn render_details(&self, frame: &mut Frame<'_>, area: Rect) {

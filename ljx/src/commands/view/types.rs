@@ -53,6 +53,12 @@ pub(crate) struct DetailRecord {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ListRowSummary {
+    pub(crate) message: String,
+    pub(crate) severity: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum ScanUpdate {
     Batch(Vec<EntryMeta>),
     Finished { scanned: u64, matched: u64 },
@@ -217,7 +223,7 @@ pub(crate) struct ViewApp {
     pub(super) modal_info_visible: bool,
     pub(super) details_visible: bool,
     pub(super) detail_scroll: u16,
-    pub(super) summary_cache: HashMap<usize, String>,
+    pub(super) summary_cache: HashMap<usize, ListRowSummary>,
     pub(super) summary_order: VecDeque<usize>,
     pub(super) selected_detail: Option<DetailRecord>,
     pub(super) modal_text: Option<String>,
