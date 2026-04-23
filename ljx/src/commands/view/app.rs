@@ -12,13 +12,13 @@ use logjet::{LogjetReader, LogjetWriter, WriterConfig};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use super::detail::{export_ndjson_objects, format_summary, parse_export_selection, render_modal_message};
+use super::detail::{export_ndjson_objects, extract_otlp_log_severity, format_summary, parse_export_selection, render_modal_message};
 use super::scan::{
     follow_appended_matches, open_temp_spool_pair, read_spool_record, remember_summary, scan_field_catalog, scan_matches,
     write_export_selection_to_temp_logjet,
 };
 use super::text::{char_count, delete_char_at, delete_char_before, insert_char_at};
-use super::types::{ActiveScan, DedupUpdate, ExportField, Focus, ScanUpdate, ViewApp, discover_export_format_choices};
+use super::types::{ActiveScan, DedupUpdate, ExportField, Focus, ListRowSummary, ScanUpdate, ViewApp, discover_export_format_choices};
 use crate::cli::ViewArgs;
 use crate::dedup::{DedupMatchMode, DedupMode};
 use crate::error::{Error, Result};
@@ -691,16 +691,16 @@ impl ViewApp {
         Ok(())
     }
 
-    pub(super) fn summary_for(&mut self, index: usize) -> Result<String> {
+    pub(super) fn summary_for(&mut self, index: usize) -> Result<ListRowSummary> {
         if let Some(summary) = self.summary_cache.get(&index) {
             return Ok(summary.clone());
         }
 
         let Some(scan) = &mut self.current_scan else {
-            return Ok(String::new());
+            return Ok(ListRowSummary { message: String::new(), severity: None });
         };
         let detail = read_spool_record(&mut scan.spool_reader, self.entries[index])?;
-        let summary = format_summary(&detail, self.hex_payload);
+        let summary = ListRowSummary { message: format_summary(&detail, self.hex_payload), severity: extract_otlp_log_severity(&detail.payload) };
         remember_summary(&mut self.summary_cache, &mut self.summary_order, index, summary.clone());
         Ok(summary)
     }
