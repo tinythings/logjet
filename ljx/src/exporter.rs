@@ -234,7 +234,7 @@ impl LoadedExporter {
                 break;
             }
             processed += 1;
-            if processed == 1 || processed % 128 == 0 {
+            if processed == 1 || processed.is_multiple_of(128) {
                 progress(processed);
             }
         }
