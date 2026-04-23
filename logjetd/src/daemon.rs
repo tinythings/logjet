@@ -231,6 +231,7 @@ fn ingest_loop(
     match protocol {
         IngestProtocol::Plugin => {
             let path = crate::plugin::resolve_ingest_plugin(plugin_path.as_deref(), plugin_dir.as_deref(), plugin_name.as_deref())?;
+            eprintln!("ljd ingest plugin selected name={} path={}", crate::plugin::ingest_plugin_label(&path), path.display());
             return crate::plugin::plugin_ingest_loop(&bind_addr, &path, spool, next_seq);
         }
         IngestProtocol::Wire => {

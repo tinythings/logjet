@@ -65,6 +65,14 @@ pub fn resolve_ingest_plugin(plugin_path: Option<&Path>, plugin_dir: Option<&Pat
     find_ingest_plugin_by_name(name, &roots)
 }
 
+pub fn ingest_plugin_label(path: &Path) -> String {
+    match read_ingest_descriptor(path) {
+        Ok(descriptor) if descriptor.display_name == descriptor.name => descriptor.name,
+        Ok(descriptor) => format!("{} ({})", descriptor.name, descriptor.display_name),
+        Err(_) => path.file_stem().and_then(|stem| stem.to_str()).map(normalise_legacy_plugin_stem).unwrap_or_else(|| "unknown".to_string()),
+    }
+}
+
 fn resolve_ingest_plugin_path_from_roots(path: &Path, roots: &[PathBuf]) -> PathBuf {
     if path.exists() || path.parent().is_some_and(|parent| !parent.as_os_str().is_empty()) {
         return path.to_path_buf();
@@ -156,6 +164,7 @@ fn is_shared_library(path: &Path) -> bool {
 
 struct IngestDescriptor {
     name: String,
+    display_name: String,
 }
 
 fn read_ingest_descriptor(path: &Path) -> std::result::Result<IngestDescriptor, String> {
@@ -204,7 +213,8 @@ fn read_ingest_descriptor(path: &Path) -> std::result::Result<IngestDescriptor, 
     if !is_valid_plugin_name(&name) {
         return Err(format!("ingest plugin {} returned invalid name `{name}`", path.display()));
     }
-    Ok(IngestDescriptor { name })
+    let display_name = read_optional_c_string(descriptor.display_name).unwrap_or_else(|| name.clone());
+    Ok(IngestDescriptor { name, display_name })
 }
 
 fn read_c_string(ptr: *const c_char, label: &str, path: &Path) -> std::result::Result<String, String> {
@@ -213,6 +223,14 @@ fn read_c_string(ptr: *const c_char, label: &str, path: &Path) -> std::result::R
     }
     // SAFETY: descriptor strings are plugin-owned NUL-terminated static strings.
     Ok(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
+}
+
+fn read_optional_c_string(ptr: *const c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: descriptor strings are plugin-owned NUL-terminated static strings.
+    Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
 }
 
 fn is_valid_plugin_name(value: &str) -> bool {
