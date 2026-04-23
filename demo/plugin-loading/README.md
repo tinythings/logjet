@@ -82,6 +82,11 @@ ingest.plugin-path: ../../target/debug/liblj_syslog_ingest.so
 ingest.listen: 127.0.0.1:5514
 ```
 
+`ingest.plugin-path` may be an explicit path, as shown above, or a bare shared
+library filename. Bare filenames are searched in `LJD_INGEST_PLUGIN_PATH`,
+`./ingestors`, paths relative to the `ljd` executable, and on Unix in
+`/usr/lib/logjet/ingestors` and `/usr/lib/logjet`.
+
 ## Notes
 
 - The plugin receives raw TCP bytes, not OTLP
