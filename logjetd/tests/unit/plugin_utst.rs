@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    legacy_ingest_plugin_name_matches, normalise_legacy_plugin_stem, read_ingest_descriptor, resolve_ingest_plugin,
+    ingest_plugin_label, legacy_ingest_plugin_name_matches, normalise_legacy_plugin_stem, read_ingest_descriptor, resolve_ingest_plugin,
     resolve_ingest_plugin_path_from_roots,
 };
 
@@ -36,6 +36,8 @@ fn built_in_logcat_plugin_exposes_descriptor_name_when_built() -> io::Result<()>
 
     let descriptor = read_ingest_descriptor(&plugin).map_err(io::Error::other)?;
     assert_eq!(descriptor.name, "logcat");
+    assert_eq!(descriptor.display_name, "Android logcat");
+    assert_eq!(ingest_plugin_label(&plugin), "logcat (Android logcat)");
     Ok(())
 }
 
@@ -58,6 +60,7 @@ fn legacy_ingest_plugin_filename_stems_match_requested_name() {
     assert_eq!(normalise_legacy_plugin_stem("lj-syslog-ingest"), "syslog");
     assert_eq!(normalise_legacy_plugin_stem("libcustom_ingest"), "custom");
     assert!(legacy_ingest_plugin_name_matches(Path::new("libcustom_ingest.so"), "custom"));
+    assert_eq!(ingest_plugin_label(Path::new("libcustom_ingest.so")), "custom");
 }
 
 struct TempDir {
