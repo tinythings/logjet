@@ -98,9 +98,13 @@ if [[ ! -s "$output" ]]; then
     exit 1
 fi
 
-processed=$(sed -nE 's/.*total_records=([0-9]+).*/\1/p' "$run_log" | tail -n 1)
+processed=$("$host_bin" count "$INPUT" | tail -n 1)
 if [[ -z "$processed" ]]; then
-    echo "Could not determine exported record count from $run_log" >&2
+    echo "Could not determine smoke input record count from $INPUT" >&2
+    exit 1
+fi
+if ! [[ "$processed" =~ ^[0-9]+$ ]]; then
+    echo "Unexpected smoke input record count from $host_bin count: $processed" >&2
     exit 1
 fi
 if [[ "$processed" -eq 0 ]]; then
