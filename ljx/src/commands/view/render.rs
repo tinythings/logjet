@@ -58,6 +58,7 @@ impl ViewApp {
             Focus::ExportError => self.render_export_error(frame),
             Focus::SavePrompt => self.render_save_prompt(frame),
             Focus::ExportPrompt => self.render_export_prompt(frame),
+            Focus::ExportProgress => self.render_export_progress(frame),
             Focus::DedupPrompt => self.render_dedup_prompt(frame),
             Focus::DedupProgress => self.render_dedup_progress(frame),
             Focus::Search | Focus::List => {}
@@ -268,6 +269,10 @@ impl ViewApp {
                 draw_status_spans(buf, area.x, y, area.width, &[status_text("Deduplicating…")]);
                 return;
             }
+            Focus::ExportProgress => {
+                draw_status_spans(buf, area.x, y, area.width, &[status_text("Exporting…")]);
+                return;
+            }
             Focus::FieldFilter | Focus::Search | Focus::List => {}
         }
 
@@ -448,6 +453,37 @@ impl ViewApp {
                 inner,
             );
         }
+    }
+
+    fn render_export_progress(&self, frame: &mut Frame<'_>) {
+        let area = centered_rect_fixed_height(52, DEDUP_PROGRESS_MIN_WIDTH, DEDUP_PROGRESS_POPUP_HEIGHT, frame.area());
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(Span::styled(" Exporting… ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double)
+            .border_style(Style::default().fg(Color::White).bg(Color::Gray))
+            .style(Style::default().fg(Color::Black).bg(Color::Gray));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        frame.render_widget(
+            Gauge::default()
+                .gauge_style(Style::default().fg(Color::Indexed(28)).bg(Color::White))
+                .label(Span::styled(
+                    format!("{:.0}%", self.export_progress * 100.0),
+                    Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD),
+                ))
+                .ratio(self.export_progress.clamp(0.0, 1.0)),
+            Rect { x: inner.x + 1, y: inner.y + 1, width: inner.width.saturating_sub(2), height: 1 },
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Phase: ", Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)),
+                Span::styled(self.export_phase.as_str(), Style::default().fg(Color::DarkGray).bg(Color::Gray)),
+            ])),
+            Rect { x: inner.x + 1, y: inner.y + 3, width: inner.width.saturating_sub(2), height: 1 },
+        );
     }
 
     fn render_modal(&self, frame: &mut Frame<'_>) {

@@ -18,7 +18,7 @@ use super::scan::{
     write_export_selection_to_temp_logjet,
 };
 use super::text::{char_count, delete_char_at, delete_char_before, insert_char_at};
-use super::types::{ActiveScan, DedupUpdate, ExportField, Focus, ListRowSummary, ScanUpdate, ViewApp, discover_export_format_choices};
+use super::types::{ActiveScan, DedupUpdate, ExportField, ExportUpdate, Focus, ListRowSummary, ScanUpdate, ViewApp, discover_export_format_choices};
 use crate::cli::ViewArgs;
 use crate::dedup::{DedupMatchMode, DedupMode};
 use crate::error::{Error, Result};
@@ -71,6 +71,9 @@ impl ViewApp {
             export_range_cursor: 3,
             export_field: ExportField::Format,
             export_message: None,
+            export_rx: None,
+            export_progress: 0.0,
+            export_phase: String::new(),
             current_scan: None,
             tail_on_launch: args.tail,
             tail_mode: false,
@@ -95,6 +98,7 @@ impl ViewApp {
     pub(super) fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         loop {
             self.drain_scan_updates()?;
+            self.drain_export_updates();
             self.drain_dedup_updates();
             terminal.draw(|frame| self.render(frame))?;
 
@@ -133,6 +137,7 @@ impl ViewApp {
             Focus::SaveError => self.handle_save_error_key(),
             Focus::ExportPrompt => self.handle_export_prompt_key(key),
             Focus::ExportError => self.handle_export_error_key(),
+            Focus::ExportProgress => self.handle_export_progress_key(),
             Focus::DedupPrompt => self.handle_dedup_prompt_key(key),
             Focus::DedupProgress => self.handle_dedup_progress_key(key),
             Focus::Search => self.handle_search_key(key),
@@ -287,6 +292,10 @@ impl ViewApp {
     fn handle_export_error_key(&mut self) -> Result<bool> {
         self.focus = Focus::ExportPrompt;
         self.export_message = None;
+        Ok(false)
+    }
+
+    fn handle_export_progress_key(&mut self) -> Result<bool> {
         Ok(false)
     }
 
@@ -540,11 +549,8 @@ impl ViewApp {
                     };
                     write_export_selection_to_temp_logjet(scan, &selected_entries)?
                 };
-                let plugin = self.exporters.plugin(other).ok_or_else(|| self.exporters.unknown_format_error(other))?;
-                let plugin_result = plugin.export(&temp_input, &output_path, false, &[]);
-                let _ = std::fs::remove_file(&temp_input);
-                plugin_result?;
-                exported = end.saturating_sub(start);
+                self.start_plugin_export(other.to_string(), temp_input, output_path, end.saturating_sub(start));
+                return Ok(());
             }
         }
 
@@ -552,6 +558,81 @@ impl ViewApp {
         self.export_message = None;
         self.status = format!("Exported {exported} {} row(s) to {}", format.label(), output_path.display());
         Ok(())
+    }
+
+    fn start_plugin_export(&mut self, format: String, temp_input: PathBuf, output_path: PathBuf, rows: usize) {
+        let (tx, rx) = mpsc::channel();
+        self.export_rx = Some(rx);
+        self.export_progress = 0.0;
+        self.export_phase = format!("Exporting {rows} {format} row(s)...");
+        self.focus = Focus::ExportProgress;
+
+        thread::spawn(move || {
+            let result = (|| -> std::result::Result<(), String> {
+                let registry = crate::exporter::ExporterRegistry::discover();
+                let plugin = registry.plugin(&format).ok_or_else(|| registry.unknown_format_error(&format).to_string())?;
+                let mut last_sent = 0usize;
+                let mut finalizing_sent = false;
+                plugin
+                    .export_with_progress(&temp_input, &output_path, false, &[], |processed| {
+                        let processed = processed as usize;
+                        if processed == rows || processed.saturating_sub(last_sent) >= 128 {
+                            last_sent = processed;
+                            let _ = tx.send(ExportUpdate::Progress { processed, total: rows });
+                            if processed >= rows && !finalizing_sent {
+                                finalizing_sent = true;
+                                let _ = tx.send(ExportUpdate::Finalizing);
+                            }
+                        }
+                    })
+                    .map_err(|err| err.to_string())?;
+                Ok(())
+            })();
+            let _ = std::fs::remove_file(&temp_input);
+            match result {
+                Ok(()) => {
+                    let _ = tx.send(ExportUpdate::Done { format, rows, output: output_path });
+                }
+                Err(err) => {
+                    let _ = tx.send(ExportUpdate::Failed(err));
+                }
+            }
+        });
+    }
+
+    pub(crate) fn drain_export_updates(&mut self) {
+        let Some(rx) = &self.export_rx else { return };
+        while let Ok(update) = rx.try_recv() {
+            match update {
+                ExportUpdate::Progress { processed, total } => {
+                    let total = total.max(1);
+                    let ratio = (processed.min(total) as f64 / total as f64).clamp(0.0, 1.0);
+                    self.export_progress = (ratio * 0.92).min(0.92);
+                    self.export_phase = format!("Writing records {}/{}", processed.min(total), total);
+                }
+                ExportUpdate::Finalizing => {
+                    self.export_progress = self.export_progress.max(0.94);
+                    self.export_phase = "Finalizing output file...".to_string();
+                }
+                ExportUpdate::Done { format, rows, output } => {
+                    self.export_rx = None;
+                    self.export_progress = 1.0;
+                    self.focus = Focus::List;
+                    self.export_message = None;
+                    self.export_phase.clear();
+                    self.status = format!("Exported {rows} {format} row(s) to {}", output.display());
+                    return;
+                }
+                ExportUpdate::Failed(err) => {
+                    self.export_rx = None;
+                    self.export_message = Some(err);
+                    self.export_progress = 0.0;
+                    self.export_phase.clear();
+                    self.focus = Focus::ExportError;
+                    return;
+                }
+            }
+        }
     }
 
     pub(crate) fn current_export_format(&self) -> &super::types::ExportFormatChoice {

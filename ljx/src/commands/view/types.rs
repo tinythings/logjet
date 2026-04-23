@@ -26,6 +26,7 @@ pub(crate) enum Focus {
     SaveError,
     ExportPrompt,
     ExportError,
+    ExportProgress,
     DedupPrompt,
     DedupProgress,
 }
@@ -69,6 +70,14 @@ pub(crate) enum ScanUpdate {
 pub(crate) enum DedupUpdate {
     Progress { ratio: f64, phase: String },
     Done { total: u64, groups: u64, pct: f64 },
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ExportUpdate {
+    Progress { processed: usize, total: usize },
+    Finalizing,
+    Done { format: String, rows: usize, output: PathBuf },
     Failed(String),
 }
 
@@ -237,6 +246,9 @@ pub(crate) struct ViewApp {
     pub(crate) export_range_cursor: usize,
     pub(crate) export_field: ExportField,
     pub(super) export_message: Option<String>,
+    pub(crate) export_rx: Option<Receiver<ExportUpdate>>,
+    pub(crate) export_progress: f64,
+    pub(crate) export_phase: String,
     pub(crate) current_scan: Option<ActiveScan>,
     pub(super) tail_on_launch: bool,
     pub(super) tail_mode: bool,

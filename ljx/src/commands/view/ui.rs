@@ -89,6 +89,7 @@ pub(super) fn status_help_spans(focus: Focus) -> Vec<Span<'static>> {
         | Focus::SaveError
         | Focus::ExportPrompt
         | Focus::ExportError
+        | Focus::ExportProgress
         | Focus::DedupPrompt
         | Focus::DedupProgress => Vec::new(),
     }
