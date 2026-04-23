@@ -37,6 +37,8 @@ tls.require-client-cert: false
 tls.server-name: appliance.internal
 ingest.protocol: otlp-http   # "wire", "otlp-http", "otlp-grpc", or "plugin"
 ingest.plugin-path: liblj_syslog_ingest.so
+ingest.plugin-dir: /usr/lib/logjet/ingestors
+ingest.use: syslog
 ingest.listen: 127.0.0.1:7001
 ingest.tls-enable: false
 ingest.ca-file: /etc/logjet/ingest-ca.pem
@@ -587,7 +589,7 @@ use either `otlp-http` or `otlp-grpc`.
 
 ### `ingest.plugin-path`
 
-Shared-library path used when `ingest.protocol: plugin`.
+Shared-library path or search directory used when `ingest.protocol: plugin`.
 
 If the value is an explicit path such as `./plugins/liblj_syslog_ingest.so` or
 `/opt/logjet/liblj_syslog_ingest.so`, `ljd` loads that path directly.
@@ -604,6 +606,30 @@ searches these roots in order:
 
 Use the `ingestors` subdirectory for packaged ingest plugins. `/usr/lib/logjet`
 is also checked for simple system installs.
+
+If `ingest.use` or `ingest.plugin` is set, `ingest.plugin-path` may instead be
+a directory. In that mode, `ljd` scans the directory plus the normal search
+roots and selects the plugin whose descriptor name matches.
+
+Example:
+
+```yaml
+ingest.protocol: plugin
+ingest.plugin-path: /opt/plugins
+ingest.use: logcat
+```
+
+`ingest.plugin-dir` is also accepted as an explicit scan directory:
+
+```yaml
+ingest.protocol: plugin
+ingest.plugin-dir: /opt/plugins
+ingest.plugin: logcat
+```
+
+Built-in ingest plugin descriptor names are `syslog`, `logcat`, and `stress`.
+`ingest.use` and `ingest.plugin` are aliases; if both are present they must
+have the same value.
 
 ### `ingest.tls-enable`
 
@@ -685,6 +711,8 @@ If omitted:
 - `tls.server-name: unset`
 - `ingest.protocol: wire`
 - `ingest.plugin-path: unset`
+- `ingest.plugin-dir: unset`
+- `ingest.use: unset`
 - `ingest.listen: 127.0.0.1:7001`
 - `ingest.tls-enable: false`
 - `ingest.ca-file: unset`
@@ -733,7 +761,7 @@ If omitted:
 - `replay.client-timeout-ms` caps how long one replay client can block on socket I/O
 - `tls.*` controls optional TLS on the replay listener and bridge source connection
 - `ingest.protocol` supports `wire`, `otlp-http`, `otlp-grpc`, and `plugin`
-- `ingest.plugin-path` is required when `ingest.protocol: plugin`
+- `ingest.plugin-path` or `ingest.plugin`/`ingest.use` is required when `ingest.protocol: plugin`
 - `file.*` settings are ignored unless `output: file`
 - `buffer.*` settings are ignored unless `output: buffer`
 - `file.path` is treated as a directory, not a full file path

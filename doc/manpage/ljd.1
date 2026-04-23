@@ -263,6 +263,8 @@ tls.require-client-cert: false
 tls.server-name: appliance.internal
 ingest.protocol: otlp-http
 ingest.plugin-path: liblj_syslog_ingest.so
+ingest.plugin-dir: /usr/lib/logjet/ingestors
+ingest.use: syslog
 ingest.listen: 127.0.0.1:4318
 ingest.tls-enable: false
 ingest.ca-file: /etc/logjet/ingest-ca.pem
@@ -299,11 +301,16 @@ for file-mode archive housekeeping
 \f[C]ingest.protocol\f[R] supports \f[C]wire\f[R], \f[C]otlp-http\f[R],
 \f[C]otlp-grpc\f[R], and \f[C]plugin\f[R]
 .IP \[bu] 2
-\f[C]ingest.plugin-path\f[R] is required with
-\f[C]ingest.protocol: plugin\f[R]; bare filenames are searched in
-\f[C]LJD_INGEST_PLUGIN_PATH\f[R], \f[C]./ingestors\f[R], paths relative
-to the \f[C]ljd\f[R] executable, \f[C]/usr/lib/logjet/ingestors\f[R],
-and \f[C]/usr/lib/logjet\f[R]
+\f[C]ingest.plugin-path\f[R] or \f[C]ingest.plugin\f[R]/\f[C]ingest.use\f[R]
+is required with \f[C]ingest.protocol: plugin\f[R]
+.IP \[bu] 2
+bare plugin filenames are searched in \f[C]LJD_INGEST_PLUGIN_PATH\f[R],
+\f[C]./ingestors\f[R], paths relative to the \f[C]ljd\f[R] executable,
+\f[C]/usr/lib/logjet/ingestors\f[R], and \f[C]/usr/lib/logjet\f[R]
+.IP \[bu] 2
+when \f[C]ingest.use\f[R] or \f[C]ingest.plugin\f[R] is set,
+\f[C]ingest.plugin-path\f[R] may be a directory to scan by descriptor
+name
 .IP \[bu] 2
 \f[C]ingest.max-batch-bytes\f[R] rejects oversized OTLP or wire payloads
 before they are stored
