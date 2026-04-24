@@ -1265,6 +1265,7 @@ dependencies = [
  "colored",
  "libc",
  "libloading",
+ "liblogjet",
  "logjet",
  "lz4_flex",
  "opentelemetry-proto",

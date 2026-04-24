@@ -10,6 +10,8 @@ ljd - OTLP ingest, `.logjet` storage, replay, and file blasting daemon
 
 `ljd` [`serve`] [`-c`|`--config` *path*]
 
+`ljd` [`-c`|`--config` *path*] `--plugins`
+
 `ljd` `inspect` *path*
 
 `ljd` `segments` `--path` *dir* `--name` *base.logjet*
@@ -37,6 +39,7 @@ It can:
 - export to a plain OTLP/gRPC collector
 - inspect `.logjet` files and directories
 - list file-segment metadata for one rotated spool
+- list visible ingest and export plugins
 - replay stored `.logjet` files into OTLP collectors as a one-shot operation
 - prune oldest rotated file segments by file count or byte budget
 
@@ -74,6 +77,17 @@ ljd --config ./logjetd.conf bridge --source 10.0.0.15:7002
 ```
 
 If `--source` is omitted, bridge uses `upstream.replay` from configuration.
+
+## --plugins
+
+List visible ingest and export plugins, then exit.
+
+Output is plain text with `ingestors:` and `exporters:` sections. Each plugin
+entry prints `name` and `display-name` on one tab-indented line, followed by
+the plugin path on the next line.
+
+If `-c` or `--config` is provided, configured ingest plugin locations such as
+`ingest.plugin-path` and `ingest.plugin-dir` are included in the ingest scan.
 
 ## inspect
 
@@ -132,6 +146,10 @@ ljd prune --path /var/lib/logjet --name app.logjet --keep-bytes 1048576 --dry-ru
 ## `-c`, `--config` *path*
 
 Load configuration from *path* instead of `/etc/logjet.conf`.
+
+## `--plugins`
+
+List visible ingest and export plugins, then exit.
 
 ## `-h`, `--help`
 
@@ -224,6 +242,8 @@ tls.require-client-cert: false
 tls.server-name: appliance.internal
 ingest.protocol: otlp-http
 ingest.plugin-path: liblj_syslog_ingest.so
+ingest.plugin-dir: /usr/lib/logjet/ingestors
+ingest.use: syslog
 ingest.listen: 127.0.0.1:4318
 ingest.tls-enable: false
 ingest.ca-file: /etc/logjet/ingest-ca.pem
@@ -249,7 +269,9 @@ Rules:
 - file mode always keeps all rotated files
 - `segments` and `prune` provide explicit operator tooling for file-mode archive housekeeping
 - `ingest.protocol` supports `wire`, `otlp-http`, `otlp-grpc`, and `plugin`
-- `ingest.plugin-path` is required with `ingest.protocol: plugin`; bare filenames are searched in `LJD_INGEST_PLUGIN_PATH`, `./ingestors`, paths relative to the `ljd` executable, `/usr/lib/logjet/ingestors`, and `/usr/lib/logjet`
+- `ingest.plugin-path` or `ingest.plugin`/`ingest.use` is required with `ingest.protocol: plugin`
+- bare plugin filenames are searched in `LJD_INGEST_PLUGIN_PATH`, `./ingestors`, paths relative to the `ljd` executable, `/usr/lib/logjet/ingestors`, and `/usr/lib/logjet`
+- when `ingest.use` or `ingest.plugin` is set, `ingest.plugin-path` may be a directory to scan by descriptor name
 - `ingest.max-batch-bytes` rejects oversized OTLP or wire payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling
 - `ingest.max-batches-per-second` caps accepted ingest batches per second

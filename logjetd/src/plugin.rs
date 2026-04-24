@@ -15,6 +15,22 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::protocol::WireRecord;
+use liblogjet::export::{LJX_EXPORTER_ABI_MAJOR, LJX_EXPORTER_ABI_MINOR, LJX_EXPORTER_DESCRIPTOR_V1_SYMBOL, LjxAbiString, LjxExporterDescriptorV1};
+
+const LJ_INGEST_ABI_MAJOR: u32 = 1;
+const LJ_INGEST_ABI_MINOR: u32 = 0;
+const LJ_INGEST_DESCRIPTOR_SYMBOL: &[u8] = b"lj_ingest_descriptor_v1\0";
+
+#[repr(C)]
+struct LjIngestDescriptorV1 {
+    struct_size: u32,
+    abi_major: u32,
+    abi_minor: u32,
+    name: *const c_char,
+    display_name: *const c_char,
+    mode: u32,
+    reserved: [u64; 8],
+}
 
 pub fn resolve_ingest_plugin_path(path: &Path) -> PathBuf {
     if path.exists() || path.parent().is_some_and(|parent| !parent.as_os_str().is_empty()) {
@@ -22,6 +38,107 @@ pub fn resolve_ingest_plugin_path(path: &Path) -> PathBuf {
     }
 
     resolve_ingest_plugin_path_from_roots(path, &collect_ingest_plugin_search_roots())
+}
+
+pub fn resolve_ingest_plugin(plugin_path: Option<&Path>, plugin_dir: Option<&Path>, plugin_name: Option<&str>) -> io::Result<PathBuf> {
+    if let Some(path) = plugin_path
+        && plugin_name.is_none()
+    {
+        return Ok(resolve_ingest_plugin_path(path));
+    }
+
+    let mut roots = Vec::new();
+    if let Some(dir) = plugin_dir {
+        push_unique_path(&mut roots, dir.to_path_buf());
+    }
+    if let Some(path) = plugin_path {
+        if path.parent().is_some_and(|parent| !parent.as_os_str().is_empty()) {
+            push_unique_path(&mut roots, path.to_path_buf());
+        } else {
+            push_unique_path(&mut roots, resolve_ingest_plugin_path(path));
+        }
+    }
+    for root in collect_ingest_plugin_search_roots() {
+        push_unique_path(&mut roots, root);
+    }
+
+    let name = plugin_name.ok_or_else(|| io::Error::other("ingest.plugin-path or ingest.plugin is required for plugin protocol"))?;
+    find_ingest_plugin_by_name(name, &roots)
+}
+
+pub fn ingest_plugin_label(path: &Path) -> String {
+    match read_ingest_descriptor(path) {
+        Ok(descriptor) if descriptor.display_name == descriptor.name => descriptor.name,
+        Ok(descriptor) => format!("{} ({})", descriptor.name, descriptor.display_name),
+        Err(_) => path.file_stem().and_then(|stem| stem.to_str()).map(normalise_legacy_plugin_stem).unwrap_or_else(|| "unknown".to_string()),
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct VisiblePlugin {
+    pub name: String,
+    pub display_name: String,
+    pub path: PathBuf,
+}
+
+pub fn print_visible_plugins(ingest_plugin_dir: Option<&Path>, ingest_plugin_path: Option<&Path>) -> io::Result<()> {
+    print_plugin_section("ingestors", &list_visible_ingest_plugins(ingest_plugin_dir, ingest_plugin_path));
+    println!();
+    print_plugin_section("exporters", &list_visible_exporter_plugins());
+    Ok(())
+}
+
+fn print_plugin_section(label: &str, plugins: &[VisiblePlugin]) {
+    println!("{label}:");
+    for plugin in plugins {
+        println!("\t{}\t{}", shell_field(&plugin.name), shell_field(&plugin.display_name));
+        println!("\t\t{}", plugin.path.display());
+    }
+}
+
+fn shell_field(value: &str) -> String {
+    value.chars().map(|ch| if matches!(ch, '\t' | '\r' | '\n') { ' ' } else { ch }).collect()
+}
+
+pub fn list_visible_ingest_plugins(ingest_plugin_dir: Option<&Path>, ingest_plugin_path: Option<&Path>) -> Vec<VisiblePlugin> {
+    let mut roots = Vec::new();
+    if let Some(dir) = ingest_plugin_dir {
+        push_unique_path(&mut roots, dir.to_path_buf());
+    }
+    if let Some(path) = ingest_plugin_path {
+        push_unique_path(&mut roots, path.to_path_buf());
+    }
+    for root in collect_ingest_plugin_search_roots() {
+        push_unique_path(&mut roots, root);
+    }
+
+    let mut diagnostics = Vec::new();
+    let mut plugins = collect_ingest_plugin_candidates(&roots, &mut diagnostics)
+        .into_iter()
+        .filter_map(|path| match read_ingest_descriptor(&path) {
+            Ok(descriptor) => Some(VisiblePlugin { name: descriptor.name, display_name: descriptor.display_name, path }),
+            Err(_) => legacy_ingest_plugin_name(&path).map(|name| VisiblePlugin { display_name: name.clone(), name, path }),
+        })
+        .collect::<Vec<_>>();
+    plugins.sort_by(|left, right| left.name.cmp(&right.name).then_with(|| left.path.cmp(&right.path)));
+    plugins
+}
+
+pub fn list_visible_exporter_plugins() -> Vec<VisiblePlugin> {
+    let roots = collect_exporter_plugin_search_roots();
+    let mut diagnostics = Vec::new();
+    let mut plugins = collect_plugin_candidates(&roots, "exporter", &mut diagnostics)
+        .into_iter()
+        .filter_map(|path| {
+            read_exporter_descriptor(&path).ok().map(|descriptor| VisiblePlugin {
+                name: descriptor.format_name,
+                display_name: descriptor.display_name,
+                path,
+            })
+        })
+        .collect::<Vec<_>>();
+    plugins.sort_by(|left, right| left.name.cmp(&right.name).then_with(|| left.path.cmp(&right.path)));
+    plugins
 }
 
 fn resolve_ingest_plugin_path_from_roots(path: &Path, roots: &[PathBuf]) -> PathBuf {
@@ -37,6 +154,231 @@ fn resolve_ingest_plugin_path_from_roots(path: &Path, roots: &[PathBuf]) -> Path
     }
 
     path.to_path_buf()
+}
+
+fn find_ingest_plugin_by_name(name: &str, roots: &[PathBuf]) -> io::Result<PathBuf> {
+    let mut diagnostics = Vec::new();
+    for candidate in collect_ingest_plugin_candidates(roots, &mut diagnostics) {
+        match read_ingest_descriptor(&candidate) {
+            Ok(descriptor) if descriptor.name == name => return Ok(candidate),
+            Ok(_) => {}
+            Err(_) if legacy_ingest_plugin_name_matches(&candidate, name) => return Ok(candidate),
+            Err(err) => diagnostics.push(err),
+        }
+    }
+
+    let searched = roots.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(" -> ");
+    let mut message = format!("ingest plugin `{name}` not found");
+    if !searched.is_empty() {
+        message.push_str(&format!("; searched: {searched}"));
+    }
+    if !diagnostics.is_empty() {
+        message.push_str(&format!("; loader notes: {}", diagnostics.join(" | ")));
+    }
+    Err(io::Error::other(message))
+}
+
+fn legacy_ingest_plugin_name_matches(path: &Path, requested: &str) -> bool {
+    legacy_ingest_plugin_name(path).is_some_and(|name| name == requested)
+}
+
+fn legacy_ingest_plugin_name(path: &Path) -> Option<String> {
+    let stem = path.file_stem().and_then(|stem| stem.to_str())?;
+    if !stem.ends_with("_ingest") && !stem.ends_with("-ingest") {
+        return None;
+    }
+    Some(normalise_legacy_plugin_stem(stem))
+}
+
+fn normalise_legacy_plugin_stem(stem: &str) -> String {
+    let mut name = stem.strip_prefix("lib").unwrap_or(stem);
+    name = name.strip_prefix("lj_").or_else(|| name.strip_prefix("lj-")).or_else(|| name.strip_prefix("logjet_")).unwrap_or(name);
+    name = name.strip_suffix("_ingest").or_else(|| name.strip_suffix("-ingest")).unwrap_or(name);
+    name.to_ascii_lowercase().replace('_', "-")
+}
+
+fn collect_ingest_plugin_candidates(roots: &[PathBuf], diagnostics: &mut Vec<String>) -> Vec<PathBuf> {
+    collect_plugin_candidates(roots, "ingest plugin", diagnostics)
+}
+
+fn collect_plugin_candidates(roots: &[PathBuf], kind: &str, diagnostics: &mut Vec<String>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for root in roots {
+        if root.is_file() {
+            out.push(root.clone());
+            continue;
+        }
+        if !root.exists() {
+            continue;
+        }
+        let read_dir = match std::fs::read_dir(root) {
+            Ok(read_dir) => read_dir,
+            Err(err) => {
+                diagnostics.push(format!("cannot read {kind} directory {}: {err}", root.display()));
+                continue;
+            }
+        };
+        let mut entries = read_dir.filter_map(|entry| entry.ok().map(|ok| ok.path())).filter(|path| is_shared_library(path)).collect::<Vec<_>>();
+        entries.sort();
+        out.extend(entries);
+    }
+    out
+}
+
+fn is_shared_library(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if cfg!(target_os = "windows") {
+        name.ends_with(".dll")
+    } else if cfg!(target_os = "macos") {
+        name.ends_with(".dylib")
+    } else {
+        name.ends_with(".so")
+    }
+}
+
+struct IngestDescriptor {
+    name: String,
+    display_name: String,
+}
+
+struct ExporterDescriptor {
+    format_name: String,
+    display_name: String,
+}
+
+fn read_ingest_descriptor(path: &Path) -> std::result::Result<IngestDescriptor, String> {
+    // SAFETY: operator-controlled plugin paths are loaded only to query a static descriptor.
+    let lib = unsafe { libloading::Library::new(path) }.map_err(|err| format!("dlopen {}: {err}", path.display()))?;
+    // SAFETY: symbol signature is defined by the ingest descriptor ABI.
+    let descriptor_fn = unsafe {
+        lib.get::<unsafe extern "C" fn() -> *const LjIngestDescriptorV1>(LJ_INGEST_DESCRIPTOR_SYMBOL)
+            .map_err(|err| format!("symbol lj_ingest_descriptor_v1 in {}: {err}", path.display()))?
+    };
+    // SAFETY: plugin exported the descriptor function above.
+    let descriptor_ptr = unsafe { descriptor_fn() };
+    if descriptor_ptr.is_null() {
+        return Err(format!("ingest plugin {} returned NULL descriptor", path.display()));
+    }
+    // SAFETY: descriptor pointer was checked for null and points to plugin-owned static storage.
+    let descriptor = unsafe { &*descriptor_ptr };
+    if descriptor.struct_size < std::mem::size_of::<LjIngestDescriptorV1>() as u32 {
+        return Err(format!(
+            "ingest plugin {} advertises descriptor size {} but host needs {}",
+            path.display(),
+            descriptor.struct_size,
+            std::mem::size_of::<LjIngestDescriptorV1>()
+        ));
+    }
+    if descriptor.abi_major != LJ_INGEST_ABI_MAJOR {
+        return Err(format!(
+            "ingest plugin {} uses ABI {}.{} but host needs {}.x",
+            path.display(),
+            descriptor.abi_major,
+            descriptor.abi_minor,
+            LJ_INGEST_ABI_MAJOR
+        ));
+    }
+    if descriptor.abi_minor > LJ_INGEST_ABI_MINOR {
+        return Err(format!(
+            "ingest plugin {} uses newer ABI minor {}.{} than host supports {}.{}",
+            path.display(),
+            descriptor.abi_major,
+            descriptor.abi_minor,
+            LJ_INGEST_ABI_MAJOR,
+            LJ_INGEST_ABI_MINOR
+        ));
+    }
+    let name = read_c_string(descriptor.name, "name", path)?.trim().to_ascii_lowercase();
+    if !is_valid_plugin_name(&name) {
+        return Err(format!("ingest plugin {} returned invalid name `{name}`", path.display()));
+    }
+    let display_name = read_optional_c_string(descriptor.display_name).unwrap_or_else(|| name.clone());
+    Ok(IngestDescriptor { name, display_name })
+}
+
+fn read_c_string(ptr: *const c_char, label: &str, path: &Path) -> std::result::Result<String, String> {
+    if ptr.is_null() {
+        return Err(format!("ingest plugin {} returned NULL {label}", path.display()));
+    }
+    // SAFETY: descriptor strings are plugin-owned NUL-terminated static strings.
+    Ok(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
+}
+
+fn read_optional_c_string(ptr: *const c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: descriptor strings are plugin-owned NUL-terminated static strings.
+    Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
+}
+
+fn is_valid_plugin_name(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_'))
+}
+
+fn read_exporter_descriptor(path: &Path) -> std::result::Result<ExporterDescriptor, String> {
+    // SAFETY: operator-controlled plugin paths are loaded only to query a static descriptor.
+    let lib = unsafe { libloading::Library::new(path) }.map_err(|err| format!("dlopen {}: {err}", path.display()))?;
+    // SAFETY: symbol signature is defined by the stable exporter descriptor ABI.
+    let descriptor_fn = unsafe {
+        lib.get::<unsafe extern "C" fn() -> *const LjxExporterDescriptorV1>(LJX_EXPORTER_DESCRIPTOR_V1_SYMBOL)
+            .map_err(|err| format!("symbol ljx_exporter_descriptor_v1 in {}: {err}", path.display()))?
+    };
+    // SAFETY: plugin exported the descriptor function above.
+    let descriptor_ptr = unsafe { descriptor_fn() };
+    if descriptor_ptr.is_null() {
+        return Err(format!("exporter plugin {} returned NULL descriptor", path.display()));
+    }
+    // SAFETY: descriptor pointer was checked for null and points to plugin-owned static storage.
+    let descriptor = unsafe { &*descriptor_ptr };
+    if descriptor.struct_size < std::mem::size_of::<LjxExporterDescriptorV1>() as u32 {
+        return Err(format!(
+            "exporter plugin {} advertises descriptor size {} but host needs {}",
+            path.display(),
+            descriptor.struct_size,
+            std::mem::size_of::<LjxExporterDescriptorV1>()
+        ));
+    }
+    if descriptor.abi_major != LJX_EXPORTER_ABI_MAJOR {
+        return Err(format!(
+            "exporter plugin {} uses ABI {}.{} but host needs {}.x",
+            path.display(),
+            descriptor.abi_major,
+            descriptor.abi_minor,
+            LJX_EXPORTER_ABI_MAJOR
+        ));
+    }
+    if descriptor.abi_minor > LJX_EXPORTER_ABI_MINOR {
+        return Err(format!(
+            "exporter plugin {} uses newer ABI minor {}.{} than host supports {}.{}",
+            path.display(),
+            descriptor.abi_major,
+            descriptor.abi_minor,
+            LJX_EXPORTER_ABI_MAJOR,
+            LJX_EXPORTER_ABI_MINOR
+        ));
+    }
+    let format_name = abi_string_to_string(descriptor.format_name).trim().to_ascii_lowercase();
+    if !is_valid_plugin_name(&format_name) {
+        return Err(format!("exporter plugin {} returned invalid format name `{format_name}`", path.display()));
+    }
+    let display_name = non_empty_or(abi_string_to_string(descriptor.display_name), &format_name);
+    Ok(ExporterDescriptor { format_name, display_name })
+}
+
+fn abi_string_to_string(value: LjxAbiString) -> String {
+    if value.ptr.is_null() || value.len == 0 {
+        return String::new();
+    }
+    // SAFETY: ABI strings are borrowed `(ptr, len)` views provided by the plugin.
+    let bytes = unsafe { std::slice::from_raw_parts(value.ptr.cast::<u8>(), value.len) };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn non_empty_or(value: String, fallback: &str) -> String {
+    if value.trim().is_empty() { fallback.to_string() } else { value }
 }
 
 fn collect_ingest_plugin_search_roots() -> Vec<PathBuf> {
@@ -62,6 +404,35 @@ fn collect_ingest_plugin_search_roots() -> Vec<PathBuf> {
     #[cfg(unix)]
     {
         push_unique_path(&mut roots, PathBuf::from("/usr/lib/logjet/ingestors"));
+        push_unique_path(&mut roots, PathBuf::from("/usr/lib/logjet"));
+    }
+
+    roots
+}
+
+fn collect_exporter_plugin_search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Some(raw) = env::var_os("LJX_EXPORTER_PATH") {
+        for entry in env::split_paths(&raw) {
+            if !entry.as_os_str().is_empty() {
+                push_unique_path(&mut roots, entry);
+            }
+        }
+    }
+
+    if let Ok(cwd) = env::current_dir() {
+        push_unique_path(&mut roots, cwd.join("exporters"));
+    }
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        push_unique_path(&mut roots, dir.join("exporters"));
+        push_unique_path(&mut roots, dir.join("../lib/logjet/exporters"));
+    }
+    #[cfg(unix)]
+    {
+        push_unique_path(&mut roots, PathBuf::from("/usr/lib/logjet/exporters"));
         push_unique_path(&mut roots, PathBuf::from("/usr/lib/logjet"));
     }
 
@@ -417,49 +788,5 @@ fn run_active_plugin(handle: &PluginHandle, spool: Arc<super::daemon::SharedSpoo
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::io;
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use super::resolve_ingest_plugin_path_from_roots;
-
-    #[test]
-    fn ingest_plugin_resolver_finds_bare_filename_in_search_roots() -> io::Result<()> {
-        let dir = TempDir::new("ingest-plugin-resolve")?;
-        let plugin = dir.path.join("liblj_syslog_ingest.so");
-        fs::write(&plugin, b"fake")?;
-
-        let resolved = resolve_ingest_plugin_path_from_roots(Path::new("liblj_syslog_ingest.so"), std::slice::from_ref(&dir.path));
-        assert_eq!(resolved, plugin);
-        Ok(())
-    }
-
-    #[test]
-    fn ingest_plugin_resolver_preserves_explicit_relative_path() {
-        let path = Path::new("./plugins/liblj_syslog_ingest.so");
-        let roots = [PathBuf::from("/usr/lib/logjet/ingestors")];
-
-        assert_eq!(resolve_ingest_plugin_path_from_roots(path, &roots), path);
-    }
-
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new(label: &str) -> io::Result<Self> {
-            let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-            let path = std::env::temp_dir().join(format!("logjet-{label}-{nanos}-{}", std::process::id()));
-            fs::create_dir_all(&path)?;
-            Ok(Self { path })
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-}
+#[path = "../tests/unit/plugin_utst.rs"]
+mod plugin_utst;

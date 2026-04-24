@@ -32,6 +32,18 @@ Explicit config path:
 ljd --config /path/to/logjet.conf
 ```
 
+List visible ingest and export plugins:
+
+```bash
+ljd --plugins
+```
+
+The plugin listing is plain text. Each plugin entry prints `name` and
+`display-name` on one tab-indented line, followed by the plugin path on the
+next line. If `--config` is provided, configured ingest plugin locations such
+as `ingest.plugin-path` and `ingest.plugin-dir` are included in the ingest
+scan.
+
 Inspect a file or directory:
 
 ```bash
@@ -78,10 +90,20 @@ ljd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - can emit overload counters on stderr through `ingest.overload-report-ms`
 - stores raw OTLP protobuf bytes in configured storage
 
-For plugin ingest, explicit `ingest.plugin-path` values are loaded directly.
-Bare filenames are resolved through `LJD_INGEST_PLUGIN_PATH`, `./ingestors`,
-`<ljd bin>/ingestors`, `<ljd bin>/../lib/logjet/ingestors`, and on Unix also
-`/usr/lib/logjet/ingestors` plus `/usr/lib/logjet`.
+For plugin ingest, explicit `.so` values in `ingest.plugin-path` are loaded
+directly. Bare filenames are resolved through `LJD_INGEST_PLUGIN_PATH`,
+`./ingestors`, `<ljd bin>/ingestors`, `<ljd bin>/../lib/logjet/ingestors`, and
+on Unix also `/usr/lib/logjet/ingestors` plus `/usr/lib/logjet`.
+
+To select by plugin descriptor name, set `ingest.use` or `ingest.plugin`.
+Then `ingest.plugin-path` may be a directory, or `ingest.plugin-dir` may name
+the directory:
+
+```yaml
+ingest.protocol: plugin
+ingest.plugin-path: /opt/plugins
+ingest.use: logcat
+```
 
 ### Replay
 

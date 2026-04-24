@@ -34,7 +34,8 @@ file.size: 5mb
 file.name: stress.logjet
 file.codec: $codec
 ingest.protocol: plugin
-ingest.plugin-path: $PLUGIN
+ingest.plugin-path: $TARGET_DIR
+ingest.use: stress
 ingest.listen: 127.0.0.1:$PORT
 replay.listen: 127.0.0.1:$((PORT + 1))
 EOF
