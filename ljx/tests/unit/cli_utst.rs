@@ -72,6 +72,36 @@ fn view_accepts_multiple_inputs() {
 }
 
 #[test]
+fn discover_accepts_dataset_pagination_and_filters() {
+    let cli = Cli::try_parse_from([
+        "ljx",
+        "discover",
+        "--offset",
+        "5",
+        "--limit",
+        "10",
+        "--ndjson",
+        "--service",
+        "api",
+        "--severity",
+        "ERROR",
+        "--type",
+        "logs",
+        "one.logjet",
+        "two.logjet",
+    ])
+    .expect("cli parses");
+    let Some(Command::Discover(args)) = cli.command else { panic!("expected discover command") };
+    assert_eq!(args.inputs, vec![PathBuf::from("one.logjet"), PathBuf::from("two.logjet")]);
+    assert_eq!(args.offset, 5);
+    assert_eq!(args.limit, Some(10));
+    assert!(args.ndjson);
+    assert_eq!(args.services, vec!["api".to_string()]);
+    assert_eq!(args.severities, vec!["ERROR".to_string()]);
+    assert!(args.predicate.record_type.is_some());
+}
+
+#[test]
 fn view_accepts_merge_order() {
     let cli = Cli::try_parse_from(["ljx", "view", "--dataset-order", "merge-ts", "one.logjet", "two.logjet"]).expect("cli parses");
     let Some(Command::View(args)) = cli.command else { panic!("expected view command") };

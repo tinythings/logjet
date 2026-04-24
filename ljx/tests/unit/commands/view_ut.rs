@@ -1,6 +1,7 @@
 use super::{
     DedupUpdate, DetailRecord, EntryMeta, ExportField, Focus, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, ViewApp, create_temp_path, extract_otlp_log_message,
-    format_summary, open_temp_spool_pair, read_spool_record, render_modal_info_entries, render_modal_message, text_preview, write_spool_record,
+    format_summary, open_temp_spool_pair, read_spool_record, render_modal_info_entries, render_modal_message, text_preview,
+    write_export_selection_to_temp_logjet, write_spool_record,
 };
 use crate::cli::{ViewArgs, ViewOrderArg};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -65,7 +66,14 @@ fn summary_prefers_decoded_otlp_log_message() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Logs,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
 
@@ -135,7 +143,14 @@ fn modal_info_lists_otlp_attributes() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Logs,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
 
@@ -187,7 +202,14 @@ fn modal_info_caps_attribute_entries_per_kind() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Logs,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
 
@@ -665,6 +687,50 @@ fn current_record_filename_tracks_physical_source_file() {
     let _ = std::fs::remove_file(base);
     let _ = std::fs::remove_file(jedha);
     let _ = std::fs::remove_file(scarif);
+}
+
+#[test]
+fn temp_logjet_export_preserves_merged_view_order_without_monotonic_crash() {
+    let base = create_temp_path().unwrap();
+    let dir = base.parent().unwrap().to_path_buf();
+    let id = base.file_name().unwrap().to_string_lossy().into_owned();
+    let mustafar = dir.join(format!("mustafar-{id}.logjet"));
+    let naboo = dir.join(format!("naboo-{id}.logjet"));
+    write_test_logjet_records(&mustafar, &[(2, 9000, "Vader on Mustafar")]);
+    write_test_logjet_records(&naboo, &[(7, 1200, "Padme on Naboo")]);
+
+    let mut app = make_view_app_inputs_order(vec![mustafar.clone(), naboo.clone()], ViewOrderArg::MergeTs);
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+
+    let temp = {
+        let scan = app.current_scan.as_mut().expect("scan");
+        write_export_selection_to_temp_logjet(scan, &app.entries).expect("temp logjet")
+    };
+
+    let bytes = std::fs::read(&temp).expect("read temp logjet");
+    let cursor = std::io::Cursor::new(bytes);
+    let mut reader = logjet::LogjetReader::new(cursor);
+    let mut bodies = Vec::new();
+    while let Some(rec) = reader.next_record().expect("next record") {
+        let batch = ExportLogsServiceRequest::decode(rec.payload.as_slice()).expect("decode batch");
+        bodies.push(
+            batch.resource_logs[0].scope_logs[0].log_records[0]
+                .body
+                .as_ref()
+                .and_then(|v| match &v.value {
+                    Some(Value::StringValue(s)) => Some(s.clone()),
+                    _ => None,
+                })
+                .expect("body"),
+        );
+    }
+    assert_eq!(bodies, vec!["Padme on Naboo".to_string(), "Vader on Mustafar".to_string()]);
+
+    let _ = std::fs::remove_file(base);
+    let _ = std::fs::remove_file(mustafar);
+    let _ = std::fs::remove_file(naboo);
+    let _ = std::fs::remove_file(temp);
 }
 
 #[test]
