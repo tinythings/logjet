@@ -1,5 +1,7 @@
 mod cli;
 mod commands;
+mod dataset;
+mod dataset_index;
 mod dedup;
 mod error;
 mod exporter;

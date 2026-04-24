@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
@@ -18,8 +18,9 @@ use super::scan::{
     write_export_selection_to_temp_logjet,
 };
 use super::text::{char_count, delete_char_at, delete_char_before, insert_char_at};
-use super::types::{ActiveScan, DedupUpdate, ExportField, ExportUpdate, Focus, ListRowSummary, ScanUpdate, ViewApp, discover_export_format_choices};
+use super::types::{ActiveScan, DedupUpdate, ExportField, ExportUpdate, Focus, ListRowSummary, ScanUpdate, ViewApp, ViewOrder, discover_export_format_choices};
 use crate::cli::ViewArgs;
+use crate::dataset::Dataset;
 use crate::dedup::{DedupMatchMode, DedupMode};
 use crate::error::{Error, Result};
 use crate::input::InputHandle;
@@ -29,19 +30,22 @@ pub(super) const TICK_RATE: Duration = Duration::from_millis(100);
 
 impl ViewApp {
     pub(crate) fn new(args: ViewArgs) -> Result<Self> {
+        let dataset = Dataset::from_inputs(&args.inputs)?;
         let exporters = crate::exporter::ExporterRegistry::discover();
         let export_formats = discover_export_format_choices(&exporters);
         let catalog: Arc<std::sync::Mutex<Option<super::types::FieldCatalog>>> = Arc::new(std::sync::Mutex::new(None));
         let catalog_bg = Arc::clone(&catalog);
-        let input_bg = args.input.clone();
+        let dataset_bg = dataset.clone();
         thread::spawn(move || {
-            if let Ok(cat) = scan_field_catalog(&input_bg) {
+            if let Ok(cat) = scan_field_catalog(&dataset_bg) {
                 *catalog_bg.lock().unwrap() = Some(cat);
             }
         });
 
         Ok(Self {
-            input: args.input,
+            input: dataset.primary_path().to_path_buf(),
+            dataset,
+            view_order: ViewOrder::from(args.dataset_order),
             hex_payload: args.hex_payload,
             exporters,
             export_formats,
@@ -370,12 +374,13 @@ impl ViewApp {
         let (spool_path, spool_reader, spool_writer) = open_temp_spool_pair()?;
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_worker = Arc::clone(&cancel);
-        let input = self.input.clone();
+        let dataset = self.dataset.clone();
+        let view_order = self.view_order;
         let (tx, rx) = mpsc::channel();
         let tx_worker = tx.clone();
 
         thread::spawn(move || {
-            let result = scan_matches(input.as_path(), predicate, spool_writer, cancel_worker, tx_worker.clone());
+            let result = scan_matches(&dataset, view_order, predicate, spool_writer, cancel_worker, tx_worker.clone());
             match result {
                 Ok((scanned, matched)) => {
                     let _ = tx_worker.send(ScanUpdate::Finished { scanned, matched });
@@ -386,7 +391,7 @@ impl ViewApp {
             }
         });
 
-        self.status = format!("Scanning matches for {:?}", self.applied_query);
+        self.status = self.scan_status(self.applied_query.as_str(), 0, false);
         self.current_scan = Some(ActiveScan { rx, cancel, spool_path, spool_reader, scanned: 0, matched: 0, finished: false });
 
         Ok(())
@@ -430,8 +435,7 @@ impl ViewApp {
         self.export_message = None;
         let default_ext = self.current_export_format().default_extension().to_string();
         if self.export_filename.is_empty() {
-            let stem = self.input.file_stem().and_then(|s| s.to_str()).unwrap_or("export");
-            self.export_filename = format!("{stem}.{default_ext}");
+            self.export_filename = format!("{}.{}", self.default_stem("export"), default_ext);
         } else {
             self.sync_export_filename_extension();
         }
@@ -455,18 +459,13 @@ impl ViewApp {
             self.save_message = Some("Filename must not contain path separators.".to_string());
             return Ok(());
         }
-        if self.input == Path::new("-") {
-            self.save_message = Some("Cannot infer output directory when input is stdin.".to_string());
-            return Ok(());
-        }
-
+        let output_dir = self.output_dir();
         let Some(scan) = &mut self.current_scan else {
             self.save_message = Some("No scan data to save.".to_string());
             return Ok(());
         };
-        let output_dir = self.input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
         let output_path = output_dir.join(filename);
-        if output_path == self.input || output_path.exists() {
+        if self.dataset.paths().any(|input| input == output_path) || output_path.exists() {
             self.save_message = Some(format!("File {filename} already exist"));
             self.focus = Focus::SaveError;
             return Ok(());
@@ -476,7 +475,7 @@ impl ViewApp {
         let writer = BufWriter::new(file);
         let mut logjet = LogjetWriter::with_config(writer, WriterConfig::default());
         for meta in &self.entries {
-            let detail = read_spool_record(&mut scan.spool_reader, *meta)?;
+            let detail = read_spool_record(&mut scan.spool_reader, meta.clone())?;
             logjet.push(detail.meta.record_type, detail.meta.seq, detail.meta.ts_unix_ns, &detail.payload)?;
         }
         let mut writer = logjet.into_inner()?;
@@ -498,11 +497,6 @@ impl ViewApp {
             self.export_message = Some("Filename must not contain path separators.".to_string());
             return Ok(());
         }
-        if self.input == Path::new("-") {
-            self.export_message = Some("Cannot infer output directory when input is stdin.".to_string());
-            return Ok(());
-        }
-
         let selected = parse_export_selection(&self.export_range, self.entries.len(), self.selected).map_err(Error::Usage);
         let (start, end) = match selected {
             Ok(range) => range,
@@ -513,9 +507,9 @@ impl ViewApp {
             }
         };
 
-        let output_dir = self.input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let output_dir = self.output_dir();
         let output_path = output_dir.join(filename);
-        if output_path == self.input || output_path.exists() {
+        if self.dataset.paths().any(|input| input == output_path) || output_path.exists() {
             self.export_message = Some(format!("File {filename} already exist"));
             self.focus = Focus::ExportError;
             return Ok(());
@@ -531,8 +525,8 @@ impl ViewApp {
                     return Ok(());
                 };
                 let mut out = OpenOptions::new().write(true).create_new(true).open(&output_path)?;
-                for meta in selected_entries.iter().copied() {
-                    let detail = read_spool_record(&mut scan.spool_reader, meta)?;
+                for meta in &selected_entries {
+                    let detail = read_spool_record(&mut scan.spool_reader, meta.clone())?;
                     for object in export_ndjson_objects(&detail) {
                         serde_json::to_writer(&mut out, &object).map_err(|e| Error::Usage(e.to_string()))?;
                         out.write_all(b"\n")?;
@@ -741,11 +735,7 @@ impl ViewApp {
 
         if !finished {
             let matched = self.entries.len();
-            self.status = if self.applied_query.is_empty() {
-                format!("Scanning all records: {matched} matches buffered")
-            } else {
-                format!("Scanning {:?}: {matched} matches buffered", self.applied_query)
-            };
+            self.status = self.scan_status(self.applied_query.as_str(), matched, true);
         }
 
         Ok(())
@@ -760,7 +750,7 @@ impl ViewApp {
         let Some(scan) = &mut self.current_scan else {
             return Err(Error::Usage("no active scan".to_string()));
         };
-        let detail = read_spool_record(&mut scan.spool_reader, self.entries[self.selected])?;
+        let detail = read_spool_record(&mut scan.spool_reader, self.entries[self.selected].clone())?;
         self.selected_detail = Some(detail);
         self.detail_scroll = 0;
         if self.focus == Focus::Modal {
@@ -780,7 +770,7 @@ impl ViewApp {
         let Some(scan) = &mut self.current_scan else {
             return Ok(ListRowSummary { message: String::new(), severity: None });
         };
-        let detail = read_spool_record(&mut scan.spool_reader, self.entries[index])?;
+        let detail = read_spool_record(&mut scan.spool_reader, self.entries[index].clone())?;
         let summary = ListRowSummary { message: format_summary(&detail, self.hex_payload), severity: extract_otlp_log_severity(&detail.payload) };
         remember_summary(&mut self.summary_cache, &mut self.summary_order, index, summary.clone());
         Ok(summary)
@@ -798,7 +788,15 @@ impl ViewApp {
     }
 
     fn start_tail_mode(&mut self) -> Result<()> {
-        if self.input == Path::new("-") {
+        if self.dataset.len() != 1 {
+            self.status = "Tail mode needs exactly one input file.".to_string();
+            return Ok(());
+        }
+        if self.view_order != ViewOrder::Concat {
+            self.status = "Tail mode only works with concat ordering.".to_string();
+            return Ok(());
+        }
+        if self.dataset.is_stdin() {
             self.status = "Tail mode needs a real file, not stdin.".to_string();
             return Ok(());
         }
@@ -1018,8 +1016,11 @@ impl ViewApp {
     }
 
     pub(crate) fn open_dedup_prompt(&mut self) {
-        let stem = self.input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
-        self.dedup_filename = format!("{stem}-dedup.logjet");
+        if self.current_scan.is_none() && (self.dataset.len() != 1 || self.dataset.is_stdin()) {
+            self.status = "Dedup needs a finished scan or one real input file.".to_string();
+            return;
+        }
+        self.dedup_filename = format!("{}-dedup.logjet", self.default_stem("output"));
         self.dedup_behavior = DedupMode::Distinct;
         self.dedup_match_mode = DedupMatchMode::Hash2;
         self.focus = Focus::DedupPrompt;
@@ -1048,8 +1049,29 @@ impl ViewApp {
     }
 
     pub(crate) fn start_dedup(&mut self, filename: &str, behavior: DedupMode, match_mode: DedupMatchMode) {
-        let input_path = self.input.clone();
-        let output_dir = self.input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let temp_input = if self.can_dedup() {
+            let Some(scan) = &mut self.current_scan else {
+                self.status = "No scan data to dedup.".to_string();
+                self.focus = Focus::List;
+                return;
+            };
+            match write_export_selection_to_temp_logjet(scan, &self.entries) {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    self.status = format!("Dedup preparation failed: {err}");
+                    self.focus = Focus::List;
+                    return;
+                }
+            }
+        } else if self.dataset.len() == 1 && !self.dataset.is_stdin() {
+            None
+        } else {
+            self.status = "Dedup needs a finished scan or one real input file.".to_string();
+            self.focus = Focus::List;
+            return;
+        };
+        let source_input = self.input.clone();
+        let output_dir = self.output_dir();
         let output_path = output_dir.join(filename);
         let (tx, rx) = mpsc::channel();
         self.dedup_rx = Some(rx);
@@ -1063,7 +1085,7 @@ impl ViewApp {
         thread::spawn(move || {
             let run = || -> std::result::Result<crate::dedup::DedupStats, String> {
                 tx.send(DedupUpdate::Progress { ratio: 0.05, phase: "opening input".to_string() }).ok();
-                let input = InputHandle::open(&input_path).map_err(|e| e.to_string())?;
+                let input = InputHandle::open(temp_input.as_ref().unwrap_or(&source_input)).map_err(|e| e.to_string())?;
                 tx.send(DedupUpdate::Progress { ratio: 0.18, phase: "unpacking records".to_string() }).ok();
                 let mut reader = LogjetReader::new(input.into_buf_reader());
                 let unpacked = crate::dedup::unpack::unpack(&mut reader).map_err(|e| e.to_string())?;
@@ -1083,9 +1105,15 @@ impl ViewApp {
             };
             match run() {
                 Ok(stats) => {
+                    if let Some(path) = &temp_input {
+                        let _ = std::fs::remove_file(path);
+                    }
                     let _ = tx.send(DedupUpdate::Done { total: stats.total_records, groups: stats.group_count, pct: stats.reduction_pct() });
                 }
                 Err(e) => {
+                    if let Some(path) = &temp_input {
+                        let _ = std::fs::remove_file(path);
+                    }
                     let _ = tx.send(DedupUpdate::Failed(e));
                 }
             }
@@ -1156,17 +1184,54 @@ impl ViewApp {
             let _ = std::fs::remove_file(scan.spool_path);
         }
         self.input = path;
+        self.dataset = Dataset::from_inputs(std::slice::from_ref(&self.input))?;
 
         let catalog_bg = Arc::clone(&self.field_catalog);
-        let input_bg = self.input.clone();
+        let dataset_bg = self.dataset.clone();
         *self.field_catalog.lock().unwrap() = None;
         thread::spawn(move || {
-            if let Ok(cat) = scan_field_catalog(&input_bg) {
+            if let Ok(cat) = scan_field_catalog(&dataset_bg) {
                 *catalog_bg.lock().unwrap() = Some(cat);
             }
         });
 
         self.query_input.clear();
         self.apply_filter()
+    }
+
+    fn default_stem(&self, fallback: &str) -> String {
+        self.dataset.default_stem(fallback)
+    }
+
+    fn output_dir(&self) -> PathBuf {
+        self.dataset.output_dir()
+    }
+
+    fn scan_status(&self, query: &str, matched: usize, buffered: bool) -> String {
+        let target = if self.dataset.len() == 1 {
+            if query.is_empty() { "all records".to_string() } else { format!("{query:?}") }
+        } else if query.is_empty() {
+            format!("all records across {} files", self.dataset.len())
+        } else {
+            format!("{query:?} across {} files", self.dataset.len())
+        };
+        if buffered {
+            format!("Scanning {target} [{}]: {matched} matches buffered", self.view_order.label())
+        } else {
+            format!("Scanning {target} [{}]", self.view_order.label())
+        }
+    }
+
+    pub(crate) fn current_record_filename(&self) -> Option<String> {
+        let meta = self.entries.get(self.selected)?;
+        meta.source_path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string())
+    }
+
+    pub(crate) fn can_tail(&self) -> bool {
+        self.dataset.len() == 1 && !self.dataset.is_stdin() && self.view_order == ViewOrder::Concat
+    }
+
+    pub(crate) fn can_dedup(&self) -> bool {
+        self.current_scan.as_ref().map(|scan| scan.finished).unwrap_or(false) && !self.entries.is_empty()
     }
 }

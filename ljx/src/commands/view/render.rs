@@ -10,9 +10,7 @@ use super::detail::{
 };
 use super::text::{fit_to_width, trim_single_line};
 use super::types::{ExportField, Focus, ViewApp};
-use super::ui::{
-    centered_rect, centered_rect_fixed_height, draw_status_spans, pane_block, render_save_error_message, status_help_spans, status_key, status_text,
-};
+use super::ui::{centered_rect, centered_rect_fixed_height, draw_status_spans, pane_block, render_save_error_message, status_key, status_text};
 
 const DEDUP_PROMPT_POPUP_HEIGHT: u16 = 8;
 const DEDUP_PROMPT_MIN_WIDTH: u16 = 58;
@@ -79,10 +77,20 @@ impl ViewApp {
         let input_style = Style::default().fg(Color::White).bg(Color::Indexed(30));
 
         frame.buffer_mut().set_style(area, bar_style);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(title, title_style), Span::styled(self.query_input.as_str(), input_style)])).style(bar_style),
-            area,
-        );
+        let mut line = vec![Span::styled(title, title_style), Span::styled(self.query_input.as_str(), input_style)];
+        if let Some(filename) = self.current_record_filename() {
+            let lhs = title.chars().count() + self.query_input.chars().count();
+            let rhs = filename.chars().count();
+            let total = area.width as usize;
+            if rhs < total {
+                let gap = total.saturating_sub(lhs).saturating_sub(rhs);
+                if gap > 0 {
+                    line.push(Span::styled(" ".repeat(gap), bar_style));
+                }
+                line.push(Span::styled(filename, Style::default().fg(Color::LightGreen).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)));
+            }
+        }
+        frame.render_widget(Paragraph::new(Line::from(line)).style(bar_style), area);
 
         if self.focus == Focus::Search {
             let x = area.x.saturating_add(title.chars().count() as u16).saturating_add(self.query_input.chars().count() as u16);
@@ -276,7 +284,7 @@ impl ViewApp {
             Focus::FieldFilter | Focus::Search | Focus::List => {}
         }
 
-        let left_spans = status_help_spans(self.focus);
+        let left_spans = self.status_help_spans();
         let status = trim_single_line(&self.status, area.width as usize);
         let status_width = status.chars().count().min(area.width as usize) as u16;
         let gap_width = if area.width > status_width { 1 } else { 0 };
@@ -286,6 +294,59 @@ impl ViewApp {
         if status_width > 0 {
             let status_x = area.right().saturating_sub(status_width);
             buf.set_stringn(status_x, y, status, status_width as usize, Style::default().fg(Color::LightGreen).bg(Color::Indexed(30)));
+        }
+    }
+
+    fn status_help_spans(&self) -> Vec<Span<'static>> {
+        match self.focus {
+            Focus::Search => vec![
+                status_key("TAB"),
+                status_text(" switch  "),
+                status_key("ENTER"),
+                status_text(" apply  "),
+                status_key("ESC"),
+                status_text(" clear filter  "),
+                status_key("UP/DOWN"),
+                status_text(" change mode"),
+            ],
+            Focus::List => {
+                let mut spans = vec![
+                    status_key("Q"),
+                    status_text(" quit  "),
+                    status_key("TAB"),
+                    status_text(" switch  "),
+                    status_key("ENTER"),
+                    status_text(" open  "),
+                    status_key("S"),
+                    status_text(" save  "),
+                    status_key("E"),
+                    status_text(" export  "),
+                ];
+                if self.can_dedup() {
+                    spans.extend([status_key("D"), status_text(" dedup  ")]);
+                }
+                if self.can_tail() {
+                    spans.extend([status_key("T"), status_text(" tail  ")]);
+                }
+                spans.extend([
+                    status_key("F"),
+                    status_text(" field filter  "),
+                    status_key("I"),
+                    status_text(" info  "),
+                    status_key("UP/DOWN"),
+                    status_text(" navigate"),
+                ]);
+                spans
+            }
+            Focus::Modal
+            | Focus::FieldFilter
+            | Focus::SavePrompt
+            | Focus::SaveError
+            | Focus::ExportPrompt
+            | Focus::ExportError
+            | Focus::ExportProgress
+            | Focus::DedupPrompt
+            | Focus::DedupProgress => Vec::new(),
         }
     }
 

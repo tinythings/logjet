@@ -7,6 +7,8 @@ use std::sync::mpsc::Receiver;
 
 use logjet::RecordType;
 
+use crate::cli::ViewOrderArg;
+use crate::dataset::Dataset;
 use crate::dedup::{DedupMatchMode, DedupMode};
 use crate::exporter::ExporterRegistry;
 use crate::predicate::{FieldFilter, FilterMode};
@@ -38,13 +40,14 @@ pub(crate) enum ExportField {
     Range,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct EntryMeta {
     pub(crate) offset: u64,
     pub(crate) record_type: RecordType,
     pub(crate) seq: u64,
     pub(crate) ts_unix_ns: u64,
     pub(crate) payload_len: u64,
+    pub(crate) source_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +82,33 @@ pub(crate) enum ExportUpdate {
     Finalizing,
     Done { format: String, rows: usize, output: PathBuf },
     Failed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewOrder {
+    Concat,
+    MergeSeq,
+    MergeTs,
+}
+
+impl ViewOrder {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Concat => "concat",
+            Self::MergeSeq => "merge-seq",
+            Self::MergeTs => "merge-ts",
+        }
+    }
+}
+
+impl From<ViewOrderArg> for ViewOrder {
+    fn from(value: ViewOrderArg) -> Self {
+        match value {
+            ViewOrderArg::Concat => Self::Concat,
+            ViewOrderArg::MergeSeq => Self::MergeSeq,
+            ViewOrderArg::MergeTs => Self::MergeTs,
+        }
+    }
 }
 
 impl DedupMode {
@@ -217,6 +247,8 @@ pub(super) struct FieldFilterState {
 
 pub(crate) struct ViewApp {
     pub(crate) input: PathBuf,
+    pub(crate) dataset: Dataset,
+    pub(crate) view_order: ViewOrder,
     pub(super) hex_payload: bool,
     pub(super) exporters: ExporterRegistry,
     pub(crate) export_formats: Vec<ExportFormatChoice>,

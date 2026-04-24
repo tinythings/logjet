@@ -211,6 +211,34 @@ impl RecordPredicate {
 
         true
     }
+
+    pub(crate) fn record_type_filter(&self) -> Option<RecordType> {
+        self.record_type
+    }
+
+    pub(crate) fn seq_min_filter(&self) -> Option<u64> {
+        self.seq_min
+    }
+
+    pub(crate) fn seq_max_filter(&self) -> Option<u64> {
+        self.seq_max
+    }
+
+    pub(crate) fn ts_min_filter(&self) -> Option<u64> {
+        self.ts_min
+    }
+
+    pub(crate) fn ts_max_filter(&self) -> Option<u64> {
+        self.ts_max
+    }
+
+    pub(crate) fn service_filter(&self) -> Option<&HashSet<String>> {
+        self.field_filter.services.as_ref()
+    }
+
+    pub(crate) fn severity_filter(&self) -> Option<&HashSet<String>> {
+        self.field_filter.severities.as_ref()
+    }
 }
 
 impl PayloadMatcher {

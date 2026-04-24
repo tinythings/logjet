@@ -98,6 +98,13 @@ pub enum ExportFormat {
     Ndjson,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ViewOrderArg {
+    Concat,
+    MergeSeq,
+    MergeTs,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     #[command(about = "Split one .logjet input into multiple outputs")]
@@ -229,8 +236,11 @@ pub struct StatsArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct ViewArgs {
-    #[arg(value_name = "INPUT", help = "Input .logjet file or - for stdin")]
-    pub input: PathBuf,
+    #[arg(value_name = "INPUT", required = true, num_args = 1.., help = "Input .logjet files; shell-expanded globs are accepted")]
+    pub inputs: Vec<PathBuf>,
+
+    #[arg(long = "dataset-order", value_enum, default_value_t = ViewOrderArg::Concat, help = "Dataset scan order: concat, merge-seq, or merge-ts")]
+    pub dataset_order: ViewOrderArg,
 
     #[arg(long, default_value_t = false, help = "Show payload previews in hex")]
     pub hex_payload: bool,
