@@ -1295,6 +1295,7 @@ dependencies = [
  "prost",
  "ratatui",
  "regex",
+ "serde",
  "serde_json",
  "shlex",
  "xxhash-rust",
