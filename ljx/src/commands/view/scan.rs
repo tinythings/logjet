@@ -65,7 +65,8 @@ pub(super) fn scan_field_catalog(dataset: &Dataset) -> Result<FieldCatalog> {
 }
 
 pub(super) fn scan_matches(
-    dataset: &Dataset, order: ViewOrder, predicate: crate::predicate::RecordPredicate, spool: File, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanUpdate>,
+    dataset: &Dataset, order: ViewOrder, predicate: crate::predicate::RecordPredicate, spool: File, cancel: Arc<AtomicBool>,
+    tx: mpsc::Sender<ScanUpdate>,
 ) -> Result<(u64, u64)> {
     match order {
         ViewOrder::Concat => scan_matches_concat(dataset, predicate, spool, cancel, tx),
@@ -117,7 +118,8 @@ fn scan_matches_concat(
 }
 
 fn scan_matches_merged(
-    dataset: &Dataset, order: ViewOrder, predicate: crate::predicate::RecordPredicate, mut spool: File, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanUpdate>,
+    dataset: &Dataset, order: ViewOrder, predicate: crate::predicate::RecordPredicate, mut spool: File, cancel: Arc<AtomicBool>,
+    tx: mpsc::Sender<ScanUpdate>,
 ) -> Result<(u64, u64)> {
     let mut streams = dataset
         .entries()
@@ -275,8 +277,8 @@ fn merge_key(order: ViewOrder, record: &OwnedRecord, stream_idx: usize, serial: 
 }
 
 fn scan_indexed_entry(
-    entry: &crate::dataset::DatasetEntry, index: &crate::dataset_index::DatasetIndex, predicate: &crate::predicate::RecordPredicate, spool: &mut File,
-    cancel: &Arc<AtomicBool>, tx: &mpsc::Sender<ScanUpdate>, tx_batch: &mut Vec<EntryMeta>, scanned: &mut u64, matched: &mut u64,
+    entry: &crate::dataset::DatasetEntry, index: &crate::dataset_index::DatasetIndex, predicate: &crate::predicate::RecordPredicate,
+    spool: &mut File, cancel: &Arc<AtomicBool>, tx: &mpsc::Sender<ScanUpdate>, tx_batch: &mut Vec<EntryMeta>, scanned: &mut u64, matched: &mut u64,
 ) -> Result<()> {
     for block in &index.blocks {
         if cancel.load(Ordering::Relaxed) {
@@ -330,16 +332,37 @@ pub(super) fn remember_summary(cache: &mut HashMap<usize, ListRowSummary>, order
     }
 }
 
-pub(super) fn write_export_selection_to_temp_logjet(scan: &mut ActiveScan, entries: &[EntryMeta]) -> Result<PathBuf> {
+pub(crate) fn write_export_selection_to_temp_logjet(scan: &mut ActiveScan, entries: &[EntryMeta]) -> Result<PathBuf> {
     let temp_input = create_temp_path()?;
     let file = OpenOptions::new().write(true).create_new(true).open(&temp_input)?;
     let writer = BufWriter::new(file);
     let mut logjet = LogjetWriter::with_config(writer, WriterConfig::default());
+    let mut block_last = None;
     for meta in entries {
         let detail = read_spool_record(&mut scan.spool_reader, meta.clone())?;
-        logjet.push(detail.meta.record_type, detail.meta.seq, detail.meta.ts_unix_ns, &detail.payload)?;
+        push_preserving_view_order(&mut logjet, &mut block_last, detail.meta.record_type, detail.meta.seq, detail.meta.ts_unix_ns, &detail.payload)?;
     }
     let mut writer = logjet.into_inner()?;
     writer.flush()?;
     Ok(temp_input)
+}
+
+pub(crate) fn push_preserving_view_order<W: Write>(
+    logjet: &mut LogjetWriter<W>, block_last: &mut Option<(u64, u64)>, record_type: RecordType, seq: u64, ts_unix_ns: u64, payload: &[u8],
+) -> Result<()> {
+    if logjet.pending_bytes() > 0
+        && let Some((last_seq, last_ts)) = *block_last
+        && (seq < last_seq || ts_unix_ns < last_ts)
+    {
+        logjet.flush_block()?;
+        *block_last = None;
+    }
+
+    logjet.push(record_type, seq, ts_unix_ns, payload)?;
+    if logjet.pending_bytes() == 0 {
+        *block_last = None;
+    } else {
+        *block_last = Some((seq, ts_unix_ns));
+    }
+    Ok(())
 }

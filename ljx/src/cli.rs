@@ -117,6 +117,8 @@ pub enum Command {
     Count(CountArgs),
     #[command(about = "Compute summary statistics for one .logjet file")]
     Stats(StatsArgs),
+    #[command(about = "Stream JSON discovery summaries over one or more .logjet files")]
+    Discover(DiscoverArgs),
     #[command(name = "view", alias = "cat", about = "Interactively browse filtered records in a terminal UI")]
     View(ViewArgs),
     #[command(about = "Deduplicate log records across the whole selection or collapse nearby bursts")]
@@ -232,6 +234,33 @@ pub struct StatsArgs {
 
     #[arg(long, help = "Compute payload size summaries by record type")]
     pub field_stats: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DiscoverArgs {
+    #[arg(value_name = "INPUT", required = true, num_args = 1.., help = "Input .logjet files or directories; shell-expanded globs are accepted")]
+    pub inputs: Vec<PathBuf>,
+
+    #[arg(long, default_value_t = 0, help = "Skip this many manifest entries before scanning")]
+    pub offset: usize,
+
+    #[arg(long, help = "Scan at most this many manifest entries after --offset")]
+    pub limit: Option<usize>,
+
+    #[arg(long, default_value_t = 10, help = "Maximum number of services in top_services")]
+    pub top_services: usize,
+
+    #[arg(long, default_value_t = false, help = "Emit per-file NDJSON progress rows followed by a final summary row")]
+    pub ndjson: bool,
+
+    #[arg(long = "service", value_name = "NAME", help = "Match OTLP logs from this service.name; repeat for OR semantics")]
+    pub services: Vec<String>,
+
+    #[arg(long = "severity", value_name = "TEXT", help = "Match OTLP logs with this severity_text; repeat for OR semantics")]
+    pub severities: Vec<String>,
+
+    #[command(flatten)]
+    pub predicate: PredicateArgs,
 }
 
 #[derive(Debug, Clone, Args)]

@@ -1,5 +1,6 @@
 pub mod count;
 pub mod dedup;
+pub mod discover;
 pub mod export;
 pub mod filter;
 pub mod join;

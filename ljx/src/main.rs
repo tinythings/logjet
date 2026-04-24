@@ -15,7 +15,11 @@ use crate::error::{Error, Result};
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("ljx: {err}");
+        if err.is_machine_readable() {
+            eprintln!("{err}");
+        } else {
+            eprintln!("ljx: {err}");
+        }
         std::process::exit(1);
     }
 }
@@ -50,6 +54,7 @@ fn run() -> Result<()> {
         Some(Command::Filter(args)) => commands::filter::run(args),
         Some(Command::Count(args)) => commands::count::run(args),
         Some(Command::Stats(args)) => commands::stats::run(args),
+        Some(Command::Discover(args)) => commands::discover::run(args),
         Some(Command::View(args)) => commands::view::run(args),
         Some(Command::Dedup(args)) => commands::dedup::run(args),
         None => {

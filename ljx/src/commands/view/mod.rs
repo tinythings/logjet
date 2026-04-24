@@ -21,7 +21,7 @@ use crate::error::{Error, Result};
 #[cfg(test)]
 pub(crate) use self::detail::{extract_otlp_log_message, format_summary, parse_export_selection, render_modal_info_entries, render_modal_message};
 #[cfg(test)]
-pub(crate) use self::scan::{create_temp_path, open_temp_spool_pair, read_spool_record, write_spool_record};
+pub(crate) use self::scan::{create_temp_path, open_temp_spool_pair, read_spool_record, write_export_selection_to_temp_logjet, write_spool_record};
 #[cfg(test)]
 pub(crate) use self::text::text_preview;
 #[cfg(test)]

@@ -14,11 +14,13 @@ use ratatui::backend::CrosstermBackend;
 
 use super::detail::{export_ndjson_objects, extract_otlp_log_severity, format_summary, parse_export_selection, render_modal_message};
 use super::scan::{
-    follow_appended_matches, open_temp_spool_pair, read_spool_record, remember_summary, scan_field_catalog, scan_matches,
+    follow_appended_matches, open_temp_spool_pair, push_preserving_view_order, read_spool_record, remember_summary, scan_field_catalog, scan_matches,
     write_export_selection_to_temp_logjet,
 };
 use super::text::{char_count, delete_char_at, delete_char_before, insert_char_at};
-use super::types::{ActiveScan, DedupUpdate, ExportField, ExportUpdate, Focus, ListRowSummary, ScanUpdate, ViewApp, ViewOrder, discover_export_format_choices};
+use super::types::{
+    ActiveScan, DedupUpdate, ExportField, ExportUpdate, Focus, ListRowSummary, ScanUpdate, ViewApp, ViewOrder, discover_export_format_choices,
+};
 use crate::cli::ViewArgs;
 use crate::dataset::Dataset;
 use crate::dedup::{DedupMatchMode, DedupMode};
@@ -474,9 +476,17 @@ impl ViewApp {
         let file = OpenOptions::new().write(true).create_new(true).open(&output_path)?;
         let writer = BufWriter::new(file);
         let mut logjet = LogjetWriter::with_config(writer, WriterConfig::default());
+        let mut block_last = None;
         for meta in &self.entries {
             let detail = read_spool_record(&mut scan.spool_reader, meta.clone())?;
-            logjet.push(detail.meta.record_type, detail.meta.seq, detail.meta.ts_unix_ns, &detail.payload)?;
+            push_preserving_view_order(
+                &mut logjet,
+                &mut block_last,
+                detail.meta.record_type,
+                detail.meta.seq,
+                detail.meta.ts_unix_ns,
+                &detail.payload,
+            )?;
         }
         let mut writer = logjet.into_inner()?;
         writer.flush()?;
