@@ -89,7 +89,15 @@ fn scan_matches_concat(
             continue;
         }
         if let Some(index) = &entry.index {
-            scan_indexed_entry(entry, index, &predicate, &mut spool, &cancel, &tx, &mut tx_batch, &mut scanned, &mut matched)?;
+            let mut state = IndexedScanState {
+                spool: &mut spool,
+                cancel: &cancel,
+                tx: &tx,
+                tx_batch: &mut tx_batch,
+                scanned: &mut scanned,
+                matched: &mut matched,
+            };
+            scan_indexed_entry(entry, index, &predicate, &mut state)?;
             continue;
         }
         let input = InputHandle::open(input_path)?;
@@ -276,26 +284,34 @@ fn merge_key(order: ViewOrder, record: &OwnedRecord, stream_idx: usize, serial: 
     }
 }
 
+struct IndexedScanState<'a> {
+    spool: &'a mut File,
+    cancel: &'a Arc<AtomicBool>,
+    tx: &'a mpsc::Sender<ScanUpdate>,
+    tx_batch: &'a mut Vec<EntryMeta>,
+    scanned: &'a mut u64,
+    matched: &'a mut u64,
+}
+
 fn scan_indexed_entry(
-    entry: &crate::dataset::DatasetEntry, index: &crate::dataset_index::DatasetIndex, predicate: &crate::predicate::RecordPredicate,
-    spool: &mut File, cancel: &Arc<AtomicBool>, tx: &mpsc::Sender<ScanUpdate>, tx_batch: &mut Vec<EntryMeta>, scanned: &mut u64, matched: &mut u64,
+    entry: &crate::dataset::DatasetEntry, index: &crate::dataset_index::DatasetIndex, predicate: &crate::predicate::RecordPredicate, state: &mut IndexedScanState<'_>,
 ) -> Result<()> {
     for block in &index.blocks {
-        if cancel.load(Ordering::Relaxed) {
+        if state.cancel.load(Ordering::Relaxed) {
             break;
         }
         if !block.may_match(predicate) {
             continue;
         }
         for record in read_block_records(entry.path.as_path(), block)? {
-            *scanned = scanned.checked_add(1).ok_or(logjet::Error::NumericOverflow("view scanned"))?;
+            *state.scanned = (*state.scanned).checked_add(1).ok_or(logjet::Error::NumericOverflow("view scanned"))?;
             if !predicate.matches(&record) {
                 continue;
             }
-            tx_batch.push(write_spool_record(spool, &record, entry.path.as_path())?);
-            *matched = matched.checked_add(1).ok_or(logjet::Error::NumericOverflow("view matched"))?;
-            if tx_batch.len() >= SCAN_BATCH_SIZE {
-                tx.send(ScanUpdate::Batch(std::mem::take(tx_batch))).map_err(|err| Error::Usage(err.to_string()))?;
+            state.tx_batch.push(write_spool_record(state.spool, &record, entry.path.as_path())?);
+            *state.matched = (*state.matched).checked_add(1).ok_or(logjet::Error::NumericOverflow("view matched"))?;
+            if state.tx_batch.len() >= SCAN_BATCH_SIZE {
+                state.tx.send(ScanUpdate::Batch(std::mem::take(state.tx_batch))).map_err(|err| Error::Usage(err.to_string()))?;
             }
         }
     }

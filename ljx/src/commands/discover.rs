@@ -95,6 +95,8 @@ fn scan_entry(
         path: path.display().to_string(),
         size: entry.size,
         modified_unix_ns: entry.modified_ns,
+        source_sequence_span: SequenceSpanJson { first: entry.first_seq, last: entry.last_seq },
+        source_time_span_unix_ns: TimeSpanJson { first: entry.first_ts_unix_ns, last: entry.last_ts_unix_ns },
         records_scanned: 0,
         records_matched: 0,
         log_events: 0,
@@ -319,6 +321,8 @@ struct FileSummaryJson {
     path: String,
     size: u64,
     modified_unix_ns: Option<u64>,
+    source_sequence_span: SequenceSpanJson,
+    source_time_span_unix_ns: TimeSpanJson,
     records_scanned: u64,
     records_matched: u64,
     log_events: u64,
@@ -328,6 +332,12 @@ struct FileSummaryJson {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 struct TimeSpanJson {
+    first: Option<u64>,
+    last: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct SequenceSpanJson {
     first: Option<u64>,
     last: Option<u64>,
 }
