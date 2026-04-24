@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::cli::{Cli, Command, DedupBehaviorArg, DedupMatchArg, build_cli};
+use crate::cli::{Cli, Command, DedupBehaviorArg, DedupMatchArg, ViewOrderArg, build_cli};
 use clap::Parser;
 
 #[test]
@@ -62,6 +62,21 @@ fn top_level_query_parses_repeated_literal_and_regex_filters() {
 fn top_level_query_parses_field_selection() {
     let cli = Cli::try_parse_from(["ljx", "input.logjet", "--fields", "body,timestamp", "--fields", "service_name"]).expect("cli parses");
     assert_eq!(cli.fields, vec!["body".to_string(), "timestamp".to_string(), "service_name".to_string()]);
+}
+
+#[test]
+fn view_accepts_multiple_inputs() {
+    let cli = Cli::try_parse_from(["ljx", "view", "one.logjet", "two.logjet", "three.logjet"]).expect("cli parses");
+    let Some(Command::View(args)) = cli.command else { panic!("expected view command") };
+    assert_eq!(args.inputs, vec![PathBuf::from("one.logjet"), PathBuf::from("two.logjet"), PathBuf::from("three.logjet")]);
+}
+
+#[test]
+fn view_accepts_merge_order() {
+    let cli = Cli::try_parse_from(["ljx", "view", "--dataset-order", "merge-ts", "one.logjet", "two.logjet"]).expect("cli parses");
+    let Some(Command::View(args)) = cli.command else { panic!("expected view command") };
+    assert_eq!(args.inputs, vec![PathBuf::from("one.logjet"), PathBuf::from("two.logjet")]);
+    assert!(matches!(args.dataset_order, ViewOrderArg::MergeTs));
 }
 
 #[test]
