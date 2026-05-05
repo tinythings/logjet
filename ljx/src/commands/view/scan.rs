@@ -23,38 +23,43 @@ use crate::error::{Error, Result};
 use crate::input::InputHandle;
 
 /// Scans the logjet file in the background to collect distinct severity texts and service names.
-pub(super) fn scan_field_catalog(dataset: &Dataset) -> Result<FieldCatalog> {
+pub(super) fn scan_field_catalog(dataset: &Dataset, workers: usize) -> Result<FieldCatalog> {
+    let paths = dataset.paths().map(|path| path.to_path_buf()).collect::<Vec<_>>();
+    let worker_count = workers.max(1).min(paths.len().max(1));
+    if worker_count == 1 {
+        return scan_field_catalog_sequential(&paths);
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let paths = Arc::new(paths);
+    let cursor = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut handles = Vec::with_capacity(worker_count);
+
+    for _ in 0..worker_count {
+        let tx = tx.clone();
+        let paths = Arc::clone(&paths);
+        let cursor = Arc::clone(&cursor);
+        handles.push(thread::spawn(move || loop {
+            let idx = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if idx >= paths.len() {
+                break;
+            }
+            let path = &paths[idx];
+            let result = scan_field_catalog_file(path);
+            let _ = tx.send(result);
+        }));
+    }
+    drop(tx);
+
     let mut severities = HashSet::new();
     let mut services = HashSet::new();
-
-    for input in dataset.paths() {
-        let handle = InputHandle::open(input)?;
-        let mut reader = LogjetReader::new(handle.into_buf_reader());
-        while let Some(record) = reader.next_record()? {
-            if record.record_type != RecordType::Logs {
-                continue;
-            }
-            if let Ok(batch) = ExportLogsServiceRequest::decode(record.payload.as_slice()) {
-                for rl in &batch.resource_logs {
-                    if let Some(res) = &rl.resource {
-                        for attr in &res.attributes {
-                            if attr.key == "service.name"
-                                && let Some(AnyValue { value: Some(Value::StringValue(s)) }) = &attr.value
-                            {
-                                services.insert(s.clone());
-                            }
-                        }
-                    }
-                    for sl in &rl.scope_logs {
-                        for lr in &sl.log_records {
-                            if !lr.severity_text.is_empty() {
-                                severities.insert(lr.severity_text.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    for result in rx {
+        let (file_services, file_severities) = result?;
+        services.extend(file_services);
+        severities.extend(file_severities);
+    }
+    for handle in handles {
+        let _ = handle.join();
     }
 
     let mut severities: Vec<_> = severities.into_iter().collect();
@@ -62,6 +67,58 @@ pub(super) fn scan_field_catalog(dataset: &Dataset) -> Result<FieldCatalog> {
     severities.sort();
     services.sort();
     Ok(FieldCatalog { severities, services })
+}
+
+fn scan_field_catalog_sequential(paths: &[PathBuf]) -> Result<FieldCatalog> {
+    let mut severities = HashSet::new();
+    let mut services = HashSet::new();
+
+    for input in paths {
+        let (file_services, file_severities) = scan_field_catalog_file(input)?;
+        services.extend(file_services);
+        severities.extend(file_severities);
+    }
+
+    let mut severities: Vec<_> = severities.into_iter().collect();
+    let mut services: Vec<_> = services.into_iter().collect();
+    severities.sort();
+    services.sort();
+    Ok(FieldCatalog { severities, services })
+}
+
+fn scan_field_catalog_file(path: &Path) -> Result<(HashSet<String>, HashSet<String>)> {
+    let mut severities = HashSet::new();
+    let mut services = HashSet::new();
+
+    let handle = InputHandle::open(path)?;
+    let mut reader = LogjetReader::new(handle.into_buf_reader());
+    while let Some(record) = reader.next_record()? {
+        if record.record_type != RecordType::Logs {
+            continue;
+        }
+        if let Ok(batch) = ExportLogsServiceRequest::decode(record.payload.as_slice()) {
+            for rl in &batch.resource_logs {
+                if let Some(res) = &rl.resource {
+                    for attr in &res.attributes {
+                        if attr.key == "service.name"
+                            && let Some(AnyValue { value: Some(Value::StringValue(s)) }) = &attr.value
+                        {
+                            services.insert(s.clone());
+                        }
+                    }
+                }
+                for sl in &rl.scope_logs {
+                    for lr in &sl.log_records {
+                        if !lr.severity_text.is_empty() {
+                            severities.insert(lr.severity_text.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((services, severities))
 }
 
 pub(super) fn scan_matches(

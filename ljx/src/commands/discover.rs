@@ -32,17 +32,20 @@ fn run_inner(args: DiscoverArgs) -> Result<()> {
 
     let dataset = Dataset::from_inputs(&args.inputs)?;
     let entries = paged_entries(&dataset, args.offset, args.limit)?;
+    let entries_len = entries.len();
     let mut out = io::BufWriter::new(io::stdout().lock());
     let mut summary = DiscoverySummary::default();
-    let mut file_rows = Vec::new();
+    let mut file_rows = Vec::with_capacity(entries_len);
 
-    for entry in &entries {
-        let file = scan_entry(entry, &predicate, service_filter.as_ref(), severity_filter.as_ref())?;
-        summary.merge(&file);
+    let workers = crate::scan_workers::default_worker_count();
+    let files = scan_entries_parallel(entries, &predicate, service_filter.as_ref(), severity_filter.as_ref(), workers)?;
+
+    for file in &files {
+        summary.merge(file);
         if args.ndjson {
             write_json_line(&mut out, &NdjsonRow::File { format_version: FORMAT_VERSION, row: &file.row })?;
         }
-        file_rows.push(file.row);
+        file_rows.push(file.row.clone());
     }
 
     let top_services = top_counts(&summary.services, args.top_services);
@@ -55,8 +58,8 @@ fn run_inner(args: DiscoverArgs) -> Result<()> {
             files_total: dataset.len(),
             offset: args.offset,
             limit: args.limit,
-            files_scanned: entries.len(),
-            next_offset: next_offset(args.offset, entries.len(), dataset.len()),
+            files_scanned: entries_len,
+            next_offset: next_offset(args.offset, entries_len, dataset.len()),
         },
         summary: SummaryJson {
             records_scanned: summary.records_scanned,
@@ -79,12 +82,78 @@ fn run_inner(args: DiscoverArgs) -> Result<()> {
     Ok(())
 }
 
-fn paged_entries(dataset: &Dataset, offset: usize, limit: Option<usize>) -> Result<Vec<&DatasetEntry>> {
+fn paged_entries(dataset: &Dataset, offset: usize, limit: Option<usize>) -> Result<Vec<DatasetEntry>> {
     if offset > dataset.len() {
         return Err(Error::Usage(format!("--offset {offset} is past the end of the {} file manifest", dataset.len())));
     }
     let take = limit.unwrap_or(usize::MAX);
-    Ok(dataset.entries().iter().skip(offset).take(take).collect())
+    Ok(dataset.entries().iter().skip(offset).take(take).cloned().collect())
+}
+
+fn scan_entries_parallel(
+    entries: Vec<DatasetEntry>,
+    predicate: &RecordPredicate,
+    service_filter: Option<&HashSet<String>>,
+    severity_filter: Option<&HashSet<String>>,
+    workers: usize,
+) -> Result<Vec<FileScan>> {
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let worker_count = workers.max(1).min(entries.len());
+    if worker_count == 1 {
+        return entries
+            .iter()
+            .map(|entry| scan_entry(entry, predicate, service_filter, severity_filter))
+            .collect();
+    }
+
+    let predicate = predicate.clone();
+    let service_filter = service_filter.cloned();
+    let severity_filter = severity_filter.cloned();
+    let entries = entries.into_iter().enumerate().collect::<Vec<_>>();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let entries = std::sync::Arc::new(entries);
+    let cursor = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut handles = Vec::with_capacity(worker_count);
+
+    for _ in 0..worker_count {
+        let tx = tx.clone();
+        let entries = std::sync::Arc::clone(&entries);
+        let cursor = std::sync::Arc::clone(&cursor);
+        let predicate = predicate.clone();
+        let service_filter = service_filter.clone();
+        let severity_filter = severity_filter.clone();
+        handles.push(std::thread::spawn(move || {
+            loop {
+                let idx = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if idx >= entries.len() {
+                    break;
+                }
+                let (orig_idx, entry) = &entries[idx];
+                let result = scan_entry(entry, &predicate, service_filter.as_ref(), severity_filter.as_ref());
+                let _ = tx.send((*orig_idx, result));
+            }
+        }));
+    }
+    drop(tx);
+
+    let mut results = Vec::with_capacity(entries.len());
+    results.resize_with(entries.len(), || None);
+    for (idx, result) in rx {
+        results[idx] = Some(result);
+    }
+    for handle in handles {
+        let _ = handle.join();
+    }
+
+    let mut out = Vec::with_capacity(results.len());
+    for result in results {
+        let scan = result.ok_or_else(|| Error::Usage("missing worker scan result".to_string()))??;
+        out.push(scan);
+    }
+    Ok(out)
 }
 
 fn scan_entry(

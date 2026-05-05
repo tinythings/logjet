@@ -7,6 +7,7 @@ mod error;
 mod exporter;
 mod input;
 mod predicate;
+mod scan_workers;
 
 use clap::FromArgMatches;
 

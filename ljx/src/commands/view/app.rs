@@ -38,11 +38,14 @@ impl ViewApp {
         let catalog: Arc<std::sync::Mutex<Option<super::types::FieldCatalog>>> = Arc::new(std::sync::Mutex::new(None));
         let catalog_bg = Arc::clone(&catalog);
         let dataset_bg = dataset.clone();
-        thread::spawn(move || {
-            if let Ok(cat) = scan_field_catalog(&dataset_bg) {
-                *catalog_bg.lock().unwrap() = Some(cat);
-            }
-        });
+        let workers = crate::scan_workers::default_worker_count();
+        thread::Builder::new()
+            .name(format!("ljx-field-catalog-{workers}"))
+            .spawn(move || {
+                if let Ok(cat) = scan_field_catalog(&dataset_bg, workers) {
+                    *catalog_bg.lock().unwrap() = Some(cat);
+                }
+            })?;
 
         Ok(Self {
             input: dataset.primary_path().to_path_buf(),
@@ -1199,11 +1202,14 @@ impl ViewApp {
         let catalog_bg = Arc::clone(&self.field_catalog);
         let dataset_bg = self.dataset.clone();
         *self.field_catalog.lock().unwrap() = None;
-        thread::spawn(move || {
-            if let Ok(cat) = scan_field_catalog(&dataset_bg) {
-                *catalog_bg.lock().unwrap() = Some(cat);
-            }
-        });
+        let workers = crate::scan_workers::default_worker_count();
+        thread::Builder::new()
+            .name(format!("ljx-field-catalog-{workers}"))
+            .spawn(move || {
+                if let Ok(cat) = scan_field_catalog(&dataset_bg, workers) {
+                    *catalog_bg.lock().unwrap() = Some(cat);
+                }
+            })?;
 
         self.query_input.clear();
         self.apply_filter()
