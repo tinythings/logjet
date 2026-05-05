@@ -110,6 +110,20 @@ fn view_accepts_merge_order() {
 }
 
 #[test]
+fn view_accepts_nfs_flag() {
+    let cli = Cli::try_parse_from(["ljx", "view", "--nfs", "one.logjet"]).expect("cli parses");
+    let Some(Command::View(args)) = cli.command else { panic!("expected view command") };
+    assert!(args.nfs);
+}
+
+#[test]
+fn discover_accepts_nfs_flag() {
+    let cli = Cli::try_parse_from(["ljx", "discover", "--nfs", "one.logjet"]).expect("cli parses");
+    let Some(Command::Discover(args)) = cli.command else { panic!("expected discover command") };
+    assert!(args.nfs);
+}
+
+#[test]
 fn help_lists_current_export_formats() {
     let help = build_cli().render_long_help().to_string();
     assert!(help.contains("ljx <INPUT...> [--format <FORMAT>] [FILTER OPTIONS]"));

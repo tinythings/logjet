@@ -17,6 +17,8 @@ use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 use rcgen::{BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, SanType};
 use tokio::runtime::Builder;
+use tokio::net::TcpListener as TokioTcpListener;
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 
@@ -47,6 +49,7 @@ impl TestDir {
     }
 }
 
+#[derive(Clone)]
 pub struct GrpcTlsFiles {
     pub ca: PathBuf,
     pub client_cert: PathBuf,
@@ -124,6 +127,27 @@ pub fn ljd_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ljd"))
 }
 
+pub struct ReservedPort {
+    listener: TcpListener,
+    port: u16,
+}
+
+impl ReservedPort {
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn into_listener(self) -> TcpListener {
+        self.listener
+    }
+}
+
+pub fn reserve_port() -> io::Result<ReservedPort> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    Ok(ReservedPort { listener, port })
+}
+
 pub fn free_port() -> io::Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
@@ -182,6 +206,10 @@ impl MockCollector {
     pub fn start_with_delay(port: u16, delay: Duration) -> io::Result<Self> {
         let addr = format!("127.0.0.1:{port}");
         let listener = TcpListener::bind(&addr)?;
+        Self::start_with_listener(listener, delay)
+    }
+
+    pub fn start_with_listener(listener: TcpListener, delay: Duration) -> io::Result<Self> {
         listener.set_nonblocking(false)?;
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_thread = Arc::clone(&received);
@@ -195,7 +223,6 @@ impl MockCollector {
             }
         });
 
-        let _ = addr;
         Ok(Self { received, _thread: thread })
     }
 
@@ -211,18 +238,8 @@ pub struct MockGrpcCollector {
 
 impl MockGrpcCollector {
     pub fn start(port: u16) -> io::Result<Self> {
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let service = TestGrpcCollector { received: Arc::clone(&received) };
-        let addr = format!("127.0.0.1:{port}")
-            .parse()
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC collector address: {err}")))?;
-        let thread = thread::spawn(move || {
-            let runtime = Builder::new_current_thread().enable_all().build().expect("gRPC test runtime");
-            runtime.block_on(async move {
-                tonic::transport::Server::builder().add_service(LogsServiceServer::new(service)).serve(addr).await.expect("gRPC collector server");
-            });
-        });
-        Ok(Self { received, _thread: thread })
+        let listener = TcpListener::bind(("127.0.0.1", port))?;
+        Self::start_with_listener_and_mode(listener, GrpcTlsMode::Plain)
     }
 
     pub fn messages(&self) -> Vec<String> {
@@ -230,55 +247,64 @@ impl MockGrpcCollector {
     }
 
     pub fn start_tls(port: u16, tls: &GrpcTlsFiles) -> io::Result<Self> {
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let service = TestGrpcCollector { received: Arc::clone(&received) };
-        let server_cert = fs::read(&tls.server_cert)?;
-        let server_key = fs::read(&tls.server_key)?;
-        let addr = format!("127.0.0.1:{port}")
-            .parse()
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC collector address: {err}")))?;
-        let thread = thread::spawn(move || {
-            let runtime = Builder::new_current_thread().enable_all().build().expect("gRPC TLS test runtime");
-            runtime.block_on(async move {
-                tonic::transport::Server::builder()
-                    .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(server_cert, server_key)))
-                    .expect("gRPC TLS config")
-                    .add_service(LogsServiceServer::new(service))
-                    .serve(addr)
-                    .await
-                    .expect("gRPC TLS collector server");
-            });
-        });
-        Ok(Self { received, _thread: thread })
+        let listener = TcpListener::bind(("127.0.0.1", port))?;
+        Self::start_with_listener_and_mode(listener, GrpcTlsMode::Tls { tls: tls.clone() })
     }
 
     pub fn start_mtls(port: u16, tls: &GrpcTlsFiles) -> io::Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", port))?;
+        Self::start_with_listener_and_mode(listener, GrpcTlsMode::Mtls { tls: tls.clone() })
+    }
+
+    fn start_with_listener_and_mode(listener: TcpListener, mode: GrpcTlsMode) -> io::Result<Self> {
+        listener.set_nonblocking(true)?;
         let received = Arc::new(Mutex::new(Vec::new()));
         let service = TestGrpcCollector { received: Arc::clone(&received) };
-        let ca = fs::read(&tls.ca)?;
-        let server_cert = fs::read(&tls.server_cert)?;
-        let server_key = fs::read(&tls.server_key)?;
-        let addr = format!("127.0.0.1:{port}")
-            .parse()
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid gRPC collector address: {err}")))?;
         let thread = thread::spawn(move || {
-            let runtime = Builder::new_current_thread().enable_all().build().expect("gRPC mTLS test runtime");
+            let runtime = Builder::new_current_thread().enable_all().build().expect("gRPC test runtime");
             runtime.block_on(async move {
-                tonic::transport::Server::builder()
-                    .tls_config(
-                        ServerTlsConfig::new()
-                            .identity(Identity::from_pem(server_cert, server_key))
-                            .client_ca_root(tonic::transport::Certificate::from_pem(ca)),
-                    )
-                    .expect("gRPC mTLS config")
+                let mut builder = tonic::transport::Server::builder();
+                builder = match mode {
+                    GrpcTlsMode::Plain => builder,
+                    GrpcTlsMode::Tls { tls } => {
+                        let server_cert = fs::read(&tls.server_cert).expect("gRPC TLS server cert");
+                        let server_key = fs::read(&tls.server_key).expect("gRPC TLS server key");
+                        builder
+                            .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(server_cert, server_key)))
+                            .expect("gRPC TLS config")
+                    }
+                    GrpcTlsMode::Mtls { tls } => {
+                        let ca = fs::read(&tls.ca).expect("gRPC mTLS CA");
+                        let server_cert = fs::read(&tls.server_cert).expect("gRPC mTLS server cert");
+                        let server_key = fs::read(&tls.server_key).expect("gRPC mTLS server key");
+                        builder
+                            .tls_config(
+                                ServerTlsConfig::new()
+                                    .identity(Identity::from_pem(server_cert, server_key))
+                                    .client_ca_root(tonic::transport::Certificate::from_pem(ca)),
+                            )
+                            .expect("gRPC mTLS config")
+                    }
+                };
+
+                let listener = TokioTcpListener::from_std(listener).expect("gRPC listener");
+                let incoming = TcpListenerStream::new(listener);
+                builder
                     .add_service(LogsServiceServer::new(service))
-                    .serve(addr)
+                    .serve_with_incoming(incoming)
                     .await
-                    .expect("gRPC mTLS collector server");
+                    .expect("gRPC collector server");
             });
         });
         Ok(Self { received, _thread: thread })
     }
+}
+
+#[derive(Clone)]
+enum GrpcTlsMode {
+    Plain,
+    Tls { tls: GrpcTlsFiles },
+    Mtls { tls: GrpcTlsFiles },
 }
 
 #[derive(Clone)]

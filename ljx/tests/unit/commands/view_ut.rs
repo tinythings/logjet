@@ -247,15 +247,17 @@ fn make_view_app(input: std::path::PathBuf) -> ViewApp {
     if !input.exists() {
         std::fs::write(&input, b"").expect("create placeholder input");
     }
-    ViewApp::new(ViewArgs { inputs: vec![input], dataset_order: ViewOrderArg::Concat, hex_payload: false, tail: false }).expect("view app")
+    ViewApp::new(ViewArgs { inputs: vec![input], dataset_order: ViewOrderArg::Concat, nfs: false, hex_payload: false, tail: false })
+        .expect("view app")
 }
 
 fn make_view_app_inputs(inputs: Vec<std::path::PathBuf>) -> ViewApp {
-    ViewApp::new(ViewArgs { inputs, dataset_order: ViewOrderArg::Concat, hex_payload: false, tail: false }).expect("view app")
+    ViewApp::new(ViewArgs { inputs, dataset_order: ViewOrderArg::Concat, nfs: false, hex_payload: false, tail: false })
+        .expect("view app")
 }
 
 fn make_view_app_inputs_order(inputs: Vec<std::path::PathBuf>, dataset_order: ViewOrderArg) -> ViewApp {
-    ViewApp::new(ViewArgs { inputs, dataset_order, hex_payload: false, tail: false }).expect("view app")
+    ViewApp::new(ViewArgs { inputs, dataset_order, nfs: false, hex_payload: false, tail: false }).expect("view app")
 }
 
 fn key(code: KeyCode) -> KeyEvent {

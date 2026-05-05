@@ -24,3 +24,4 @@ tonic = { version = "0.14", features = ["transport", "tls-ring"] }
 
 [dev-dependencies]
 rcgen = "0.12"
+tokio-stream = "0.1"
