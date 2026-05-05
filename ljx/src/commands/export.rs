@@ -4,7 +4,7 @@
 //! format without going through the interactive TUI.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{TimeZone, Utc};
 use logjet::{LogjetReader, OwnedRecord, RecordType};
@@ -15,6 +15,7 @@ use opentelemetry_proto::tonic::logs::v1::LogRecord;
 use prost::Message;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
+use crate::dataset::Dataset;
 use crate::error::{Error, Result};
 use crate::exporter::ExporterRegistry;
 use crate::input::{InputHandle, open_output_with_policy};
@@ -37,22 +38,32 @@ pub fn run(format: &str, input: &Path, output: &Path, force: bool, fields: &[Str
     }
 }
 
-pub fn run_query_ndjson(input: &Path, predicate: &RecordPredicate, fields: &[String]) -> Result<()> {
-    let input = InputHandle::open(input)?;
-    let mut reader = LogjetReader::new(input.into_buf_reader());
+pub fn run_query_ndjson_multi(inputs: &[PathBuf], predicate: &RecordPredicate, fields: &[String], preview_bytes: Option<usize>) -> Result<()> {
     let mut output = open_output_with_policy(Path::new("-"), true)?;
+    run_query_ndjson_multi_with_writer(inputs, predicate, fields, preview_bytes, &mut output)?;
+    output.flush()?;
+    Ok(())
+}
 
-    while let Some(record) = reader.next_record()? {
-        if !predicate.matches(&record) {
-            continue;
-        }
-        for row in export_ndjson_objects(&record, fields) {
-            serde_json::to_writer(&mut output, &row).map_err(|err| Error::Usage(format!("failed to serialise NDJSON row: {err}")))?;
-            output.write_all(b"\n")?;
+pub(crate) fn run_query_ndjson_multi_with_writer(
+    inputs: &[PathBuf], predicate: &RecordPredicate, fields: &[String], preview_bytes: Option<usize>, output: &mut impl Write,
+) -> Result<()> {
+    let dataset = Dataset::from_inputs(inputs)?;
+
+    for entry in dataset.entries() {
+        let input = InputHandle::open(entry.path.as_path())?;
+        let mut reader = LogjetReader::new(input.into_buf_reader());
+        while let Some(record) = reader.next_record()? {
+            if !predicate.matches(&record) {
+                continue;
+            }
+            for row in export_ndjson_objects_with_preview(&record, fields, preview_bytes) {
+                serde_json::to_writer(&mut *output, &row).map_err(|err| Error::Usage(format!("failed to serialise NDJSON row: {err}")))?;
+                output.write_all(b"\n")?;
+            }
         }
     }
 
-    output.flush()?;
     Ok(())
 }
 
@@ -73,18 +84,22 @@ fn run_ndjson(input: &Path, output: &Path, force: bool, fields: &[String]) -> Re
 }
 
 pub(crate) fn export_ndjson_objects(record: &OwnedRecord, fields: &[String]) -> Vec<JsonValue> {
+    export_ndjson_objects_with_preview(record, fields, None)
+}
+
+pub(crate) fn export_ndjson_objects_with_preview(record: &OwnedRecord, fields: &[String], preview_bytes: Option<usize>) -> Vec<JsonValue> {
     if record.record_type != RecordType::Logs {
         let mut obj = JsonMap::new();
         obj.insert("record_type".to_string(), JsonValue::String(record_kind_label(record.record_type).to_string()));
         obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.ts_unix_ns)));
-        obj.insert("payload".to_string(), JsonValue::String(String::from_utf8_lossy(&record.payload).to_string()));
+        obj.insert("payload".to_string(), JsonValue::String(truncate_preview(&String::from_utf8_lossy(&record.payload), preview_bytes)));
         return vec![select_json_fields(obj, fields)];
     }
 
     let Ok(batch) = ExportLogsServiceRequest::decode(record.payload.as_slice()) else {
         let mut obj = JsonMap::new();
         obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.ts_unix_ns)));
-        obj.insert("payload".to_string(), JsonValue::String(String::from_utf8_lossy(&record.payload).to_string()));
+        obj.insert("payload".to_string(), JsonValue::String(truncate_preview(&String::from_utf8_lossy(&record.payload), preview_bytes)));
         return vec![select_json_fields(obj, fields)];
     };
 
@@ -103,10 +118,10 @@ pub(crate) fn export_ndjson_objects(record: &OwnedRecord, fields: &[String]) -> 
                         obj.insert("scope_version".to_string(), JsonValue::String(scope.version.clone()));
                     }
                 }
-                insert_otlp_log_fields(&mut obj, log_record, record.ts_unix_ns);
-                flatten_otlp_attrs_into_json(&mut obj, resource_attrs);
-                flatten_otlp_attrs_into_json(&mut obj, scope_attrs);
-                flatten_otlp_attrs_into_json(&mut obj, &log_record.attributes);
+                insert_otlp_log_fields_with_preview(&mut obj, log_record, record.ts_unix_ns, preview_bytes);
+                flatten_otlp_attrs_into_json(&mut obj, resource_attrs, preview_bytes);
+                flatten_otlp_attrs_into_json(&mut obj, scope_attrs, preview_bytes);
+                flatten_otlp_attrs_into_json(&mut obj, &log_record.attributes, preview_bytes);
                 out.push(select_json_fields(obj, fields));
             }
         }
@@ -114,10 +129,12 @@ pub(crate) fn export_ndjson_objects(record: &OwnedRecord, fields: &[String]) -> 
     out
 }
 
-fn insert_otlp_log_fields(target: &mut JsonMap<String, JsonValue>, log_record: &LogRecord, fallback_ts_unix_ns: u64) {
+fn insert_otlp_log_fields_with_preview(
+    target: &mut JsonMap<String, JsonValue>, log_record: &LogRecord, fallback_ts_unix_ns: u64, preview_bytes: Option<usize>,
+) {
     target.insert(
         "body".to_string(),
-        JsonValue::String(log_record.body.as_ref().map(|v| format_any_value(Some(v))).filter(|s| !s.is_empty()).unwrap_or_default()),
+        JsonValue::String(truncate_preview(&log_record.body.as_ref().map(|v| format_any_value(Some(v))).filter(|s| !s.is_empty()).unwrap_or_default(), preview_bytes)),
     );
     target.insert("timestamp".to_string(), JsonValue::String(format_timestamp(log_record.time_unix_nano.max(fallback_ts_unix_ns))));
     if log_record.observed_time_unix_nano > 0 {
@@ -141,6 +158,27 @@ fn insert_otlp_log_fields(target: &mut JsonMap<String, JsonValue>, log_record: &
     if !log_record.span_id.is_empty() {
         target.insert("span_id".to_string(), JsonValue::String(hex_encode(&log_record.span_id)));
     }
+}
+
+fn truncate_preview(value: &str, preview_bytes: Option<usize>) -> String {
+    let Some(limit) = preview_bytes else {
+        return value.to_string();
+    };
+    if limit == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    for ch in value.chars() {
+        let next_len = out.len() + ch.len_utf8();
+        if next_len > limit {
+            break;
+        }
+        out.push(ch);
+    }
+    if value.len() > out.len() {
+        out.push_str("...");
+    }
+    out
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -167,7 +205,9 @@ fn select_json_fields(mut obj: JsonMap<String, JsonValue>, fields: &[String]) ->
     JsonValue::Object(selected)
 }
 
-fn flatten_otlp_attrs_into_json(target: &mut JsonMap<String, JsonValue>, attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue]) {
+fn flatten_otlp_attrs_into_json(
+    target: &mut JsonMap<String, JsonValue>, attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue], preview_bytes: Option<usize>,
+) {
     for attr in attrs {
         let key = attr.key.replace('.', "_");
         if target.contains_key(&key) {
@@ -176,24 +216,29 @@ fn flatten_otlp_attrs_into_json(target: &mut JsonMap<String, JsonValue>, attrs: 
         let Some(value) = attr.value.as_ref() else {
             continue;
         };
-        if let Some(json) = any_value_to_json(value) {
+        if let Some(json) = any_value_to_json(value, preview_bytes) {
             target.insert(key, json);
         }
     }
 }
 
-fn any_value_to_json(value: &AnyValue) -> Option<JsonValue> {
+fn any_value_to_json(value: &AnyValue, preview_bytes: Option<usize>) -> Option<JsonValue> {
     match &value.value {
-        Some(Value::StringValue(text)) => Some(JsonValue::String(text.clone())),
+        Some(Value::StringValue(text)) => Some(JsonValue::String(truncate_preview(text, preview_bytes))),
         Some(Value::BoolValue(flag)) => Some(JsonValue::Bool(*flag)),
         Some(Value::IntValue(number)) => Some(JsonValue::Number((*number).into())),
         Some(Value::DoubleValue(number)) => serde_json::Number::from_f64(*number).map(JsonValue::Number),
-        Some(Value::BytesValue(bytes)) => Some(JsonValue::String(format!("<{} bytes>", bytes.len()))),
-        Some(Value::ArrayValue(array)) => Some(JsonValue::Array(array.values.iter().filter_map(any_value_to_json).collect())),
+        Some(Value::BytesValue(bytes)) => Some(JsonValue::String(truncate_preview(&format!("<{} bytes>", bytes.len()), preview_bytes))),
+        Some(Value::ArrayValue(array)) => Some(JsonValue::Array(array.values.iter().filter_map(|value| any_value_to_json(value, preview_bytes)).collect())),
         Some(Value::KvlistValue(map)) => Some(JsonValue::Object(
             map.values
                 .iter()
-                .filter_map(|item| item.value.as_ref().and_then(any_value_to_json).map(|inner| (item.key.clone().replace('.', "_"), inner)))
+                .filter_map(|item| {
+                    item.value
+                        .as_ref()
+                        .and_then(|inner| any_value_to_json(inner, preview_bytes))
+                        .map(|inner| (item.key.clone().replace('.', "_"), inner))
+                })
                 .collect(),
         )),
         None => None,
@@ -234,93 +279,6 @@ fn format_timestamp(ts_unix_ns: u64) -> String {
 }
 
 #[cfg(test)]
-mod export_utst {
-    use super::{export_ndjson_objects, select_json_fields};
-    use logjet::{OwnedRecord, RecordType};
-    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
-    use opentelemetry_proto::tonic::common::v1::any_value::Value;
-    use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
-    use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
-    use opentelemetry_proto::tonic::resource::v1::Resource;
-    use prost::Message;
-    use serde_json::{Map as JsonMap, Value as JsonValue};
+#[path = "../../tests/unit/commands/top_level_query_ut.rs"]
+mod top_level_query_ut;
 
-    #[test]
-    fn select_json_fields_keeps_all_keys_when_unset() {
-        let mut obj = JsonMap::new();
-        obj.insert("body".to_string(), JsonValue::String("hello".to_string()));
-        obj.insert("timestamp".to_string(), JsonValue::String("now".to_string()));
-
-        let JsonValue::Object(selected) = select_json_fields(obj, &[]) else { panic!("expected object") };
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected.get("body"), Some(&JsonValue::String("hello".to_string())));
-        assert_eq!(selected.get("timestamp"), Some(&JsonValue::String("now".to_string())));
-    }
-
-    #[test]
-    fn select_json_fields_filters_to_requested_subset() {
-        let mut obj = JsonMap::new();
-        obj.insert("body".to_string(), JsonValue::String("hello".to_string()));
-        obj.insert("timestamp".to_string(), JsonValue::String("now".to_string()));
-        obj.insert("service_name".to_string(), JsonValue::String("svc".to_string()));
-
-        let fields = vec!["service_name".to_string(), "body".to_string()];
-        let JsonValue::Object(selected) = select_json_fields(obj, &fields) else { panic!("expected object") };
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected.get("service_name"), Some(&JsonValue::String("svc".to_string())));
-        assert_eq!(selected.get("body"), Some(&JsonValue::String("hello".to_string())));
-    }
-
-    #[test]
-    fn export_ndjson_objects_includes_core_otlp_log_fields() {
-        let batch = ExportLogsServiceRequest {
-            resource_logs: vec![ResourceLogs {
-                resource: Some(Resource {
-                    attributes: vec![KeyValue {
-                        key: "service.name".to_string(),
-                        value: Some(AnyValue { value: Some(Value::StringValue("demo-svc".to_string())) }),
-                    }],
-                    dropped_attributes_count: 0,
-                    entity_refs: Vec::new(),
-                }),
-                scope_logs: vec![ScopeLogs {
-                    scope: Some(InstrumentationScope {
-                        name: "demo.scope".to_string(),
-                        version: "1.2.3".to_string(),
-                        attributes: Vec::new(),
-                        dropped_attributes_count: 0,
-                    }),
-                    log_records: vec![LogRecord {
-                        time_unix_nano: 1_700_000_000_000_000_000,
-                        observed_time_unix_nano: 1_700_000_000_000_000_123,
-                        severity_number: 9,
-                        severity_text: "INFO".to_string(),
-                        body: Some(AnyValue { value: Some(Value::StringValue("hello".to_string())) }),
-                        attributes: Vec::new(),
-                        dropped_attributes_count: 0,
-                        flags: 3,
-                        trace_id: vec![0xaa, 0xbb, 0xcc, 0xdd],
-                        span_id: vec![0x11, 0x22],
-                        event_name: "demo.event".to_string(),
-                    }],
-                    schema_url: String::new(),
-                }],
-                schema_url: String::new(),
-            }],
-        };
-        let record = OwnedRecord { record_type: RecordType::Logs, seq: 1, ts_unix_ns: 1_700_000_000_000_000_000, payload: batch.encode_to_vec() };
-
-        let docs = export_ndjson_objects(&record, &[]);
-        let Some(obj) = docs.first().and_then(JsonValue::as_object) else { panic!("expected object") };
-        assert_eq!(obj.get("body"), Some(&JsonValue::String("hello".to_string())));
-        assert_eq!(obj.get("severity_text"), Some(&JsonValue::String("INFO".to_string())));
-        assert_eq!(obj.get("severity_number"), Some(&JsonValue::Number(9.into())));
-        assert_eq!(obj.get("event_name"), Some(&JsonValue::String("demo.event".to_string())));
-        assert_eq!(obj.get("scope_name"), Some(&JsonValue::String("demo.scope".to_string())));
-        assert_eq!(obj.get("scope_version"), Some(&JsonValue::String("1.2.3".to_string())));
-        assert_eq!(obj.get("service_name"), Some(&JsonValue::String("demo-svc".to_string())));
-        assert_eq!(obj.get("trace_id"), Some(&JsonValue::String("aabbccdd".to_string())));
-        assert_eq!(obj.get("span_id"), Some(&JsonValue::String("1122".to_string())));
-        assert!(obj.get("observed_timestamp").is_some());
-    }
-}

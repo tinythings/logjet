@@ -37,14 +37,23 @@ pub struct Cli {
     )]
     pub fields: Vec<String>,
 
+    #[arg(long = "service", value_name = "NAME", help = "Match OTLP logs from this service.name; repeat for OR semantics")]
+    pub services: Vec<String>,
+
+    #[arg(long = "severity", value_name = "TEXT", help = "Match OTLP logs with this severity_text; repeat for OR semantics")]
+    pub severities: Vec<String>,
+
+    #[arg(long = "preview", value_name = "BYTES", help = "Truncate payload previews at this byte length (top-level NDJSON)")]
+    pub preview_bytes: Option<usize>,
+
     #[arg(short, long, value_name = "OUTPUT", requires = "export", help = "Output file or - for stdout")]
     pub output: Option<PathBuf>,
 
     #[arg(long = "force", requires = "export", help = "Overwrite output file if it already exists")]
     pub force: bool,
 
-    #[arg(value_name = "INPUT", help = "Input .logjet file or - for stdin")]
-    pub input: Option<PathBuf>,
+    #[arg(value_name = "INPUT", num_args = 1.., help = "Input .logjet files or - for stdin")]
+    pub input: Option<Vec<PathBuf>>,
 
     #[command(flatten)]
     pub predicate: PredicateArgs,
@@ -65,13 +74,13 @@ pub fn build_cli() -> clap::Command {
         .usage(styling::AnsiColor::Yellow.on_default())
         .literal(styling::AnsiColor::BrightGreen.on_default())
         .placeholder(styling::AnsiColor::BrightMagenta.on_default());
-    let after_help = "Examples:\n  ljx telemetry.logjet\n  ljx telemetry.logjet -F error -i\n  ljx telemetry.logjet --fields body,timestamp,service_name -F error\n  ljx telemetry.logjet -e 'java\\..*\\.bs'\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson --fields body,timestamp\n  ljx --export parquet telemetry.logjet -o telemetry.parquet --force";
+    let after_help = "Examples:\n  ljx telemetry.logjet\n  ljx telemetry.logjet -F error -i\n  ljx telemetry.logjet --fields body,timestamp,service_name -F error\n  ljx telemetry.logjet -e 'java\\..*\\.bs'\n  ljx --grep 'timeout|deadline' ./logs/*.logjet\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson --fields body,timestamp\n  ljx --export parquet telemetry.logjet -o telemetry.parquet --force";
 
     Cli::command()
         .styles(styles)
         .about(format!("{} - {}", appname.bright_magenta().bold(), "offline toolbox for .logjet streams"))
         .override_usage(format!(
-            "{appname} <INPUT> [--format <FORMAT>] [FILTER OPTIONS]\n  {appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT> [--force]"
+            "{appname} <INPUT...> [--format <FORMAT>] [FILTER OPTIONS]\n  {appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT> [--force]"
         ))
         .mut_arg("export", |arg| arg.help(&export_help).long_help(&export_help))
         .after_help(after_help)

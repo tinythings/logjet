@@ -12,7 +12,7 @@ use crate::cli::DiscoverArgs;
 use crate::dataset::{Dataset, DatasetEntry};
 use crate::error::{Error, Result};
 use crate::input::InputHandle;
-use crate::predicate::RecordPredicate;
+use crate::predicate::{RecordPredicate, parse_string_filter};
 
 const FORMAT_VERSION: u32 = 1;
 
@@ -25,8 +25,8 @@ fn run_inner(args: DiscoverArgs) -> Result<()> {
         return Err(Error::Usage("--limit must be greater than zero".to_string()));
     }
     let mut predicate = args.predicate.build()?;
-    let service_filter = string_filter(args.services)?;
-    let severity_filter = string_filter(args.severities)?;
+    let service_filter = parse_string_filter(args.services, "service")?;
+    let severity_filter = parse_string_filter(args.severities, "severity")?;
     predicate.field_filter.services = service_filter.clone();
     predicate.field_filter.severities = severity_filter.clone();
 
@@ -249,20 +249,6 @@ fn top_counts(counts: &BTreeMap<String, u64>, limit: usize) -> Vec<CountJson> {
 
 fn all_counts(counts: &BTreeMap<String, u64>) -> Vec<CountJson> {
     counts.iter().map(|(value, count)| CountJson { value: value.clone(), count: *count }).collect()
-}
-
-fn string_filter(values: Vec<String>) -> Result<Option<HashSet<String>>> {
-    if values.is_empty() {
-        return Ok(None);
-    }
-    let mut set = HashSet::new();
-    for value in values {
-        if value.is_empty() {
-            return Err(Error::Usage("empty service/severity filter values are not allowed".to_string()));
-        }
-        set.insert(value);
-    }
-    Ok(Some(set))
 }
 
 fn next_offset(offset: usize, scanned: usize, total: usize) -> Option<usize> {
