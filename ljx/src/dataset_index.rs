@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -17,6 +18,7 @@ use crate::predicate::RecordPredicate;
 
 const INDEX_VERSION: u32 = 1;
 const SUMMARY_LIMIT: usize = 16;
+const CACHE_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 #[derive(Debug, Clone)]
 pub(crate) struct DatasetIndex {
@@ -117,7 +119,33 @@ fn cache_root_dir() -> Option<PathBuf> {
     if std::fs::create_dir_all(&dir).is_err() {
         return None;
     }
+    prune_cache_dir(&dir);
     Some(dir)
+}
+
+fn prune_cache_dir(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("ljxidx") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
+        if age > CACHE_MAX_AGE {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 impl IndexSummary {
