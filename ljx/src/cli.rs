@@ -37,14 +37,23 @@ pub struct Cli {
     )]
     pub fields: Vec<String>,
 
+    #[arg(long = "service", value_name = "NAME", help = "Match OTLP logs from this service.name; repeat for OR semantics")]
+    pub services: Vec<String>,
+
+    #[arg(long = "severity", value_name = "TEXT", help = "Match OTLP logs with this severity_text; repeat for OR semantics")]
+    pub severities: Vec<String>,
+
+    #[arg(long = "preview", value_name = "BYTES", help = "Truncate payload previews at this byte length (top-level NDJSON)")]
+    pub preview_bytes: Option<usize>,
+
     #[arg(short, long, value_name = "OUTPUT", requires = "export", help = "Output file or - for stdout")]
     pub output: Option<PathBuf>,
 
     #[arg(long = "force", requires = "export", help = "Overwrite output file if it already exists")]
     pub force: bool,
 
-    #[arg(value_name = "INPUT", help = "Input .logjet file or - for stdin")]
-    pub input: Option<PathBuf>,
+    #[arg(value_name = "INPUT", num_args = 1.., help = "Input .logjet files or - for stdin")]
+    pub input: Option<Vec<PathBuf>>,
 
     #[command(flatten)]
     pub predicate: PredicateArgs,
@@ -65,13 +74,13 @@ pub fn build_cli() -> clap::Command {
         .usage(styling::AnsiColor::Yellow.on_default())
         .literal(styling::AnsiColor::BrightGreen.on_default())
         .placeholder(styling::AnsiColor::BrightMagenta.on_default());
-    let after_help = "Examples:\n  ljx telemetry.logjet\n  ljx telemetry.logjet -F error -i\n  ljx telemetry.logjet --fields body,timestamp,service_name -F error\n  ljx telemetry.logjet -e 'java\\..*\\.bs'\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson --fields body,timestamp\n  ljx --export parquet telemetry.logjet -o telemetry.parquet --force";
+    let after_help = "Examples:\n  ljx telemetry.logjet\n  ljx telemetry.logjet -F error -i\n  ljx telemetry.logjet --fields body,timestamp,service_name -F error\n  ljx telemetry.logjet -e 'java\\..*\\.bs'\n  ljx --grep 'timeout|deadline' ./logs/*.logjet\n  ljx count telemetry.logjet -F error -i\n  ljx filter telemetry.logjet -o only-logs.logjet -e 'java\\..*\\.bs'\n  ljx view telemetry.logjet\n  ljx --export ndjson telemetry.logjet -o telemetry.ndjson --fields body,timestamp\n  ljx --export parquet telemetry.logjet -o telemetry.parquet --force";
 
     Cli::command()
         .styles(styles)
         .about(format!("{} - {}", appname.bright_magenta().bold(), "offline toolbox for .logjet streams"))
         .override_usage(format!(
-            "{appname} <INPUT> [--format <FORMAT>] [FILTER OPTIONS]\n  {appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT> [--force]"
+            "{appname} <INPUT...> [--format <FORMAT>] [FILTER OPTIONS]\n  {appname} <COMMAND> [OPTIONS] [ARGS]\n  {appname} --export <FORMAT> <INPUT> -o <OUTPUT> [--force]"
         ))
         .mut_arg("export", |arg| arg.help(&export_help).long_help(&export_help))
         .after_help(after_help)
@@ -98,6 +107,13 @@ pub enum ExportFormat {
     Ndjson,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ViewOrderArg {
+    Concat,
+    MergeSeq,
+    MergeTs,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     #[command(about = "Split one .logjet input into multiple outputs")]
@@ -110,6 +126,8 @@ pub enum Command {
     Count(CountArgs),
     #[command(about = "Compute summary statistics for one .logjet file")]
     Stats(StatsArgs),
+    #[command(about = "Stream JSON discovery summaries over one or more .logjet files")]
+    Discover(DiscoverArgs),
     #[command(name = "view", alias = "cat", about = "Interactively browse filtered records in a terminal UI")]
     View(ViewArgs),
     #[command(about = "Deduplicate log records across the whole selection or collapse nearby bursts")]
@@ -228,9 +246,45 @@ pub struct StatsArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct DiscoverArgs {
+    #[arg(value_name = "INPUT", required = true, num_args = 1.., help = "Input .logjet files or directories; shell-expanded globs are accepted")]
+    pub inputs: Vec<PathBuf>,
+
+    #[arg(long, default_value_t = 0, help = "Skip this many manifest entries before scanning")]
+    pub offset: usize,
+
+    #[arg(long, help = "Scan at most this many manifest entries after --offset")]
+    pub limit: Option<usize>,
+
+    #[arg(long, default_value_t = 10, help = "Maximum number of services in top_services")]
+    pub top_services: usize,
+
+    #[arg(long, default_value_t = false, help = "Enable NFS-friendly scanning (avoid random-access indexing)")]
+    pub nfs: bool,
+
+    #[arg(long, default_value_t = false, help = "Emit per-file NDJSON progress rows followed by a final summary row")]
+    pub ndjson: bool,
+
+    #[arg(long = "service", value_name = "NAME", help = "Match OTLP logs from this service.name; repeat for OR semantics")]
+    pub services: Vec<String>,
+
+    #[arg(long = "severity", value_name = "TEXT", help = "Match OTLP logs with this severity_text; repeat for OR semantics")]
+    pub severities: Vec<String>,
+
+    #[command(flatten)]
+    pub predicate: PredicateArgs,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct ViewArgs {
-    #[arg(value_name = "INPUT", help = "Input .logjet file or - for stdin")]
-    pub input: PathBuf,
+    #[arg(value_name = "INPUT", required = true, num_args = 1.., help = "Input .logjet files; shell-expanded globs are accepted")]
+    pub inputs: Vec<PathBuf>,
+
+    #[arg(long = "dataset-order", value_enum, default_value_t = ViewOrderArg::Concat, help = "Dataset scan order: concat, merge-seq, or merge-ts")]
+    pub dataset_order: ViewOrderArg,
+
+    #[arg(long, default_value_t = false, help = "Enable NFS-friendly scanning (avoid random-access indexing)")]
+    pub nfs: bool,
 
     #[arg(long, default_value_t = false, help = "Show payload previews in hex")]
     pub hex_payload: bool,

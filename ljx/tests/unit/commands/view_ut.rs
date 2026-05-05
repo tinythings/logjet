@@ -1,8 +1,9 @@
 use super::{
     DedupUpdate, DetailRecord, EntryMeta, ExportField, Focus, MODAL_ATTR_ENTRY_LIMIT_PER_KIND, ViewApp, create_temp_path, extract_otlp_log_message,
-    format_summary, open_temp_spool_pair, read_spool_record, render_modal_info_entries, render_modal_message, text_preview, write_spool_record,
+    format_summary, open_temp_spool_pair, read_spool_record, render_modal_info_entries, render_modal_message, text_preview,
+    write_export_selection_to_temp_logjet, write_spool_record,
 };
-use crate::cli::ViewArgs;
+use crate::cli::{ViewArgs, ViewOrderArg};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use logjet::OwnedRecord;
 use logjet::{LogjetWriter, RecordType};
@@ -26,7 +27,7 @@ fn text_preview_flattens_newlines() {
 #[test]
 fn summary_uses_trimmed_single_line_preview() {
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 7, ts_unix_ns: 9, payload_len: 13 },
+        meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 7, ts_unix_ns: 9, payload_len: 13, source_path: "a.logjet".into() },
         payload: b"line one\nline two".to_vec(),
     };
     let summary = format_summary(&detail, false);
@@ -65,7 +66,14 @@ fn summary_prefers_decoded_otlp_log_message() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64 },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Logs,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
 
@@ -76,7 +84,7 @@ fn summary_prefers_decoded_otlp_log_message() {
 #[test]
 fn modal_falls_back_to_raw_payload() {
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: 5 },
+        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: 5, source_path: "a.logjet".into() },
         payload: b"hello".to_vec(),
     };
     let body = render_modal_message(&detail, false);
@@ -135,7 +143,14 @@ fn modal_info_lists_otlp_attributes() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64 },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Logs,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
 
@@ -187,7 +202,14 @@ fn modal_info_caps_attribute_entries_per_kind() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Logs, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64 },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Logs,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
 
@@ -207,8 +229,8 @@ fn temp_spool_reader_and_writer_use_independent_offsets() {
     let first = OwnedRecord { record_type: RecordType::Logs, seq: 1, ts_unix_ns: 11, payload: b"first payload".to_vec() };
     let second = OwnedRecord { record_type: RecordType::Logs, seq: 2, ts_unix_ns: 22, payload: b"second payload".to_vec() };
 
-    let first_meta = write_spool_record(&mut writer, &first).unwrap();
-    let second_meta = write_spool_record(&mut writer, &second).unwrap();
+    let first_meta = write_spool_record(&mut writer, &first, std::path::Path::new("star-one.logjet")).unwrap();
+    let second_meta = write_spool_record(&mut writer, &second, std::path::Path::new("star-two.logjet")).unwrap();
 
     let reread_first = read_spool_record(&mut reader, first_meta).unwrap();
     let reread_second = read_spool_record(&mut reader, second_meta).unwrap();
@@ -222,7 +244,20 @@ fn temp_spool_reader_and_writer_use_independent_offsets() {
 }
 
 fn make_view_app(input: std::path::PathBuf) -> ViewApp {
-    ViewApp::new(ViewArgs { input, hex_payload: false, tail: false }).expect("view app")
+    if !input.exists() {
+        std::fs::write(&input, b"").expect("create placeholder input");
+    }
+    ViewApp::new(ViewArgs { inputs: vec![input], dataset_order: ViewOrderArg::Concat, nfs: false, hex_payload: false, tail: false })
+        .expect("view app")
+}
+
+fn make_view_app_inputs(inputs: Vec<std::path::PathBuf>) -> ViewApp {
+    ViewApp::new(ViewArgs { inputs, dataset_order: ViewOrderArg::Concat, nfs: false, hex_payload: false, tail: false })
+        .expect("view app")
+}
+
+fn make_view_app_inputs_order(inputs: Vec<std::path::PathBuf>, dataset_order: ViewOrderArg) -> ViewApp {
+    ViewApp::new(ViewArgs { inputs, dataset_order, nfs: false, hex_payload: false, tail: false }).expect("view app")
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -328,6 +363,54 @@ fn write_test_logjet_rows(path: &std::path::Path, rows: &[(&str, &[&str], &str)]
         };
         let payload = batch.encode_to_vec();
         writer.push(RecordType::Logs, i as u64 + 1, (i as u64 + 1) * 100, &payload).expect("write row");
+    }
+
+    let mut inner = writer.into_inner().expect("into inner");
+    use std::io::Write;
+    inner.flush().expect("flush");
+}
+
+fn write_test_logjet_records(path: &std::path::Path, rows: &[(u64, u64, &str)]) {
+    let file = File::create(path).expect("create input logjet");
+    let mut writer = LogjetWriter::new(BufWriter::new(file));
+
+    for (seq, ts, body) in rows {
+        let batch = ExportLogsServiceRequest {
+            resource_logs: vec![ResourceLogs {
+                resource: Some(Resource {
+                    attributes: vec![KeyValue {
+                        key: "service.name".to_string(),
+                        value: Some(AnyValue { value: Some(Value::StringValue("fake-service".to_string())) }),
+                    }],
+                    dropped_attributes_count: 0,
+                    entity_refs: Vec::new(),
+                }),
+                scope_logs: vec![ScopeLogs {
+                    scope: Some(InstrumentationScope {
+                        name: "fake-scope".to_string(),
+                        version: String::new(),
+                        attributes: Vec::new(),
+                        dropped_attributes_count: 0,
+                    }),
+                    log_records: vec![LogRecord {
+                        time_unix_nano: *ts,
+                        observed_time_unix_nano: *ts,
+                        severity_number: 9,
+                        severity_text: "INFO".to_string(),
+                        body: Some(AnyValue { value: Some(Value::StringValue((*body).to_string())) }),
+                        attributes: Vec::new(),
+                        dropped_attributes_count: 0,
+                        flags: 0,
+                        trace_id: Vec::new(),
+                        span_id: Vec::new(),
+                        event_name: String::new(),
+                    }],
+                    schema_url: String::new(),
+                }],
+                schema_url: String::new(),
+            }],
+        };
+        writer.push(RecordType::Logs, *seq, *ts, &batch.encode_to_vec()).expect("write row");
     }
 
     let mut inner = writer.into_inner().expect("into inner");
@@ -514,6 +597,142 @@ fn export_prompt_defaults_to_ndjson_and_all() {
     assert_eq!(app.export_range, "all");
 
     let _ = std::fs::remove_file(input);
+}
+
+#[test]
+fn multi_input_view_scans_star_wars_files_in_stable_order() {
+    let base = create_temp_path().unwrap();
+    let dir = base.parent().unwrap().to_path_buf();
+    let id = base.file_name().unwrap().to_string_lossy().into_owned();
+    let alderaan = dir.join(format!("alderaan-{id}.logjet"));
+    let death_star = dir.join(format!("death-star-{id}.logjet"));
+    write_test_logjet(&death_star, &["Vader patrol report"]);
+    write_test_logjet(&alderaan, &["Leia rebel briefing"]);
+
+    let mut app = make_view_app_inputs(vec![death_star.clone(), alderaan.clone()]);
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+
+    assert_eq!(app.entries.len(), 2);
+    let first = app.summary_for(0).unwrap();
+    let second = app.summary_for(1).unwrap();
+    assert_eq!(first.message, "Leia rebel briefing");
+    assert_eq!(second.message, "Vader patrol report");
+
+    let _ = std::fs::remove_file(base);
+    let _ = std::fs::remove_file(alderaan);
+    let _ = std::fs::remove_file(death_star);
+}
+
+#[test]
+fn multi_input_view_merge_seq_orders_by_sequence() {
+    let base = create_temp_path().unwrap();
+    let dir = base.parent().unwrap().to_path_buf();
+    let id = base.file_name().unwrap().to_string_lossy().into_owned();
+    let hoth = dir.join(format!("hoth-{id}.logjet"));
+    let endor = dir.join(format!("endor-{id}.logjet"));
+    write_test_logjet_records(&hoth, &[(9, 1000, "Luke on Hoth")]);
+    write_test_logjet_records(&endor, &[(3, 9000, "Leia on Endor")]);
+
+    let mut app = make_view_app_inputs_order(vec![hoth.clone(), endor.clone()], ViewOrderArg::MergeSeq);
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+
+    assert_eq!(app.summary_for(0).unwrap().message, "Leia on Endor");
+    assert_eq!(app.summary_for(1).unwrap().message, "Luke on Hoth");
+
+    let _ = std::fs::remove_file(base);
+    let _ = std::fs::remove_file(hoth);
+    let _ = std::fs::remove_file(endor);
+}
+
+#[test]
+fn multi_input_view_merge_ts_orders_by_timestamp() {
+    let base = create_temp_path().unwrap();
+    let dir = base.parent().unwrap().to_path_buf();
+    let id = base.file_name().unwrap().to_string_lossy().into_owned();
+    let mustafar = dir.join(format!("mustafar-{id}.logjet"));
+    let naboo = dir.join(format!("naboo-{id}.logjet"));
+    write_test_logjet_records(&mustafar, &[(2, 9000, "Vader on Mustafar")]);
+    write_test_logjet_records(&naboo, &[(7, 1200, "Padme on Naboo")]);
+
+    let mut app = make_view_app_inputs_order(vec![mustafar.clone(), naboo.clone()], ViewOrderArg::MergeTs);
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+
+    assert_eq!(app.summary_for(0).unwrap().message, "Padme on Naboo");
+    assert_eq!(app.summary_for(1).unwrap().message, "Vader on Mustafar");
+
+    let _ = std::fs::remove_file(base);
+    let _ = std::fs::remove_file(mustafar);
+    let _ = std::fs::remove_file(naboo);
+}
+
+#[test]
+fn current_record_filename_tracks_physical_source_file() {
+    let base = create_temp_path().unwrap();
+    let dir = base.parent().unwrap().to_path_buf();
+    let id = base.file_name().unwrap().to_string_lossy().into_owned();
+    let jedha = dir.join(format!("jedha-{id}.logjet"));
+    let scarif = dir.join(format!("scarif-{id}.logjet"));
+    write_test_logjet_records(&jedha, &[(1, 100, "Jyn on Jedha")]);
+    write_test_logjet_records(&scarif, &[(2, 200, "Cassian on Scarif")]);
+
+    let mut app = make_view_app_inputs(vec![jedha.clone(), scarif.clone()]);
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+
+    assert_eq!(app.current_record_filename().as_deref(), Some(jedha.file_name().and_then(|s| s.to_str()).unwrap()));
+    app.selected = 1;
+    assert_eq!(app.current_record_filename().as_deref(), Some(scarif.file_name().and_then(|s| s.to_str()).unwrap()));
+
+    let _ = std::fs::remove_file(base);
+    let _ = std::fs::remove_file(jedha);
+    let _ = std::fs::remove_file(scarif);
+}
+
+#[test]
+fn temp_logjet_export_preserves_merged_view_order_without_monotonic_crash() {
+    let base = create_temp_path().unwrap();
+    let dir = base.parent().unwrap().to_path_buf();
+    let id = base.file_name().unwrap().to_string_lossy().into_owned();
+    let mustafar = dir.join(format!("mustafar-{id}.logjet"));
+    let naboo = dir.join(format!("naboo-{id}.logjet"));
+    write_test_logjet_records(&mustafar, &[(2, 9000, "Vader on Mustafar")]);
+    write_test_logjet_records(&naboo, &[(7, 1200, "Padme on Naboo")]);
+
+    let mut app = make_view_app_inputs_order(vec![mustafar.clone(), naboo.clone()], ViewOrderArg::MergeTs);
+    app.apply_filter().unwrap();
+    wait_for_scan(&mut app);
+
+    let temp = {
+        let scan = app.current_scan.as_mut().expect("scan");
+        write_export_selection_to_temp_logjet(scan, &app.entries).expect("temp logjet")
+    };
+
+    let bytes = std::fs::read(&temp).expect("read temp logjet");
+    let cursor = std::io::Cursor::new(bytes);
+    let mut reader = logjet::LogjetReader::new(cursor);
+    let mut bodies = Vec::new();
+    while let Some(rec) = reader.next_record().expect("next record") {
+        let batch = ExportLogsServiceRequest::decode(rec.payload.as_slice()).expect("decode batch");
+        bodies.push(
+            batch.resource_logs[0].scope_logs[0].log_records[0]
+                .body
+                .as_ref()
+                .and_then(|v| match &v.value {
+                    Some(Value::StringValue(s)) => Some(s.clone()),
+                    _ => None,
+                })
+                .expect("body"),
+        );
+    }
+    assert_eq!(bodies, vec!["Padme on Naboo".to_string(), "Vader on Mustafar".to_string()]);
+
+    let _ = std::fs::remove_file(base);
+    let _ = std::fs::remove_file(mustafar);
+    let _ = std::fs::remove_file(naboo);
+    let _ = std::fs::remove_file(temp);
 }
 
 #[test]

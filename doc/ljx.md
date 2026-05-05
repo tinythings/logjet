@@ -35,6 +35,7 @@ Documented command set:
 - `count`
 - `filter`
 - `stats`
+- `discover`
 - `view`
 - `split`
 - `join`
@@ -61,6 +62,15 @@ That means:
 - stdout output is straightforward for stream-producing commands
 - stdin support needs explicit policy because generic pipes are not seekable
 
+Multiple inputs are accepted for dataset scans. The selection can be a list of
+files or a glob expanded by the shell. The dataset is normalised into a stable
+manifest so repeated scans are deterministic.
+
+`ljx` keeps light pruning metadata in a sidecar cache under
+`~/.cache/ljx`. The cache is tied to source path, size, and modification time.
+If any of those change, the cache is rebuilt. Old cache entries are pruned after
+one week.
+
 If stdin is unsupported for a given release, `ljx` should fail loudly and say
 why. If stdin is later supported by spooling to a temporary file, that behaviour
 should be documented as an explicit implementation choice.
@@ -81,6 +91,7 @@ ljx telemetry.logjet
 ljx telemetry.logjet -F error -i
 ljx telemetry.logjet -F error -e 'customer-123|customer-456' -i
 ljx telemetry.logjet --fields body,timestamp,service_name
+ljx --grep 'timeout|deadline' ./logs/*.logjet
 ```
 
 Current behaviour:
@@ -89,6 +100,12 @@ Current behaviour:
 - output goes to stdout
 - predicates are the same as `count` and `filter`
 - `--fields` limits NDJSON keys without changing match semantics
+
+Multiple input paths are accepted here, so `ljx --grep 'timeout' ./logs/*.logjet`
+streams matches across the full selection.
+
+Use `--nfs` to favour sequential reads on network file systems. When it is set,
+index lookups are skipped so scans avoid random access.
 
 For OTLP log records, NDJSON output includes the core record fields when
 present, including:
@@ -182,9 +199,22 @@ Intended summary fields:
 - timestamp range
 - optional per-type or per-field summaries
 
+## `ljx discover`
+
+Stream JSON discovery summaries across one or more inputs.
+
+It emits either NDJSON rows or a single JSON summary. It is meant for quick
+machine-driven discovery without the TUI.
+
 ## `ljx view`
 
 Browse filtered records in an interactive terminal UI.
+
+`view` accepts multiple `.logjet` inputs and merges them into one logical scan.
+The status bar shows the physical source file for the selected record.
+
+Use `--nfs` to skip index lookups and keep the scan sequential on network file
+systems.
 
 Current shape:
 

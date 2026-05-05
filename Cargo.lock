@@ -1277,6 +1277,7 @@ dependencies = [
  "serde_yaml",
  "tiny_http",
  "tokio",
+ "tokio-stream",
  "tonic",
 ]
 
@@ -1295,6 +1296,7 @@ dependencies = [
  "prost",
  "ratatui",
  "regex",
+ "serde",
  "serde_json",
  "shlex",
  "xxhash-rust",

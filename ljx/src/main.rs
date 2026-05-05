@@ -1,10 +1,13 @@
 mod cli;
 mod commands;
+mod dataset;
+mod dataset_index;
 mod dedup;
 mod error;
 mod exporter;
 mod input;
 mod predicate;
+mod scan_workers;
 
 use clap::FromArgMatches;
 
@@ -13,7 +16,11 @@ use crate::error::{Error, Result};
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("ljx: {err}");
+        if err.is_machine_readable() {
+            eprintln!("{err}");
+        } else {
+            eprintln!("ljx: {err}");
+        }
         std::process::exit(1);
     }
 }
@@ -28,14 +35,20 @@ fn run() -> Result<()> {
     let mut matches = command.get_matches_mut();
     let cli = Cli::from_arg_matches_mut(&mut matches).map_err(|err| crate::error::Error::Usage(err.to_string()))?;
     if let Some(format) = cli.export.as_deref() {
-        let input = cli.input.ok_or_else(|| Error::Usage("missing export input; use `ljx --export <format> <input> -o <output>`".to_string()))?;
+        let input = cli.input.as_deref().and_then(|inputs| inputs.first()).cloned().ok_or_else(|| {
+            Error::Usage("missing export input; use `ljx --export <format> <input> -o <output>`".to_string())
+        })?;
         let output = cli.output.ok_or_else(|| Error::Usage("missing export output; use `ljx --export <format> <input> -o <output>`".to_string()))?;
         return commands::export::run(format, &input, &output, cli.force, &cli.fields);
     }
-    if let Some(input) = cli.input.as_deref() {
-        let predicate = cli.predicate.build()?;
+    if let Some(inputs) = cli.input.as_deref() {
+        let mut predicate = cli.predicate.build()?;
+        predicate.field_filter.services = crate::predicate::parse_string_filter(cli.services, "service")?;
+        predicate.field_filter.severities = crate::predicate::parse_string_filter(cli.severities, "severity")?;
         return match cli.format.unwrap_or(ExportFormat::Ndjson) {
-            ExportFormat::Ndjson => commands::export::run_query_ndjson(input, &predicate, &cli.fields),
+            ExportFormat::Ndjson => {
+                commands::export::run_query_ndjson_multi(inputs, &predicate, &cli.fields, cli.preview_bytes)
+            }
         };
     }
     if cli.format.is_some() || cli.predicate.has_filters() {
@@ -48,6 +61,7 @@ fn run() -> Result<()> {
         Some(Command::Filter(args)) => commands::filter::run(args),
         Some(Command::Count(args)) => commands::count::run(args),
         Some(Command::Stats(args)) => commands::stats::run(args),
+        Some(Command::Discover(args)) => commands::discover::run(args),
         Some(Command::View(args)) => commands::view::run(args),
         Some(Command::Dedup(args)) => commands::dedup::run(args),
         None => {

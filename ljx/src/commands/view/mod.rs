@@ -21,7 +21,7 @@ use crate::error::{Error, Result};
 #[cfg(test)]
 pub(crate) use self::detail::{extract_otlp_log_message, format_summary, parse_export_selection, render_modal_info_entries, render_modal_message};
 #[cfg(test)]
-pub(crate) use self::scan::{create_temp_path, open_temp_spool_pair, read_spool_record, write_spool_record};
+pub(crate) use self::scan::{create_temp_path, open_temp_spool_pair, read_spool_record, write_export_selection_to_temp_logjet, write_spool_record};
 #[cfg(test)]
 pub(crate) use self::text::text_preview;
 #[cfg(test)]
@@ -34,20 +34,36 @@ pub fn run(args: ViewArgs) -> Result<()> {
         return Err(Error::Usage("ljx view needs an interactive terminal; pipe-oriented output belongs in `ljx filter`".to_string()));
     }
 
+    let mut app = self::types::ViewApp::new(args)?;
     let mut stdout = io::stdout();
     enable_raw_mode()?;
-    execute!(stdout, EnterAlternateScreen)?;
+    if let Err(err) = execute!(stdout, EnterAlternateScreen) {
+        let _ = disable_raw_mode();
+        return Err(err.into());
+    }
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    let mut app = self::types::ViewApp::new(args)?;
+    let mut terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(err) => {
+            let mut stdout = io::stdout();
+            let _ = disable_raw_mode();
+            let _ = execute!(stdout, LeaveAlternateScreen);
+            return Err(err.into());
+        }
+    };
+
     app.apply_filter()?;
     let outcome = app.run(&mut terminal);
 
+    cleanup_terminal(&mut terminal)?;
+    outcome
+}
+
+fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-
-    outcome
+    Ok(())
 }
 
 #[cfg(test)]

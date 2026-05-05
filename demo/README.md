@@ -45,6 +45,10 @@ It also contains scenario demos under subdirectories:
   - generate about 5K BOFH log entries, then export that `.logjet` file to Parquet through the external exporter plugin
 - [`tui-view`](./tui-view)
   - generate 1000 randomized log entries and open `ljx view` on the result
+- [`multiscan-view`](./multiscan-view)
+  - generate a tree of `.logjet` files and open `ljx view` across the whole dataset
+- [`multiscan-discover`](./multiscan-discover)
+  - generate a tree of `.logjet` files and run `ljx discover` JSON and NDJSON summaries
 - [`visual-logtail`](./visual-logtail)
   - append one fresh log record every half second and open `ljx view --tail` on the live file
 - [`bridge-resume`](./bridge-resume)

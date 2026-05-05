@@ -120,6 +120,23 @@ impl PredicateArgs {
             || !self.fixed_string.is_empty()
             || self.ignore_case
     }
+}
+
+pub fn parse_string_filter(values: Vec<String>, label: &str) -> Result<Option<HashSet<String>>> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let mut set = HashSet::new();
+    for value in values {
+        if value.is_empty() {
+            return Err(Error::Usage(format!("empty {label} filter values are not allowed")));
+        }
+        set.insert(value);
+    }
+    Ok(Some(set))
+}
+
+impl PredicateArgs {
 
     pub fn build(self) -> Result<RecordPredicate> {
         let mut payload_matchers = Vec::with_capacity(self.grep.len() + self.fixed_string.len());
@@ -210,6 +227,34 @@ impl RecordPredicate {
         }
 
         true
+    }
+
+    pub(crate) fn record_type_filter(&self) -> Option<RecordType> {
+        self.record_type
+    }
+
+    pub(crate) fn seq_min_filter(&self) -> Option<u64> {
+        self.seq_min
+    }
+
+    pub(crate) fn seq_max_filter(&self) -> Option<u64> {
+        self.seq_max
+    }
+
+    pub(crate) fn ts_min_filter(&self) -> Option<u64> {
+        self.ts_min
+    }
+
+    pub(crate) fn ts_max_filter(&self) -> Option<u64> {
+        self.ts_max
+    }
+
+    pub(crate) fn service_filter(&self) -> Option<&HashSet<String>> {
+        self.field_filter.services.as_ref()
+    }
+
+    pub(crate) fn severity_filter(&self) -> Option<&HashSet<String>> {
+        self.field_filter.severities.as_ref()
     }
 }
 
