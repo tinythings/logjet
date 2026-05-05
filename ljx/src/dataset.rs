@@ -11,6 +11,21 @@ pub(crate) struct Dataset {
     entries: Vec<DatasetEntry>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DatasetOptions {
+    pub(crate) load_index: bool,
+}
+
+impl DatasetOptions {
+    pub(crate) fn default() -> Self {
+        Self { load_index: true }
+    }
+
+    pub(crate) fn nfs() -> Self {
+        Self { load_index: false }
+    }
+}
+
 /// Cheap per-file manifest metadata gathered without opening the payload stream.
 #[derive(Debug, Clone)]
 pub(crate) struct DatasetEntry {
@@ -26,6 +41,10 @@ pub(crate) struct DatasetEntry {
 
 impl Dataset {
     pub(crate) fn from_inputs(inputs: &[PathBuf]) -> Result<Self> {
+        Self::from_inputs_with_options(inputs, DatasetOptions::default())
+    }
+
+    pub(crate) fn from_inputs_with_options(inputs: &[PathBuf], options: DatasetOptions) -> Result<Self> {
         if inputs.is_empty() {
             return Err(Error::Usage("dataset selection is empty; pass one or more .logjet files".to_string()));
         }
@@ -70,7 +89,12 @@ impl Dataset {
 
         paths.sort_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
         paths.dedup();
-        Ok(Self { entries: paths.into_iter().map(DatasetEntry::from_path).collect::<Result<Vec<_>>>()? })
+        Ok(Self {
+            entries: paths
+                .into_iter()
+                .map(|path| DatasetEntry::from_path(path, options))
+                .collect::<Result<Vec<_>>>()?,
+        })
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -107,11 +131,11 @@ impl Dataset {
 }
 
 impl DatasetEntry {
-    fn from_path(path: PathBuf) -> Result<Self> {
+    fn from_path(path: PathBuf, options: DatasetOptions) -> Result<Self> {
         let meta = std::fs::metadata(&path)?;
         let size = meta.len();
         let modified_ns = modified_ns(&meta);
-        let index = load_or_build(&path, size, modified_ns);
+        let index = if options.load_index { load_or_build(&path, size, modified_ns) } else { None };
         Ok(Self {
             path,
             size,

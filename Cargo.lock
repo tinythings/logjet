@@ -1277,6 +1277,7 @@ dependencies = [
  "serde_yaml",
  "tiny_http",
  "tokio",
+ "tokio-stream",
  "tonic",
 ]
 

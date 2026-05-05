@@ -249,6 +249,7 @@ pub(crate) struct ViewApp {
     pub(crate) input: PathBuf,
     pub(crate) dataset: Dataset,
     pub(crate) view_order: ViewOrder,
+    pub(super) nfs_mode: bool,
     pub(super) hex_payload: bool,
     pub(super) exporters: ExporterRegistry,
     pub(crate) export_formats: Vec<ExportFormatChoice>,

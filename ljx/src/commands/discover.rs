@@ -30,7 +30,11 @@ fn run_inner(args: DiscoverArgs) -> Result<()> {
     predicate.field_filter.services = service_filter.clone();
     predicate.field_filter.severities = severity_filter.clone();
 
-    let dataset = Dataset::from_inputs(&args.inputs)?;
+    let dataset = if args.nfs {
+        Dataset::from_inputs_with_options(&args.inputs, crate::dataset::DatasetOptions::nfs())?
+    } else {
+        Dataset::from_inputs(&args.inputs)?
+    };
     let entries = paged_entries(&dataset, args.offset, args.limit)?;
     let entries_len = entries.len();
     let mut out = io::BufWriter::new(io::stdout().lock());

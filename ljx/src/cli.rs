@@ -259,6 +259,9 @@ pub struct DiscoverArgs {
     #[arg(long, default_value_t = 10, help = "Maximum number of services in top_services")]
     pub top_services: usize,
 
+    #[arg(long, default_value_t = false, help = "Enable NFS-friendly scanning (avoid random-access indexing)")]
+    pub nfs: bool,
+
     #[arg(long, default_value_t = false, help = "Emit per-file NDJSON progress rows followed by a final summary row")]
     pub ndjson: bool,
 
@@ -279,6 +282,9 @@ pub struct ViewArgs {
 
     #[arg(long = "dataset-order", value_enum, default_value_t = ViewOrderArg::Concat, help = "Dataset scan order: concat, merge-seq, or merge-ts")]
     pub dataset_order: ViewOrderArg,
+
+    #[arg(long, default_value_t = false, help = "Enable NFS-friendly scanning (avoid random-access indexing)")]
+    pub nfs: bool,
 
     #[arg(long, default_value_t = false, help = "Show payload previews in hex")]
     pub hex_payload: bool,

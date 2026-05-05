@@ -32,7 +32,11 @@ pub(super) const TICK_RATE: Duration = Duration::from_millis(100);
 
 impl ViewApp {
     pub(crate) fn new(args: ViewArgs) -> Result<Self> {
-        let dataset = Dataset::from_inputs(&args.inputs)?;
+        let dataset = if args.nfs {
+            Dataset::from_inputs_with_options(&args.inputs, crate::dataset::DatasetOptions::nfs())?
+        } else {
+            Dataset::from_inputs(&args.inputs)?
+        };
         let exporters = crate::exporter::ExporterRegistry::discover();
         let export_formats = discover_export_format_choices(&exporters);
         let catalog: Arc<std::sync::Mutex<Option<super::types::FieldCatalog>>> = Arc::new(std::sync::Mutex::new(None));
@@ -51,6 +55,7 @@ impl ViewApp {
             input: dataset.primary_path().to_path_buf(),
             dataset,
             view_order: ViewOrder::from(args.dataset_order),
+            nfs_mode: args.nfs,
             hex_payload: args.hex_payload,
             exporters,
             export_formats,
@@ -1197,7 +1202,12 @@ impl ViewApp {
             let _ = std::fs::remove_file(scan.spool_path);
         }
         self.input = path;
-        self.dataset = Dataset::from_inputs(std::slice::from_ref(&self.input))?;
+        let options = if self.nfs_mode {
+            crate::dataset::DatasetOptions::nfs()
+        } else {
+            crate::dataset::DatasetOptions::default()
+        };
+        self.dataset = Dataset::from_inputs_with_options(std::slice::from_ref(&self.input), options)?;
 
         let catalog_bg = Arc::clone(&self.field_catalog);
         let dataset_bg = self.dataset.clone();
