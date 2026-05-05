@@ -3,6 +3,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use xxhash_rust::xxh3::xxh3_64;
+
 use logjet::{BLOCK_HEADER_EXT_LEN, BLOCK_HEADER_FIXED_LEN, BlockHeader, BlockHeaderExt, OwnedRecord, RecordType};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::AnyValue;
@@ -101,7 +103,21 @@ pub(crate) fn load_or_build(path: &Path, size: u64, modified_ns: Option<u64>) ->
 }
 
 pub(crate) fn sidecar_path(path: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.ljxidx", path.display()))
+    let cache_dir = cache_root_dir().unwrap_or_else(|| PathBuf::from("."));
+    let hash = xxh3_64(path.to_string_lossy().as_bytes());
+    let file_name = format!("{:016x}.ljxidx", hash);
+    cache_dir.join(file_name)
+}
+
+fn cache_root_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| {
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache"))
+    })?;
+    let dir = base.join("ljx");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+    Some(dir)
 }
 
 impl IndexSummary {
