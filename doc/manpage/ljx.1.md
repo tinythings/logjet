@@ -8,13 +8,15 @@ ljx - offline toolbox for inspecting and transforming `.logjet` files
 
 # SYNOPSIS
 
-`ljx` *input* [`--format` *format*] [`--fields` *key[,key...]*] [*predicate-options*]
+`ljx` *input*... [`--format` *format*] [`--fields` *key[,key...]*] [*predicate-options*]
 
 `ljx` `count` *input* [*predicate-options*]
 
 `ljx` `filter` *input* `-o` *output* [*predicate-options*] [`--codec` *codec*] [`--block-target-size` *bytes*]
 
 `ljx` `stats` *input*
+
+`ljx` `discover` *input*...
 
 `ljx` `view` *input*
 
@@ -88,6 +90,11 @@ Planned summaries include:
 
 `stats` is planned but may not be complete in release `0.1`.
 
+## discover
+
+Stream JSON discovery summaries across one or more inputs. It emits either
+NDJSON rows or a single JSON summary intended for machine use.
+
 ## view
 
 Browse filtered records in an interactive terminal UI.
@@ -146,11 +153,18 @@ Within one `-e`, ordinary regex alternation still applies, so
 
 ## Top-level NDJSON query options
 
+Top-level query mode accepts one or more input paths. Multiple inputs are
+scanned in order, and matches stream to stdout.
+
 ## `--format` *ndjson*
 
 Select the output format for top-level `ljx` *input* mode.
 
 Current top-level query mode supports `ndjson` and defaults to it.
+
+## `--nfs`
+
+When set, skip index lookups and favour sequential reads for networked storage.
 
 ## `--fields` *key[,key...]* 
 
