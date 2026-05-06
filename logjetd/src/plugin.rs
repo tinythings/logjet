@@ -628,6 +628,46 @@ unsafe extern "C" fn on_record(user: *mut c_void, record: *const LjLogRecord) {
     }
 }
 
+/// The C callback invoked by the plugin for each generic (multi-signal) record.
+///
+/// # Safety
+///
+/// `user` must be a valid `*mut CallbackCtx`. `record` must be a valid
+/// `*const LjIngestRecordV1` with payload pointer valid for the call duration.
+unsafe extern "C" fn on_generic_record(user: *mut c_void, record: *const LjIngestRecordV1) {
+    let ctx = unsafe { &*(user as *const CallbackCtx) };
+    let rec = unsafe { &*record };
+
+    let record_type = match rec.record_type {
+        LJ_INGEST_RECORD_TYPE_LOGS => logjet::RecordType::Logs,
+        LJ_INGEST_RECORD_TYPE_METRICS => logjet::RecordType::Metrics,
+        LJ_INGEST_RECORD_TYPE_TRACES => logjet::RecordType::Traces,
+        LJ_INGEST_RECORD_TYPE_EVENTS => logjet::RecordType::Events,
+        _ => {
+            eprintln!("ljd plugin callback unknown record type {}, defaulting to logs", rec.record_type);
+            logjet::RecordType::Logs
+        }
+    };
+
+    let payload = if rec.payload.is_null() || rec.payload_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(rec.payload, rec.payload_len) }.to_vec()
+    };
+
+    let ts = if rec.timestamp_unix_ns != 0 {
+        rec.timestamp_unix_ns
+    } else {
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
+    };
+
+    let wire = WireRecord { record_type, seq: ctx.next_seq.fetch_add(1, Ordering::Relaxed), ts_unix_ns: ts, payload };
+
+    if let Err(err) = super::daemon::append_to_spool(&ctx.spool, wire) {
+        eprintln!("ljd plugin callback spool error: {err}");
+    }
+}
+
 /// Reads a NUL-terminated C string, returns None if the pointer is null.
 unsafe fn read_optional_str(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() { None } else { Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()) }
@@ -782,6 +822,9 @@ fn handle_plugin_client(
         return Err(io::Error::other("lj_ingest_create returned NULL"));
     }
     unsafe { (handle.set_callback)(plugin_ctx, on_record, ctx_ptr) };
+    if let Some(set_generic) = handle.set_generic_callback {
+        unsafe { set_generic(plugin_ctx, on_generic_record, ctx_ptr) };
+    }
 
     let mut reader = BufReader::new(stream);
     let mut buf = [0u8; 0x10_000];
@@ -816,6 +859,9 @@ fn run_active_plugin(handle: &PluginHandle, spool: Arc<super::daemon::SharedSpoo
         return Err(io::Error::other("lj_ingest_create returned NULL"));
     }
     unsafe { (handle.set_callback)(plugin_ctx, on_record, ctx_ptr) };
+    if let Some(set_generic) = handle.set_generic_callback {
+        unsafe { set_generic(plugin_ctx, on_generic_record, ctx_ptr) };
+    }
 
     let rc = unsafe { fetch(plugin_ctx) };
 
