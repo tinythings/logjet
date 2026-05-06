@@ -10,4 +10,5 @@ crate-type = ["cdylib"]
 [dependencies]
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "trace", "metrics", "logs"] }
 prost = "0.14"
+rusqlite = { version = "0.34", features = ["bundled"] }
 serde_json = "1"
