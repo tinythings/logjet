@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use logjet::{LogjetReader, LogjetWriter, OwnedRecord, ReaderConfig};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
 
 use crate::config::{BufferConfig, BufferLimit, FileConfig, FsyncPolicy, StorageConfig};
@@ -660,11 +662,14 @@ fn inspect_reader<R: std::io::Read + std::io::Seek>(reader: &mut LogjetReader<R>
 }
 
 fn verify_otlp_payload(record: &OwnedRecord) -> io::Result<()> {
-    if record.record_type != logjet::RecordType::Logs {
-        return Ok(());
-    }
-
-    ExportLogsServiceRequest::decode(record.payload.as_slice()).map(|_| ()).map_err(|err| io::Error::new(ErrorKind::InvalidData, err.to_string()))
+    use logjet::RecordType;
+    let result = match record.record_type {
+        RecordType::Logs => ExportLogsServiceRequest::decode(record.payload.as_slice()).map(|_| ()),
+        RecordType::Metrics => ExportMetricsServiceRequest::decode(record.payload.as_slice()).map(|_| ()),
+        RecordType::Traces => ExportTraceServiceRequest::decode(record.payload.as_slice()).map(|_| ()),
+        RecordType::Events => ExportLogsServiceRequest::decode(record.payload.as_slice()).map(|_| ()),
+    };
+    result.map_err(|err| io::Error::new(ErrorKind::InvalidData, err.to_string()))
 }
 
 fn print_record(record: &OwnedRecord) {

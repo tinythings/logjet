@@ -30,12 +30,10 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
         let mut reader = LogjetReader::with_config(BufReader::new(file), ReaderConfig::default());
 
         while let Some(record) = reader.next_record().map_err(to_io_error)? {
-            if record.record_type != RecordType::Logs {
-                continue;
+            if record.record_type == RecordType::Logs {
+                batcher.add(&record.payload, &mut conn)?;
+                sent = sent.saturating_add(1);
             }
-
-            batcher.add(&record.payload, &mut conn)?;
-            sent = sent.saturating_add(1);
         }
     }
 

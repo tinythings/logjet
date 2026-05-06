@@ -145,3 +145,31 @@ fn seq_and_timestamp_deltas_round_trip() {
     assert_eq!(records[1].2, 1_250);
     assert_eq!(records[2].2, 9_999);
 }
+
+#[test]
+fn record_type_from_u8_all_variants() {
+    use logjet::RecordType;
+    assert_eq!(RecordType::from_u8(1).unwrap(), RecordType::Logs);
+    assert_eq!(RecordType::from_u8(2).unwrap(), RecordType::Metrics);
+    assert_eq!(RecordType::from_u8(3).unwrap(), RecordType::Traces);
+    assert_eq!(RecordType::from_u8(4).unwrap(), RecordType::Events);
+    assert!(RecordType::from_u8(0).is_err());
+    assert!(RecordType::from_u8(5).is_err());
+    assert!(RecordType::from_u8(255).is_err());
+}
+
+#[test]
+fn record_type_events_writes_and_reads_back() {
+    use logjet::{LogjetReader, LogjetWriter, RecordType, WriterConfig};
+    use std::io::{BufReader, Cursor};
+
+    let mut writer = LogjetWriter::with_config(Cursor::new(Vec::new()), WriterConfig::default());
+    writer.push(RecordType::Events, 1, 1_700_000_000_000_000_000, b"event-payload").unwrap();
+    let bytes = writer.into_inner().unwrap().into_inner();
+
+    let mut reader = LogjetReader::new(BufReader::new(Cursor::new(bytes)));
+    let record = reader.next_record().unwrap().unwrap();
+    assert_eq!(record.record_type, RecordType::Events);
+    assert_eq!(record.seq, 1);
+    assert_eq!(record.payload, b"event-payload");
+}
