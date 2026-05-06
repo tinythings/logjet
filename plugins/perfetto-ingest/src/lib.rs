@@ -173,10 +173,88 @@ pub unsafe extern "C" fn lj_ingest_feed(_ctx: *mut PerfettoPlugin, _data: *const
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_ingest_fetch(ctx: *mut PerfettoPlugin) -> c_int {
     if ctx.is_null() {
+        eprintln!("perfetto-ingest: lj_ingest_fetch called with null context");
         return -1;
     }
-    // Stub — real implementation in Ticket 13.
-    0
+    let ctx = unsafe { &*ctx };
+
+    let trace_file = match std::env::var("LJD_PERFETTO_TRACE_FILE") {
+        Ok(path) => std::path::PathBuf::from(path),
+        Err(_) => {
+            eprintln!("perfetto-ingest: LJD_PERFETTO_TRACE_FILE is not set");
+            return -2;
+        }
+    };
+
+    if !trace_file.is_file() {
+        eprintln!("perfetto-ingest: trace file not found: {}", trace_file.display());
+        return -3;
+    }
+
+    match run_pipeline(ctx, &trace_file) {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("perfetto-ingest: {err}");
+            -4
+        }
+    }
+}
+
+fn run_pipeline(plugin: &PerfettoPlugin, trace_file: &std::path::Path) -> Result<(), String> {
+    let tp_path = perfetto_invoke::find_trace_processor()
+        .map_err(|err| format!("trace_processor not found: {err}"))?;
+
+    eprintln!("perfetto-ingest: using trace_processor {}", tp_path.display());
+    eprintln!("perfetto-ingest: exporting SQLite from {}", trace_file.display());
+
+    let sqlite_path = perfetto_invoke::export_sqlite(trace_file, &tp_path)
+        .map_err(|err| format!("SQLite export failed: {err}"))?;
+
+    let db = sqlite_reader::PerfettoDb::open(&sqlite_path)
+        .map_err(|err| format!("failed to open exported DB: {err}"))?;
+
+    let snaps = db.read_clock_snapshots()
+        .map_err(|err| format!("failed to read clock snapshots: {err}"))?;
+
+    let policy = match std::env::var("LJD_PERFETTO_TIMESTAMP_POLICY").as_deref() {
+        Ok("require-realtime") => timestamp::TimestampPolicy::RequireRealtime,
+        _ => timestamp::TimestampPolicy::BestEffort,
+    };
+
+    let converter = timestamp::TimestampConverter::new(snaps, policy);
+
+    if converter.has_realtime() {
+        eprintln!("perfetto-ingest: realtime clock available");
+    } else {
+        eprintln!("perfetto-ingest: no realtime clock snapshots — timestamps will be unavailable");
+    }
+
+    eprintln!("perfetto-ingest: mapping traces...");
+    trace_mapper::map_traces(&db, &converter, emit_generic, plugin)?;
+
+    // Optional: run metrics export and map metrics.
+    let metrics_names: Vec<String> = std::env::var("LJD_PERFETTO_METRICS")
+        .ok()
+        .map(|s| s.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let metrics_refs: Vec<&str> = metrics_names.iter().map(|s| s.as_str()).collect();
+
+    if !metrics_refs.is_empty()
+        && let Ok(Some(metrics_path)) = perfetto_invoke::export_metrics(trace_file, &tp_path, &metrics_refs) {
+            eprintln!("perfetto-ingest: mapping metrics...");
+            let metrics = metrics_reader::parse_metrics_json(&metrics_path)
+                .map_err(|err| format!("failed to parse metrics JSON: {err}"))?;
+            metric_mapper::map_metrics(&metrics, &converter, emit_generic, plugin)?;
+            let _ = std::fs::remove_file(&metrics_path);
+        }
+
+    eprintln!("perfetto-ingest: mapping logs...");
+    log_mapper::map_logs(&db, emit_generic, plugin)?;
+
+    let _ = std::fs::remove_file(&sqlite_path);
+
+    eprintln!("perfetto-ingest: done");
+    Ok(())
 }
 
 /// Destroys the plugin context. Accepts NULL.

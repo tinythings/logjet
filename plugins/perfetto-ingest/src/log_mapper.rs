@@ -11,9 +11,8 @@ use prost::Message;
 
 use crate::sqlite_reader::PerfettoDb;
 
-/// OTel severity numbers mapped from Perfetto contexts.
+/// OTel severity number for informational logs.
 const SEVERITY_INFO: i32 = 9;
-const SEVERITY_ERROR: i32 = 17;
 
 pub fn map_logs(
     db: &PerfettoDb,

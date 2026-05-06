@@ -4,8 +4,6 @@
 //! trace-clock timestamps (typically CLOCK_MONOTONIC or CLOCK_BOOTTIME) to
 //! Unix epoch nanoseconds via REALTIME clock snapshots.
 
-#![allow(dead_code)]
-
 use crate::sqlite_reader::PerfettoClockSnapshot;
 
 /// Controls behaviour when realtime conversion is unavailable for a timestamp.

@@ -1,7 +1,5 @@
 //! Maps Perfetto metrics to OTel metrics.
 
-#![allow(dead_code)]
-
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
