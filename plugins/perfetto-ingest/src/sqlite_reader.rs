@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-// ── Typed models ────────────────────────────────────────────────────────────
+// Typed models
 
 #[derive(Debug, Clone)]
 pub struct PerfettoSlice {
@@ -69,7 +69,7 @@ pub struct PerfettoClockSnapshot {
     pub clock_value: i64,
 }
 
-// ── Database reader ──────────────────────────────────────────────────────────
+// Database reader
 
 pub struct PerfettoDb {
     pub(crate) conn: rusqlite::Connection,

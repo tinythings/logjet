@@ -163,6 +163,7 @@ void lj_ingest_set_callback(lj_ingest_plugin *ctx, lj_record_callback cb, void *
 void lj_ingest_set_generic_callback(lj_ingest_plugin *ctx, lj_generic_record_callback cb, void *user);
 int lj_ingest_feed(lj_ingest_plugin *ctx, const uint8_t *data, size_t len);
 int lj_ingest_fetch(lj_ingest_plugin *ctx);
+const char *lj_ingest_last_error(lj_ingest_plugin *ctx);
 void lj_ingest_free(lj_ingest_plugin *ctx);
 
 #ifdef __cplusplus

@@ -15,7 +15,7 @@ mod trace_mapper;
 
 use std::ffi::{c_char, c_int, c_void};
 
-// ── C ABI types (must match liblogjet.h exactly) ────────────────────────────
+// C ABI types (must match liblogjet.h exactly)
 
 #[repr(C)]
 pub struct LjAttribute {
@@ -66,7 +66,7 @@ pub struct LjIngestDescriptorV1 {
     reserved: [u64; 8],
 }
 
-// ── Signal constants ────────────────────────────────────────────────────────
+// Signal constants
 
 const LJ_INGEST_SIGNAL_LOGS: u32 = 1 << 0;
 const LJ_INGEST_SIGNAL_METRICS: u32 = 1 << 1;
@@ -82,7 +82,7 @@ const LJ_INGEST_RECORD_TYPE_TRACES: u32 = 3;
 #[allow(dead_code)]
 const LJ_INGEST_RECORD_TYPE_EVENTS: u32 = 4;
 
-// ── Descriptor ──────────────────────────────────────────────────────────────
+// Descriptor
 
 struct IngestDescriptor(LjIngestDescriptorV1);
 
@@ -107,16 +107,17 @@ pub extern "C" fn lj_ingest_descriptor_v1() -> *const LjIngestDescriptorV1 {
     &PERFETTO_INGEST_DESCRIPTOR.0
 }
 
-// ── Plugin context ──────────────────────────────────────────────────────────
+// Plugin context
 
 pub struct PerfettoPlugin {
     pub(crate) legacy_callback: Option<RecordCallback>,
     pub(crate) legacy_user: *mut c_void,
     pub(crate) generic_callback: Option<GenericRecordCallback>,
     pub(crate) generic_user: *mut c_void,
+    last_error: Option<String>,
 }
 
-// ── Exported C ABI ──────────────────────────────────────────────────────────
+// Exported C ABI
 
 #[unsafe(no_mangle)]
 pub extern "C" fn lj_ingest_create() -> *mut PerfettoPlugin {
@@ -125,6 +126,7 @@ pub extern "C" fn lj_ingest_create() -> *mut PerfettoPlugin {
         legacy_user: std::ptr::null_mut(),
         generic_callback: None,
         generic_user: std::ptr::null_mut(),
+        last_error: None,
     }))
 }
 
@@ -164,6 +166,23 @@ pub unsafe extern "C" fn lj_ingest_feed(_ctx: *mut PerfettoPlugin, _data: *const
     0
 }
 
+/// Returns the last error message, or NULL if none.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer from `lj_ingest_create`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_ingest_last_error(ctx: *mut PerfettoPlugin) -> *const c_char {
+    if ctx.is_null() {
+        return std::ptr::null();
+    }
+    let ctx = unsafe { &*ctx };
+    match &ctx.last_error {
+        Some(msg) => msg.as_ptr().cast::<c_char>(),
+        None => std::ptr::null(),
+    }
+}
+
 /// Active source: reads a `.pftrace` file, invokes trace_processor, maps
 /// results to OTel, and streams records through the generic callback.
 ///
@@ -176,31 +195,32 @@ pub unsafe extern "C" fn lj_ingest_fetch(ctx: *mut PerfettoPlugin) -> c_int {
         eprintln!("perfetto-ingest: lj_ingest_fetch called with null context");
         return -1;
     }
-    let ctx = unsafe { &*ctx };
+    let ctx = unsafe { &mut *ctx };
 
     let trace_file = match std::env::var("LJD_PERFETTO_TRACE_FILE") {
         Ok(path) => std::path::PathBuf::from(path),
         Err(_) => {
-            eprintln!("perfetto-ingest: LJD_PERFETTO_TRACE_FILE is not set");
+            ctx.last_error = Some("LJD_PERFETTO_TRACE_FILE is not set".to_string());
             return -2;
         }
     };
 
     if !trace_file.is_file() {
-        eprintln!("perfetto-ingest: trace file not found: {}", trace_file.display());
+        ctx.last_error = Some(format!("trace file not found: {}", trace_file.display()));
         return -3;
     }
 
     match run_pipeline(ctx, &trace_file) {
         Ok(()) => 0,
         Err(err) => {
+            ctx.last_error = Some(err.to_string());
             eprintln!("perfetto-ingest: {err}");
             -4
         }
     }
 }
 
-fn run_pipeline(plugin: &PerfettoPlugin, trace_file: &std::path::Path) -> Result<(), String> {
+fn run_pipeline(plugin: &mut PerfettoPlugin, trace_file: &std::path::Path) -> Result<(), String> {
     let tp_path = perfetto_invoke::find_trace_processor()
         .map_err(|err| format!("trace_processor not found: {err}"))?;
 
@@ -270,7 +290,7 @@ pub unsafe extern "C" fn lj_ingest_free(ctx: *mut PerfettoPlugin) {
     let _ = unsafe { Box::from_raw(ctx) };
 }
 
-// ── Record emission helpers ─────────────────────────────────────────────────
+// Record emission helpers
 
 /// Calls the generic callback with a pre-encoded OTLP payload.
 ///

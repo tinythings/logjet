@@ -192,7 +192,7 @@ fn flush_batch(
     Ok(())
 }
 
-// ── ID generation ──────────────────────────────────────────────────────────
+// ID generation
 
 fn make_trace_id() -> [u8; 16] {
     let mut id = [0u8; 16];
@@ -211,7 +211,7 @@ fn make_span_id(slice_id: i64) -> [u8; 8] {
     id
 }
 
-// ── Attribute helpers ──────────────────────────────────────────────────────
+// Attribute helpers
 
 fn key_value(key: &str, value: AnyValue) -> KeyValue {
     KeyValue { key: key.to_string(), value: Some(value) }

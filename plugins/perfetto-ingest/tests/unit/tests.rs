@@ -6,7 +6,7 @@ use prost::Message;
 /// Captured emitted record: (record_type, timestamp_unix_ns, payload).
 type EmittedRecord = (u32, u64, Vec<u8>);
 
-// ── sqlite_reader tests ─────────────────────────────────────────────────────
+// sqlite_reader tests
 
 #[test]
 fn sqlite_reader_reads_slices_ordered_by_ts() {
@@ -110,7 +110,7 @@ fn sqlite_reader_reads_clock_snapshots() {
     assert_eq!(snaps[1].clock_value, 1_700_000_000_000_010_000);
 }
 
-// ── metrics_reader tests ────────────────────────────────────────────────────
+// metrics_reader tests
 
 #[test]
 fn metrics_reader_parses_scalar_metric() {
@@ -154,7 +154,7 @@ fn metrics_reader_parses_nested_metric() {
     assert_eq!(metrics[0].children[0].scalar_value, Some(5.0));
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────
+// helpers
 
 fn temp_json(name: &str, content: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir();
@@ -199,7 +199,7 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
     super::sqlite_reader::PerfettoDb { conn }
 }
 
-// ── timestamp tests ─────────────────────────────────────────────────────────
+// timestamp tests
 
 fn make_snapshots(pairs: &[(i64, i64)]) -> Vec<crate::sqlite_reader::PerfettoClockSnapshot> {
     pairs.iter().map(|(ts, cv)| crate::sqlite_reader::PerfettoClockSnapshot { ts: *ts, clock_value: *cv }).collect()
@@ -267,7 +267,7 @@ fn timestamp_has_realtime() {
     assert!(conv.has_realtime());
 }
 
-// ── trace_mapper tests ──────────────────────────────────────────────────────
+// trace_mapper tests
 
 #[test]
 fn trace_mapper_produces_spans_from_slices() {
@@ -301,7 +301,7 @@ fn trace_mapper_fails_without_realtime_require() {
     assert!(result.is_err());
 }
 
-// ── metric_mapper tests ─────────────────────────────────────────────────────
+// metric_mapper tests
 
 #[test]
 fn metric_mapper_encodes_scalar_metrics() {
@@ -355,7 +355,7 @@ fn metric_mapper_flattens_nested_metrics() {
     assert!(names.contains(&"parent.child"));
 }
 
-// ── log_mapper tests ────────────────────────────────────────────────────────
+// log_mapper tests
 
 #[test]
 fn log_mapper_produces_summary_log() {
@@ -376,7 +376,7 @@ fn log_mapper_produces_summary_log() {
             }
 }
 
-// ── run_pipeline integration test ─────────────────────────────────────────────
+// run_pipeline integration test
 
 #[test]
 fn run_pipeline_integration_with_sqlite() {
@@ -395,7 +395,7 @@ fn run_pipeline_integration_with_sqlite() {
     let _ = std::fs::remove_file(&tmp);
 }
 
-// ── test helpers for mapper tests ───────────────────────────────────────────
+// test helpers for mapper tests
 
 fn run_trace_mapper(
     db: &super::sqlite_reader::PerfettoDb,
@@ -445,6 +445,7 @@ fn dummy_plugin(cb: super::GenericRecordCallback) -> super::PerfettoPlugin {
         legacy_user: std::ptr::null_mut(),
         generic_callback: Some(cb),
         generic_user: user_ptr,
+        last_error: None,
     }
 }
 

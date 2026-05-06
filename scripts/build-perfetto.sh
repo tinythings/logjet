@@ -12,7 +12,7 @@ fi
 
 cd "$PERFETTO_SRC"
 
-# ── OS / package detection ───────────────────────────────────────────────────
+# OS / package detection
 
 detect_pkg_manager() {
     if [ -f /etc/os-release ]; then
@@ -87,7 +87,7 @@ ensure_system_deps() {
 
 ensure_system_deps
 
-# ── Clean stale venv from previous failed runs ───────────────────────────────
+# Clean stale venv from previous failed runs
 
 if [ -d ".venv" ] && [ ! -f ".venv/bin/activate" ]; then
     echo ""
@@ -95,7 +95,7 @@ if [ -d ".venv" ] && [ ! -f ".venv/bin/activate" ]; then
     rm -rf .venv
 fi
 
-# ── Hermetic toolchain download ───────────────────────────────────────────────
+# Hermetic toolchain download
 
 echo ""
 echo "Downloading hermetic build dependencies (GN, Ninja, clang, libs)..."
@@ -112,7 +112,7 @@ else
     exit 1
 fi
 
-# ── Build ────────────────────────────────────────────────────────────────────
+# Build
 
 OUT_DIR="out/linux_release"
 
