@@ -18,7 +18,7 @@ use crate::protocol::WireRecord;
 use liblogjet::export::{LJX_EXPORTER_ABI_MAJOR, LJX_EXPORTER_ABI_MINOR, LJX_EXPORTER_DESCRIPTOR_V1_SYMBOL, LjxAbiString, LjxExporterDescriptorV1};
 
 const LJ_INGEST_ABI_MAJOR: u32 = 1;
-const LJ_INGEST_ABI_MINOR: u32 = 0;
+const LJ_INGEST_ABI_MINOR: u32 = 1;
 const LJ_INGEST_DESCRIPTOR_SYMBOL: &[u8] = b"lj_ingest_descriptor_v1\0";
 
 #[repr(C)]
@@ -241,6 +241,7 @@ fn is_shared_library(path: &Path) -> bool {
 struct IngestDescriptor {
     name: String,
     display_name: String,
+    supported_signals: u32,
 }
 
 struct ExporterDescriptor {
@@ -295,7 +296,9 @@ fn read_ingest_descriptor(path: &Path) -> std::result::Result<IngestDescriptor, 
         return Err(format!("ingest plugin {} returned invalid name `{name}`", path.display()));
     }
     let display_name = read_optional_c_string(descriptor.display_name).unwrap_or_else(|| name.clone());
-    Ok(IngestDescriptor { name, display_name })
+    let raw_signals = (descriptor.reserved[0] & 0xFFFF_FFFF) as u32;
+    let supported_signals = if raw_signals == 0 { LJ_INGEST_SIGNAL_LOGS } else { raw_signals };
+    Ok(IngestDescriptor { name, display_name, supported_signals })
 }
 
 fn read_c_string(ptr: *const c_char, label: &str, path: &Path) -> std::result::Result<String, String> {
@@ -447,6 +450,17 @@ fn push_unique_path(roots: &mut Vec<PathBuf>, path: PathBuf) {
 
 // ── C ABI types mirroring liblogjet.h ───────────────────────────────────────
 
+// Legacy log-only signal mask (used when reserved[0] == 0 for old plugins).
+const LJ_INGEST_SIGNAL_LOGS: u32 = 1 << 0;
+const LJ_INGEST_SIGNAL_METRICS: u32 = 1 << 1;
+const LJ_INGEST_SIGNAL_TRACES: u32 = 1 << 2;
+const LJ_INGEST_SIGNAL_EVENTS: u32 = 1 << 3;
+
+const LJ_INGEST_RECORD_TYPE_LOGS: u32 = 1;
+const LJ_INGEST_RECORD_TYPE_METRICS: u32 = 2;
+const LJ_INGEST_RECORD_TYPE_TRACES: u32 = 3;
+const LJ_INGEST_RECORD_TYPE_EVENTS: u32 = 4;
+
 #[allow(dead_code)]
 const LJ_ATTR_STRING: i32 = 0;
 const LJ_ATTR_INT: i32 = 1;
@@ -477,6 +491,18 @@ struct LjLogRecord {
     scope_attrs_len: usize,
 }
 
+/// Generic record delivered by multi-signal plugins (pre-encoded OTLP payload).
+#[repr(C)]
+struct LjIngestRecordV1 {
+    struct_size: u32,
+    record_type: u32,        // LJ_INGEST_RECORD_TYPE_*
+    timestamp_unix_ns: u64,
+    payload: *const u8,      // pre-encoded OTLP protobuf bytes
+    payload_len: usize,
+    flags: u32,
+    reserved: [u64; 4],
+}
+
 /// Opaque plugin context. We never dereference it — just pass the pointer.
 enum LjIngestPlugin {}
 
@@ -486,6 +512,8 @@ type FeedFn = unsafe extern "C" fn(*mut LjIngestPlugin, *const u8, usize) -> c_i
 type FetchFn = unsafe extern "C" fn(*mut LjIngestPlugin) -> c_int;
 type FreeFn = unsafe extern "C" fn(*mut LjIngestPlugin);
 type RecordCallback = unsafe extern "C" fn(*mut c_void, *const LjLogRecord);
+type GenericRecordCallback = unsafe extern "C" fn(*mut c_void, *const LjIngestRecordV1);
+type SetGenericCallbackFn = unsafe extern "C" fn(*mut LjIngestPlugin, GenericRecordCallback, *mut c_void);
 
 // ── Plugin handle ───────────────────────────────────────────────────────────
 
@@ -498,6 +526,9 @@ struct PluginHandle {
     /// Active-source plugins export `lj_ingest_fetch`. If present, ljd calls
     /// it instead of accepting TCP connections and calling `lj_ingest_feed`.
     fetch: Option<FetchFn>,
+    /// Multi-signal plugins export `lj_ingest_set_generic_callback`. If
+    /// present, ljd calls it instead of `lj_ingest_set_callback`.
+    set_generic_callback: Option<SetGenericCallbackFn>,
     free: FreeFn,
 }
 
@@ -516,10 +547,20 @@ impl PluginHandle {
             let feed: libloading::Symbol<FeedFn> =
                 lib.get(b"lj_ingest_feed\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_feed: {err}")))?;
             let fetch: Option<FetchFn> = lib.get::<FetchFn>(b"lj_ingest_fetch\0").ok().map(|sym| *sym);
+            let set_generic_callback: Option<SetGenericCallbackFn> =
+                lib.get::<SetGenericCallbackFn>(b"lj_ingest_set_generic_callback\0").ok().map(|sym| *sym);
             let free: libloading::Symbol<FreeFn> =
                 lib.get(b"lj_ingest_free\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_free: {err}")))?;
 
-            Ok(Self { create: *create, set_callback: *set_callback, feed: *feed, fetch, free: *free, _lib: lib })
+            Ok(Self {
+                create: *create,
+                set_callback: *set_callback,
+                feed: *feed,
+                fetch,
+                set_generic_callback,
+                free: *free,
+                _lib: lib,
+            })
         }
     }
 
