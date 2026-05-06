@@ -20,10 +20,23 @@ extern "C" {
 #define LJ_ATTR_INT 1
 #define LJ_ATTR_ARRAY 2
 
+// Ingest plugin signal bitmask (in descriptor reserved[0], ABI >= 1.1).
+#define LJ_INGEST_SIGNAL_LOGS    (1u << 0)
+#define LJ_INGEST_SIGNAL_METRICS (1u << 1)
+#define LJ_INGEST_SIGNAL_TRACES  (1u << 2)
+#define LJ_INGEST_SIGNAL_EVENTS  (1u << 3)
+
+// Generic ingest record type enum (lj_ingest_record_v1.record_type).
+#define LJ_INGEST_RECORD_TYPE_LOGS    1u
+#define LJ_INGEST_RECORD_TYPE_METRICS 2u
+#define LJ_INGEST_RECORD_TYPE_TRACES  3u
+#define LJ_INGEST_RECORD_TYPE_EVENTS  4u
+
 typedef struct lj_logger lj_logger;
 
 typedef struct lj_ingest_plugin lj_ingest_plugin;
 typedef void (*lj_record_callback)(void *user, const struct lj_log_record *record);
+typedef void (*lj_generic_record_callback)(void *user, const struct lj_ingest_record_v1 *record);
 
 #ifdef __cplusplus
 struct lj_attribute {
@@ -101,6 +114,43 @@ typedef struct lj_log_record {
 } lj_log_record;
 #endif
 
+#ifdef __cplusplus
+struct lj_ingest_record_v1 {
+    uint32_t struct_size;
+    uint32_t record_type;
+    uint64_t timestamp_unix_ns;
+    const uint8_t *payload;
+    size_t payload_len;
+    uint32_t flags;
+    uint64_t reserved[4];
+
+    constexpr lj_ingest_record_v1(
+        uint32_t sz = 0,
+        uint32_t rt = LJ_INGEST_RECORD_TYPE_LOGS,
+        uint64_t ts = 0,
+        const uint8_t *p = nullptr,
+        size_t pl = 0,
+        uint32_t f = 0)
+        : struct_size(sz),
+          record_type(rt),
+          timestamp_unix_ns(ts),
+          payload(p),
+          payload_len(pl),
+          flags(f),
+          reserved{0, 0, 0, 0} {}
+};
+#else
+typedef struct lj_ingest_record_v1 {
+    uint32_t struct_size;
+    uint32_t record_type;
+    uint64_t timestamp_unix_ns;
+    const uint8_t *payload;
+    size_t payload_len;
+    uint32_t flags;
+    uint64_t reserved[4];
+} lj_ingest_record_v1;
+#endif
+
 const char *lj_version(void);
 const char *lj_error_message(void);
 lj_logger *lj_logger_new_http(const char *endpoint, const char *service_name, uint64_t timeout_ms);
@@ -110,6 +160,7 @@ void lj_logger_free(lj_logger *logger);
 
 lj_ingest_plugin *lj_ingest_create(void);
 void lj_ingest_set_callback(lj_ingest_plugin *ctx, lj_record_callback cb, void *user);
+void lj_ingest_set_generic_callback(lj_ingest_plugin *ctx, lj_generic_record_callback cb, void *user);
 int lj_ingest_feed(lj_ingest_plugin *ctx, const uint8_t *data, size_t len);
 int lj_ingest_fetch(lj_ingest_plugin *ctx);
 void lj_ingest_free(lj_ingest_plugin *ctx);

@@ -18,7 +18,7 @@ use crate::protocol::WireRecord;
 use liblogjet::export::{LJX_EXPORTER_ABI_MAJOR, LJX_EXPORTER_ABI_MINOR, LJX_EXPORTER_DESCRIPTOR_V1_SYMBOL, LjxAbiString, LjxExporterDescriptorV1};
 
 const LJ_INGEST_ABI_MAJOR: u32 = 1;
-const LJ_INGEST_ABI_MINOR: u32 = 0;
+const LJ_INGEST_ABI_MINOR: u32 = 1;
 const LJ_INGEST_DESCRIPTOR_SYMBOL: &[u8] = b"lj_ingest_descriptor_v1\0";
 
 #[repr(C)]
@@ -241,6 +241,8 @@ fn is_shared_library(path: &Path) -> bool {
 struct IngestDescriptor {
     name: String,
     display_name: String,
+    #[allow(dead_code)]
+    supported_signals: u32,
 }
 
 struct ExporterDescriptor {
@@ -295,7 +297,9 @@ fn read_ingest_descriptor(path: &Path) -> std::result::Result<IngestDescriptor, 
         return Err(format!("ingest plugin {} returned invalid name `{name}`", path.display()));
     }
     let display_name = read_optional_c_string(descriptor.display_name).unwrap_or_else(|| name.clone());
-    Ok(IngestDescriptor { name, display_name })
+    let raw_signals = (descriptor.reserved[0] & 0xFFFF_FFFF) as u32;
+    let supported_signals = if raw_signals == 0 { LJ_INGEST_SIGNAL_LOGS } else { raw_signals };
+    Ok(IngestDescriptor { name, display_name, supported_signals })
 }
 
 fn read_c_string(ptr: *const c_char, label: &str, path: &Path) -> std::result::Result<String, String> {
@@ -447,6 +451,21 @@ fn push_unique_path(roots: &mut Vec<PathBuf>, path: PathBuf) {
 
 // ── C ABI types mirroring liblogjet.h ───────────────────────────────────────
 
+// Legacy log-only signal mask (used when reserved[0] == 0 for old plugins).
+#[allow(dead_code)]
+const LJ_INGEST_SIGNAL_LOGS: u32 = 1 << 0;
+#[allow(dead_code)]
+const LJ_INGEST_SIGNAL_METRICS: u32 = 1 << 1;
+#[allow(dead_code)]
+const LJ_INGEST_SIGNAL_TRACES: u32 = 1 << 2;
+#[allow(dead_code)]
+const LJ_INGEST_SIGNAL_EVENTS: u32 = 1 << 3;
+
+const LJ_INGEST_RECORD_TYPE_LOGS: u32 = 1;
+const LJ_INGEST_RECORD_TYPE_METRICS: u32 = 2;
+const LJ_INGEST_RECORD_TYPE_TRACES: u32 = 3;
+const LJ_INGEST_RECORD_TYPE_EVENTS: u32 = 4;
+
 #[allow(dead_code)]
 const LJ_ATTR_STRING: i32 = 0;
 const LJ_ATTR_INT: i32 = 1;
@@ -477,6 +496,18 @@ struct LjLogRecord {
     scope_attrs_len: usize,
 }
 
+/// Generic record delivered by multi-signal plugins (pre-encoded OTLP payload).
+#[repr(C)]
+struct LjIngestRecordV1 {
+    struct_size: u32,
+    record_type: u32,        // LJ_INGEST_RECORD_TYPE_*
+    timestamp_unix_ns: u64,
+    payload: *const u8,      // pre-encoded OTLP protobuf bytes
+    payload_len: usize,
+    flags: u32,
+    reserved: [u64; 4],
+}
+
 /// Opaque plugin context. We never dereference it — just pass the pointer.
 enum LjIngestPlugin {}
 
@@ -486,6 +517,8 @@ type FeedFn = unsafe extern "C" fn(*mut LjIngestPlugin, *const u8, usize) -> c_i
 type FetchFn = unsafe extern "C" fn(*mut LjIngestPlugin) -> c_int;
 type FreeFn = unsafe extern "C" fn(*mut LjIngestPlugin);
 type RecordCallback = unsafe extern "C" fn(*mut c_void, *const LjLogRecord);
+type GenericRecordCallback = unsafe extern "C" fn(*mut c_void, *const LjIngestRecordV1);
+type SetGenericCallbackFn = unsafe extern "C" fn(*mut LjIngestPlugin, GenericRecordCallback, *mut c_void);
 
 // ── Plugin handle ───────────────────────────────────────────────────────────
 
@@ -498,6 +531,9 @@ struct PluginHandle {
     /// Active-source plugins export `lj_ingest_fetch`. If present, ljd calls
     /// it instead of accepting TCP connections and calling `lj_ingest_feed`.
     fetch: Option<FetchFn>,
+    /// Multi-signal plugins export `lj_ingest_set_generic_callback`. If
+    /// present, ljd calls it instead of `lj_ingest_set_callback`.
+    set_generic_callback: Option<SetGenericCallbackFn>,
     free: FreeFn,
 }
 
@@ -516,10 +552,20 @@ impl PluginHandle {
             let feed: libloading::Symbol<FeedFn> =
                 lib.get(b"lj_ingest_feed\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_feed: {err}")))?;
             let fetch: Option<FetchFn> = lib.get::<FetchFn>(b"lj_ingest_fetch\0").ok().map(|sym| *sym);
+            let set_generic_callback: Option<SetGenericCallbackFn> =
+                lib.get::<SetGenericCallbackFn>(b"lj_ingest_set_generic_callback\0").ok().map(|sym| *sym);
             let free: libloading::Symbol<FreeFn> =
                 lib.get(b"lj_ingest_free\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_free: {err}")))?;
 
-            Ok(Self { create: *create, set_callback: *set_callback, feed: *feed, fetch, free: *free, _lib: lib })
+            Ok(Self {
+                create: *create,
+                set_callback: *set_callback,
+                feed: *feed,
+                fetch,
+                set_generic_callback,
+                free: *free,
+                _lib: lib,
+            })
         }
     }
 
@@ -581,6 +627,46 @@ unsafe extern "C" fn on_record(user: *mut c_void, record: *const LjLogRecord) {
     });
 
     let wire = WireRecord { record_type: logjet::RecordType::Logs, seq: ctx.next_seq.fetch_add(1, Ordering::Relaxed), ts_unix_ns: ts, payload };
+
+    if let Err(err) = super::daemon::append_to_spool(&ctx.spool, wire) {
+        eprintln!("ljd plugin callback spool error: {err}");
+    }
+}
+
+/// The C callback invoked by the plugin for each generic (multi-signal) record.
+///
+/// # Safety
+///
+/// `user` must be a valid `*mut CallbackCtx`. `record` must be a valid
+/// `*const LjIngestRecordV1` with payload pointer valid for the call duration.
+unsafe extern "C" fn on_generic_record(user: *mut c_void, record: *const LjIngestRecordV1) {
+    let ctx = unsafe { &*(user as *const CallbackCtx) };
+    let rec = unsafe { &*record };
+
+    let record_type = match rec.record_type {
+        LJ_INGEST_RECORD_TYPE_LOGS => logjet::RecordType::Logs,
+        LJ_INGEST_RECORD_TYPE_METRICS => logjet::RecordType::Metrics,
+        LJ_INGEST_RECORD_TYPE_TRACES => logjet::RecordType::Traces,
+        LJ_INGEST_RECORD_TYPE_EVENTS => logjet::RecordType::Events,
+        _ => {
+            eprintln!("ljd plugin callback unknown record type {}, defaulting to logs", rec.record_type);
+            logjet::RecordType::Logs
+        }
+    };
+
+    let payload = if rec.payload.is_null() || rec.payload_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(rec.payload, rec.payload_len) }.to_vec()
+    };
+
+    let ts = if rec.timestamp_unix_ns != 0 {
+        rec.timestamp_unix_ns
+    } else {
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
+    };
+
+    let wire = WireRecord { record_type, seq: ctx.next_seq.fetch_add(1, Ordering::Relaxed), ts_unix_ns: ts, payload };
 
     if let Err(err) = super::daemon::append_to_spool(&ctx.spool, wire) {
         eprintln!("ljd plugin callback spool error: {err}");
@@ -741,6 +827,9 @@ fn handle_plugin_client(
         return Err(io::Error::other("lj_ingest_create returned NULL"));
     }
     unsafe { (handle.set_callback)(plugin_ctx, on_record, ctx_ptr) };
+    if let Some(set_generic) = handle.set_generic_callback {
+        unsafe { set_generic(plugin_ctx, on_generic_record, ctx_ptr) };
+    }
 
     let mut reader = BufReader::new(stream);
     let mut buf = [0u8; 0x10_000];
@@ -775,6 +864,9 @@ fn run_active_plugin(handle: &PluginHandle, spool: Arc<super::daemon::SharedSpoo
         return Err(io::Error::other("lj_ingest_create returned NULL"));
     }
     unsafe { (handle.set_callback)(plugin_ctx, on_record, ctx_ptr) };
+    if let Some(set_generic) = handle.set_generic_callback {
+        unsafe { set_generic(plugin_ctx, on_generic_record, ctx_ptr) };
+    }
 
     let rc = unsafe { fetch(plugin_ctx) };
 

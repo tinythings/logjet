@@ -38,6 +38,8 @@ pub const LJX_RECORD_TYPE_LOGS: u32 = 1;
 pub const LJX_RECORD_TYPE_METRICS: u32 = 2;
 /// Record contains traces.
 pub const LJX_RECORD_TYPE_TRACES: u32 = 3;
+/// Record contains events.
+pub const LJX_RECORD_TYPE_EVENTS: u32 = 4;
 
 /// Payload is opaque bytes.
 pub const LJX_PAYLOAD_KIND_OPAQUE: u32 = 0;

@@ -6,6 +6,7 @@ pub enum RecordType {
     Logs = 1,
     Metrics = 2,
     Traces = 3,
+    Events = 4,
 }
 
 impl RecordType {
@@ -14,6 +15,7 @@ impl RecordType {
             1 => Ok(Self::Logs),
             2 => Ok(Self::Metrics),
             3 => Ok(Self::Traces),
+            4 => Ok(Self::Events),
             other => Err(Error::InvalidRecordType(other)),
         }
     }

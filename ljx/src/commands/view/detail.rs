@@ -607,6 +607,7 @@ fn record_kind_label(record_type: RecordType) -> &'static str {
         RecordType::Logs => "logs",
         RecordType::Metrics => "metrics",
         RecordType::Traces => "traces",
+        RecordType::Events => "events",
     }
 }
 
