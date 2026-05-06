@@ -199,9 +199,8 @@ fn make_trace_id() -> [u8; 16] {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos()
-        .to_le_bytes();
-    id[..8].copy_from_slice(&ts);
+        .as_nanos() as u64;
+    id[..8].copy_from_slice(&ts.to_le_bytes());
     id[8..16].copy_from_slice(&(std::process::id() as u64).to_le_bytes());
     id
 }

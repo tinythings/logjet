@@ -110,10 +110,10 @@ pub extern "C" fn lj_ingest_descriptor_v1() -> *const LjIngestDescriptorV1 {
 // ── Plugin context ──────────────────────────────────────────────────────────
 
 pub struct PerfettoPlugin {
-    legacy_callback: Option<RecordCallback>,
-    legacy_user: *mut c_void,
-    generic_callback: Option<GenericRecordCallback>,
-    generic_user: *mut c_void,
+    pub(crate) legacy_callback: Option<RecordCallback>,
+    pub(crate) legacy_user: *mut c_void,
+    pub(crate) generic_callback: Option<GenericRecordCallback>,
+    pub(crate) generic_user: *mut c_void,
 }
 
 // ── Exported C ABI ──────────────────────────────────────────────────────────
