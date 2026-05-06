@@ -194,3 +194,71 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
 
     super::sqlite_reader::PerfettoDb { conn }
 }
+
+// ── timestamp tests ─────────────────────────────────────────────────────────
+
+fn make_snapshots(pairs: &[(i64, i64)]) -> Vec<crate::sqlite_reader::PerfettoClockSnapshot> {
+    pairs.iter().map(|(ts, cv)| crate::sqlite_reader::PerfettoClockSnapshot { ts: *ts, clock_value: *cv }).collect()
+}
+
+#[test]
+fn timestamp_to_realtime_interpolates_between_snapshots() {
+    let snaps = make_snapshots(&[(0, 1_700_000_000_000_000_000), (10000, 1_700_000_000_000_010_000)]);
+    let conv = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+    let result = conv.to_realtime(5000).unwrap();
+    assert_eq!(result, Some(1_700_000_000_000_005_000));
+}
+
+#[test]
+fn timestamp_to_realtime_exact_snapshot() {
+    let snaps = make_snapshots(&[(0, 1_700_000_000_000_000_000), (10000, 1_700_000_000_000_010_000)]);
+    let conv = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+    let result = conv.to_realtime(0).unwrap();
+    assert_eq!(result, Some(1_700_000_000_000_000_000));
+}
+
+#[test]
+fn timestamp_to_realtime_after_last_snapshot() {
+    let snaps = make_snapshots(&[(0, 1_700_000_000_000_000_000), (10000, 1_700_000_000_000_010_000)]);
+    let conv = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+    let result = conv.to_realtime(20000).unwrap();
+    assert_eq!(result, Some(1_700_000_000_000_020_000));
+}
+
+#[test]
+fn timestamp_to_realtime_before_first_snapshot_best_effort() {
+    let snaps = make_snapshots(&[(1000, 1_700_000_000_001_000_000)]);
+    let conv = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+    let result = conv.to_realtime(500).unwrap();
+    assert_eq!(result, Some(1_700_000_000_000_999_500)); // first.clock_value - (first.ts - trace_ts)
+}
+
+#[test]
+fn timestamp_to_realtime_before_first_snapshot_require_fails() {
+    let snaps = make_snapshots(&[(1000, 1_700_000_000_001_000_000)]);
+    let conv = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::RequireRealtime);
+    assert!(conv.to_realtime(500).is_err());
+}
+
+#[test]
+fn timestamp_to_realtime_empty_snapshots_best_effort_returns_none() {
+    let conv = timestamp::TimestampConverter::new(vec![], timestamp::TimestampPolicy::BestEffort);
+    let result = conv.to_realtime(500).unwrap();
+    assert_eq!(result, None);
+}
+
+#[test]
+fn timestamp_to_realtime_empty_snapshots_require_fails() {
+    let conv = timestamp::TimestampConverter::new(vec![], timestamp::TimestampPolicy::RequireRealtime);
+    assert!(conv.to_realtime(500).is_err());
+}
+
+#[test]
+fn timestamp_has_realtime() {
+    let conv = timestamp::TimestampConverter::new(vec![], timestamp::TimestampPolicy::BestEffort);
+    assert!(!conv.has_realtime());
+
+    let snaps = make_snapshots(&[(0, 1_700_000_000_000_000_000)]);
+    let conv = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+    assert!(conv.has_realtime());
+}
