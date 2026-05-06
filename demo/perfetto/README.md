@@ -1,11 +1,24 @@
 # Perfetto demos
 
-These demos assume trace_processor and tracing tools are installed. Build them from the bundled Perfetto source:
+## Building Perfetto
 
 ```bash
-cd perfetto
-gn gen out/linux --args='is_debug=false'
-ninja -C out/linux trace_processor_shell traced traced_probes tracebox
+# From workspace root — downloads deps and builds all needed tools.
+./scripts/build-perfetto.sh
 ```
 
-Then add `$PWD/out/linux` to PATH or set env vars (see each demo).
+Or pass a custom source path:
+```bash
+./scripts/build-perfetto.sh /path/to/perfetto
+```
+
+The script installs missing system packages (git, python3, curl, tar), downloads
+hermetic GN/Ninja/clang toolchain, and builds `trace_processor_shell`, `traced`,
+`traced_probes`, and `tracebox` into `perfetto/out/linux_release/`.
+
+Add to PATH or set `LJD_PERFETTO_TRACE_PROCESSOR` to point at
+`trace_processor_shell`.
+
+## Demos
+
+- [linux-data-record](linux-data-record/) — capture and inspect a system trace

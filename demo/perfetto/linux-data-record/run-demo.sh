@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR="$SCRIPT_DIR/../../.."
-PERFETTO_OUT="${PERFETTO_OUT:-$ROOT_DIR/perfetto/out/linux}"
+PERFETTO_OUT="${PERFETTO_OUT:-$ROOT_DIR/perfetto/out/linux_release}"
 PERFETTO_TRACE_OUT="${PERFETTO_TRACE_OUT:-$SCRIPT_DIR/trace.pftrace}"
 
 TRACED="$PERFETTO_OUT/traced"
