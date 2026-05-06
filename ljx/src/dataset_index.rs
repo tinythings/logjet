@@ -525,6 +525,7 @@ fn record_type_bit(kind: RecordType) -> u8 {
         RecordType::Logs => 1,
         RecordType::Metrics => 2,
         RecordType::Traces => 4,
+        RecordType::Events => 8,
     }
 }
 

@@ -275,6 +275,7 @@ impl LoadedExporter {
             RecordType::Logs => LJX_EXPORT_CAP_RECORD_LOGS,
             RecordType::Metrics => LJX_EXPORT_CAP_RECORD_METRICS,
             RecordType::Traces => LJX_EXPORT_CAP_RECORD_TRACES,
+            RecordType::Events => LJX_EXPORT_CAP_RECORD_LOGS,
         };
         if self.capabilities & record_flag == 0 {
             return Err(Error::Usage(format!(
@@ -560,6 +561,7 @@ fn abi_record_type(value: RecordType) -> u32 {
         RecordType::Logs => liblogjet::export::LJX_RECORD_TYPE_LOGS,
         RecordType::Metrics => liblogjet::export::LJX_RECORD_TYPE_METRICS,
         RecordType::Traces => liblogjet::export::LJX_RECORD_TYPE_TRACES,
+        RecordType::Events => liblogjet::export::LJX_RECORD_TYPE_EVENTS,
     }
 }
 
@@ -576,6 +578,7 @@ fn record_kind_label(record_type: RecordType) -> &'static str {
         RecordType::Logs => "logs",
         RecordType::Metrics => "metrics",
         RecordType::Traces => "traces",
+        RecordType::Events => "events",
     }
 }
 
