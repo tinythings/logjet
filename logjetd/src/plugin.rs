@@ -241,6 +241,7 @@ fn is_shared_library(path: &Path) -> bool {
 struct IngestDescriptor {
     name: String,
     display_name: String,
+    #[allow(dead_code)]
     supported_signals: u32,
 }
 
@@ -451,9 +452,13 @@ fn push_unique_path(roots: &mut Vec<PathBuf>, path: PathBuf) {
 // ── C ABI types mirroring liblogjet.h ───────────────────────────────────────
 
 // Legacy log-only signal mask (used when reserved[0] == 0 for old plugins).
+#[allow(dead_code)]
 const LJ_INGEST_SIGNAL_LOGS: u32 = 1 << 0;
+#[allow(dead_code)]
 const LJ_INGEST_SIGNAL_METRICS: u32 = 1 << 1;
+#[allow(dead_code)]
 const LJ_INGEST_SIGNAL_TRACES: u32 = 1 << 2;
+#[allow(dead_code)]
 const LJ_INGEST_SIGNAL_EVENTS: u32 = 1 << 3;
 
 const LJ_INGEST_RECORD_TYPE_LOGS: u32 = 1;
