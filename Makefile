@@ -27,8 +27,8 @@ test: setup
 	cargo nextest run $(CORE_WORKSPACE)
 
 test-unit: setup
-	cargo build -p ljx-parquet-exporter
-	cargo nextest run -p logjet --lib -p ljd --bins -p ljx --bin ljx
+	cargo build -p ljx-parquet-exporter -p lj-perfetto-ingest
+	cargo nextest run -p logjet --lib -p ljd --bins -p ljx --bin ljx -p lj-perfetto-ingest
 
 test-integration: setup
 	cargo build -p ljd -p ljx -p ljx-parquet-exporter

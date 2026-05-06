@@ -72,7 +72,7 @@ pub struct PerfettoClockSnapshot {
 // ── Database reader ──────────────────────────────────────────────────────────
 
 pub struct PerfettoDb {
-    conn: rusqlite::Connection,
+    pub(crate) conn: rusqlite::Connection,
 }
 
 impl PerfettoDb {
