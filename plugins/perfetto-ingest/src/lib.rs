@@ -73,9 +73,13 @@ const LJ_INGEST_SIGNAL_METRICS: u32 = 1 << 1;
 const LJ_INGEST_SIGNAL_TRACES: u32 = 1 << 2;
 const LJ_INGEST_SIGNAL_EVENTS: u32 = 1 << 3;
 
+#[allow(dead_code)]
 const LJ_INGEST_RECORD_TYPE_LOGS: u32 = 1;
+#[allow(dead_code)]
 const LJ_INGEST_RECORD_TYPE_METRICS: u32 = 2;
+#[allow(dead_code)]
 const LJ_INGEST_RECORD_TYPE_TRACES: u32 = 3;
+#[allow(dead_code)]
 const LJ_INGEST_RECORD_TYPE_EVENTS: u32 = 4;
 
 // ── Descriptor ──────────────────────────────────────────────────────────────
@@ -195,6 +199,7 @@ pub unsafe extern "C" fn lj_ingest_free(ctx: *mut PerfettoPlugin) {
 /// # Safety
 ///
 /// `ctx` must have a generic callback set.
+#[allow(dead_code)]
 pub(crate) unsafe fn emit_generic(
     ctx: &PerfettoPlugin,
     record_type: u32,
