@@ -1,6 +1,10 @@
 //! Unit tests for the perfetto-ingest plugin.
 
 use super::*;
+use prost::Message;
+
+/// Captured emitted record: (record_type, timestamp_unix_ns, payload).
+type EmittedRecord = (u32, u64, Vec<u8>);
 
 // ── sqlite_reader tests ─────────────────────────────────────────────────────
 
@@ -261,4 +265,223 @@ fn timestamp_has_realtime() {
     let snaps = make_snapshots(&[(0, 1_700_000_000_000_000_000)]);
     let conv = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
     assert!(conv.has_realtime());
+}
+
+// ── trace_mapper tests ──────────────────────────────────────────────────────
+
+#[test]
+fn trace_mapper_produces_spans_from_slices() {
+    let db = test_db();
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot {
+        ts: 0,
+        clock_value: 1_700_000_000_000_000_000,
+    }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+    let emitted = run_trace_mapper(&db, &converter);
+
+    assert!(!emitted.is_empty(), "expected at least one span batch");
+    assert!(emitted[0].1 > 0, "expected valid record_type");
+}
+
+#[test]
+fn trace_mapper_skips_slices_without_realtime_best_effort() {
+    let db = test_db();
+    let converter = timestamp::TimestampConverter::new(vec![], timestamp::TimestampPolicy::BestEffort);
+    let emitted = run_trace_mapper(&db, &converter);
+
+    // BestEffort with no snapshots: slices should be skipped.
+    assert!(emitted.is_empty());
+}
+
+#[test]
+fn trace_mapper_fails_without_realtime_require() {
+    let db = test_db();
+    let converter = timestamp::TimestampConverter::new(vec![], timestamp::TimestampPolicy::RequireRealtime);
+    let result = run_trace_mapper_result(&db, &converter);
+    assert!(result.is_err());
+}
+
+// ── metric_mapper tests ─────────────────────────────────────────────────────
+
+#[test]
+fn metric_mapper_encodes_scalar_metrics() {
+    let metrics = vec![crate::metrics_reader::PerfettoMetric {
+        name: "test_metric".to_string(),
+        description: Some("a test metric".to_string()),
+        unit: Some("ms".to_string()),
+        scalar_value: Some(42.0),
+        labels: vec![("cpu".to_string(), "0".to_string())],
+        children: vec![],
+    }];
+
+    let emitted = run_metric_mapper(&metrics);
+    assert!(!emitted.is_empty());
+}
+
+#[test]
+fn metric_mapper_handles_empty_metrics() {
+    let emitted = run_metric_mapper(&[]);
+    assert!(emitted.is_empty());
+}
+
+#[test]
+fn metric_mapper_flattens_nested_metrics() {
+    let metrics = vec![crate::metrics_reader::PerfettoMetric {
+        name: "parent".to_string(),
+        description: None,
+        unit: None,
+        scalar_value: Some(10.0),
+        labels: vec![],
+        children: vec![crate::metrics_reader::PerfettoMetric {
+            name: "child".to_string(),
+            description: None,
+            unit: None,
+            scalar_value: Some(5.0),
+            labels: vec![],
+            children: vec![],
+        }],
+    }];
+
+    let emitted = run_metric_mapper(&metrics);
+    let payload = &emitted[0].2;
+    let req = opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest::decode(payload.as_slice())
+        .unwrap();
+    let names: Vec<&str> = req.resource_metrics[0].scope_metrics[0]
+        .metrics
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert!(names.contains(&"parent"));
+    assert!(names.contains(&"parent.child"));
+}
+
+// ── log_mapper tests ────────────────────────────────────────────────────────
+
+#[test]
+fn log_mapper_produces_summary_log() {
+    let db = test_db();
+    let emitted = run_log_mapper(&db);
+    assert!(!emitted.is_empty());
+    assert_eq!(emitted[0].0, crate::LJ_INGEST_RECORD_TYPE_LOGS);
+
+    let req = opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest::decode(emitted[0].2.as_slice())
+        .unwrap();
+    let records = &req.resource_logs[0].scope_logs[0].log_records;
+    assert_eq!(records.len(), 1);
+    // Body should mention slice count.
+    if let Some(body) = &records[0].body
+        && let Some(val) = &body.value
+            && let opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s) = val {
+                assert!(s.contains("3 slices"), "expected body to mention slice count, got: {s}");
+            }
+}
+
+// ── run_pipeline integration test ─────────────────────────────────────────────
+
+#[test]
+fn run_pipeline_integration_with_sqlite() {
+    // This test exercises the pipeline end-to-end using a pre-made SQLite DB.
+    // It does NOT require trace_processor — we export the in-memory DB to a
+    // temp file and feed the pipeline directly via a manual path.
+
+    let tmp = temp_sqlite_file();
+    let emitted = run_core_pipeline(&tmp);
+
+    assert!(!emitted.is_empty());
+
+    let has_logs = emitted.iter().any(|(rt, _, _)| *rt == crate::LJ_INGEST_RECORD_TYPE_LOGS);
+    assert!(has_logs, "expected at least one log record from summary");
+
+    let _ = std::fs::remove_file(&tmp);
+}
+
+// ── test helpers for mapper tests ───────────────────────────────────────────
+
+fn run_trace_mapper(
+    db: &super::sqlite_reader::PerfettoDb,
+    converter: &timestamp::TimestampConverter,
+) -> Vec<EmittedRecord> {
+    run_trace_mapper_result(db, converter).unwrap()
+}
+
+fn run_trace_mapper_result(
+    db: &super::sqlite_reader::PerfettoDb,
+    converter: &timestamp::TimestampConverter,
+) -> Result<Vec<EmittedRecord>, String> {
+    let plugin = dummy_plugin(dummy_emit);
+    trace_mapper::map_traces(db, converter, super::emit_generic, &plugin)?;
+    Ok(take_records(&plugin))
+}
+
+fn run_metric_mapper(metrics: &[crate::metrics_reader::PerfettoMetric]) -> Vec<EmittedRecord> {
+    let plugin = dummy_plugin(dummy_emit);
+    let converter = timestamp::TimestampConverter::new(vec![], timestamp::TimestampPolicy::BestEffort);
+    metric_mapper::map_metrics(metrics, &converter, super::emit_generic, &plugin).unwrap();
+    take_records(&plugin)
+}
+
+fn run_log_mapper(db: &super::sqlite_reader::PerfettoDb) -> Vec<EmittedRecord> {
+    let plugin = dummy_plugin(dummy_emit);
+    log_mapper::map_logs(db, super::emit_generic, &plugin).unwrap();
+    take_records(&plugin)
+}
+
+fn run_core_pipeline(sqlite_path: &std::path::Path) -> Vec<EmittedRecord> {
+    let plugin = dummy_plugin(dummy_emit);
+    let db = super::sqlite_reader::PerfettoDb::open(sqlite_path).unwrap();
+    let snaps = db.read_clock_snapshots().unwrap();
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+    let _ = trace_mapper::map_traces(&db, &converter, super::emit_generic, &plugin);
+    let _ = log_mapper::map_logs(&db, super::emit_generic, &plugin);
+    take_records(&plugin)
+}
+
+fn dummy_plugin(cb: super::GenericRecordCallback) -> super::PerfettoPlugin {
+    let records: Box<std::cell::RefCell<Vec<EmittedRecord>>> = Box::new(std::cell::RefCell::new(Vec::new()));
+    let user_ptr = Box::into_raw(records) as *mut std::ffi::c_void;
+
+    super::PerfettoPlugin {
+        legacy_callback: None,
+        legacy_user: std::ptr::null_mut(),
+        generic_callback: Some(cb),
+        generic_user: user_ptr,
+    }
+}
+
+unsafe extern "C" fn dummy_emit(user: *mut std::ffi::c_void, record: *const super::LjIngestRecordV1) {
+    let records = unsafe { &*(user as *const std::cell::RefCell<Vec<EmittedRecord>>) };
+    let rec = unsafe { &*record };
+    let payload = if rec.payload.is_null() || rec.payload_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(rec.payload, rec.payload_len) }.to_vec()
+    };
+    records.borrow_mut().push((rec.record_type, rec.timestamp_unix_ns, payload));
+}
+
+fn take_records(plugin: &super::PerfettoPlugin) -> Vec<EmittedRecord> {
+    if plugin.generic_user.is_null() {
+        return Vec::new();
+    }
+    let records_box = unsafe { Box::from_raw(plugin.generic_user as *mut std::cell::RefCell<Vec<EmittedRecord>>) };
+    let cell = *records_box;
+    cell.into_inner()
+}
+
+fn temp_sqlite_file() -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("perfetto-test-pipeline-{}.sqlite", std::process::id()));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "
+        CREATE TABLE slice (id INTEGER, ts INTEGER, dur INTEGER, name TEXT, parent_id INTEGER, track_id INTEGER, arg_set_id INTEGER, depth INTEGER);
+        CREATE TABLE thread (utid INTEGER, name TEXT, tid INTEGER, upid INTEGER, is_main_thread INTEGER);
+        CREATE TABLE process (upid INTEGER, name TEXT, pid INTEGER);
+        CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
+        INSERT INTO slice VALUES (1, 5000, 3000, 'test', NULL, 10, NULL, 0), (2, 10000, 500, 'child', 1, 10, NULL, 1);
+        INSERT INTO thread VALUES (1, 'main', 100, 1, 1);
+        INSERT INTO process VALUES (1, 'testproc', 1000);
+        INSERT INTO clock_snapshot VALUES (0, 1700000000000000000, 1, 'REALTIME'), (20000, 1700000000000020000, 1, 'REALTIME');
+        ",
+    ).unwrap();
+    path
 }
