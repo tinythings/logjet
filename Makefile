@@ -79,7 +79,6 @@ stats:
 
 setup:
 	@bash scripts/setup-rust.sh
-	@echo "Setup complete."
 
 setup-arm:
 	@rustup target list --installed | grep -qx "$(ARM_TARGET)" || rustup target add "$(ARM_TARGET)"
