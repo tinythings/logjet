@@ -63,7 +63,7 @@ impl TimestampConverter {
                 }
                 TimestampPolicy::BestEffort => {
                     let delta = first.ts - trace_ts;
-                    let realtime = (first.clock_value as i64 - delta).max(0) as u64;
+                    let realtime = (first.clock_value - delta).max(0) as u64;
                     return Ok(Some(realtime));
                 }
             }
@@ -73,7 +73,7 @@ impl TimestampConverter {
             // After last snapshot: extrapolate forwards.
             let last = &self.snapshots[self.snapshots.len() - 1];
             let delta = trace_ts - last.ts;
-            Ok(Some((last.clock_value as i64 + delta).max(0) as u64))
+            Ok(Some((last.clock_value + delta).max(0) as u64))
         } else {
             // Between two snapshots: linear interpolation.
             let prev = &self.snapshots[idx - 1];
@@ -86,8 +86,8 @@ impl TimestampConverter {
                 Ok(Some(prev.clock_value as u64))
             } else {
                 let offset = trace_ts - prev.ts;
-                let realtime = prev.clock_value as i64
-                    + (range_realtime as i64 * offset) / range_ts;
+                let realtime = prev.clock_value
+                    + (range_realtime * offset) / range_ts;
                 Ok(Some(realtime.max(0) as u64))
             }
         }
