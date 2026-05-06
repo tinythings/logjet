@@ -24,37 +24,18 @@ fix: setup
 test: setup
 	cargo build -p ljd -p ljx -p ljx-parquet-exporter
 	cargo build -p otlp-demo --bin otlp-bofh-emitter
-	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run $(CORE_WORKSPACE); \
-	else \
-		echo "cargo-nextest not available, falling back to cargo test $(CORE_WORKSPACE)"; \
-		cargo test $(CORE_WORKSPACE); \
-	fi
+	cargo nextest run $(CORE_WORKSPACE)
 
 test-unit: setup
 	cargo build -p ljx-parquet-exporter
-	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p logjet --lib -p ljd --bins -p ljx --bin ljx; \
-	else \
-		echo "cargo-nextest not available, falling back to cargo test unit-only targets"; \
-		cargo test -p logjet --lib; \
-		cargo test -p ljd --bin ljd; \
-		cargo test -p ljx --bin ljx; \
-	fi
+	cargo nextest run -p logjet --lib -p ljd --bins -p ljx --bin ljx
 
 test-integration: setup
 	cargo build -p ljd -p ljx -p ljx-parquet-exporter
 	cargo build -p otlp-demo --bin otlp-bofh-emitter
-	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p ljd --test bridge_flows; \
-		cargo nextest run -p logjet --test ljx_cli; \
-		cargo nextest run -p logjet --test ljx_export; \
-	else \
-		echo "cargo-nextest not available, falling back to cargo test integration targets"; \
-		cargo test -p ljd --test bridge_flows; \
-		cargo test -p logjet --test ljx_cli; \
-		cargo test -p logjet --test ljx_export; \
-	fi
+	cargo nextest run -p ljd --test bridge_flows
+	cargo nextest run -p logjet --test ljx_cli
+	cargo nextest run -p logjet --test ljx_export
 
 test-abi-matrix: setup
 	bash scripts/test-exporter-abi-matrix.sh
@@ -97,11 +78,8 @@ stats:
 	tokei . --exclude target --exclude .git
 
 setup:
-	@command -v rustc >/dev/null 2>&1 || { echo "rustc not found. Install Rust from https://rustup.rs"; exit 1; }
-	@command -v cargo >/dev/null 2>&1 || { echo "cargo not found. Install Rust from https://rustup.rs"; exit 1; }
-	@command -v rustup >/dev/null 2>&1 || { echo "rustup not found. Install Rust from https://rustup.rs"; exit 1; }
-	@cargo clippy --version >/dev/null 2>&1 || { echo "clippy is missing. Run: rustup component add clippy"; exit 1; }
-	@echo "Rust toolchain looks ready."
+	@bash scripts/setup-rust.sh
+	@echo "Setup complete."
 
 setup-arm:
 	@rustup target list --installed | grep -qx "$(ARM_TARGET)" || rustup target add "$(ARM_TARGET)"
