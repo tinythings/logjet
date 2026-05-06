@@ -1250,6 +1250,15 @@ name = "lj-logcat-ingest"
 version = "0.8.0"
 
 [[package]]
+name = "lj-perfetto-ingest"
+version = "0.8.0"
+dependencies = [
+ "opentelemetry-proto",
+ "prost",
+ "serde_json",
+]
+
+[[package]]
 name = "lj-stress-ingest"
 version = "0.8.0"
 
