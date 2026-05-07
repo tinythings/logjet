@@ -680,7 +680,8 @@ impl ViewApp {
         };
 
         let body_height = filtered_sev.len().max(filtered_svc.len()).max(1) as u16;
-        let popup_h = (body_height + 4).clamp(20, screen.height * 60 / 100);
+        let max_h = (screen.height * 60 / 100).max(20);
+        let popup_h = (body_height + 4).min(max_h);
         let popup_w = (screen.width * 60 / 100).max(40);
         let area = Rect::new(screen.width.saturating_sub(popup_w) / 2, screen.height * 20 / 100, popup_w, popup_h);
         frame.render_widget(Clear, area);
