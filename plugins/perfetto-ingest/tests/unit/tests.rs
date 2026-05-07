@@ -824,3 +824,31 @@ fn temp_sqlite_file() -> std::path::PathBuf {
     ).unwrap();
     path
 }
+
+#[test]
+fn rpc_parse_captured_bytes() {
+    let mut data = std::fs::read("/tmp/rpc-capture/small_sched_slice.bin").unwrap();
+    eprintln!("raw data: {} bytes, first 32: {:02x?}", data.len(), &data[..data.len().min(32)]);
+    if data.first() == Some(&0x0a) {
+        let mut p = 1usize;
+        let len = {
+            let (mut v, mut s) = (0u64, 0u32);
+            loop {
+                let b = data[p];
+                p += 1;
+                v |= ((b & 0x7F) as u64) << s;
+                if b & 0x80 == 0 {
+                    break v;
+                }
+                s += 7;
+            }
+        };
+        eprintln!("frame length varint = {len}");
+        data = data[p..].to_vec();
+    }
+    eprintln!("stripped data: {} bytes, first 16: {:02x?}", data.len(), &data[..data.len().min(16)]);
+    let result = crate::rpc_client::parse_response(&data, None);
+    assert!(result.is_some(), "parse_response returned None for {} bytes", data.len());
+    let qr = result.unwrap();
+    eprintln!("columns={:?} rows={}", qr.column_names, qr.rows.len());
+}
