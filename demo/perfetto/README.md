@@ -22,4 +22,5 @@ Add to PATH or set `LJD_PERFETTO_TRACE_PROCESSOR` to point at
 ## Demos
 
 - [linux-data-record](linux-data-record/) — capture and inspect a system trace
-- [perfetto-to-logjet](perfetto-to-logjet/) — full end-to-end: record ftrace, import via plugin, view in ljx
+- [perfetto-to-logjet](perfetto-to-logjet/) — full end-to-end: record ftrace, import via plugin (SQLite export), view in ljx
+- [perfetto-to-logjet-rpc](perfetto-to-logjet-rpc/) — same but using RPC stdio mode (no temp files)
