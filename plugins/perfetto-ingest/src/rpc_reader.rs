@@ -53,6 +53,7 @@ impl RpcReader {
 
     pub fn read_sched_slices(&mut self) -> std::io::Result<Vec<PerfettoSchedSlice>> {
         let r = self.query("SELECT id, ts, dur, utid, ucpu, end_state FROM sched_slice ORDER BY ts")?;
+        eprintln!("perfetto-rpc: sched_slice query done, {} rows, columns={:?}", r.rows.len(), r.column_names);
         let (id, ts, dur, utid, cpu, es) = (
             Self::col_idx(&r.column_names, "id"),
             Self::col_idx(&r.column_names, "ts"),
@@ -180,7 +181,9 @@ impl RpcReader {
 
     pub fn read_clock_snapshots(&mut self) -> std::io::Result<Vec<PerfettoClockSnapshot>> {
         let r = self.query("SELECT ts, clock_value FROM clock_snapshot WHERE clock_name = 'REALTIME' ORDER BY ts")?;
+        eprintln!("perfetto-rpc: clock_snapshots query done, {} rows", r.rows.len());
         let (ts, cv) = (Self::col_idx(&r.column_names, "ts"), Self::col_idx(&r.column_names, "clock_value"));
+        eprintln!("perfetto-rpc: columns={:?} ts_idx={ts:?} cv_idx={cv:?}", r.column_names);
         Ok(r.rows.iter().map(|row| PerfettoClockSnapshot { ts: i64_val(row, ts), clock_value: i64_val(row, cv) }).collect())
     }
 }

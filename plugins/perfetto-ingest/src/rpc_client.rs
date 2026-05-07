@@ -230,7 +230,7 @@ impl RpcClient {
             .arg(trace_file)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
             .spawn()?;
         let stdin = child.stdin.take().expect("stdin");
         let stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
