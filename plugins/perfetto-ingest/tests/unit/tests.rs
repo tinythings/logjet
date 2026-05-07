@@ -825,30 +825,55 @@ fn temp_sqlite_file() -> std::path::PathBuf {
     path
 }
 
-#[test]
-fn rpc_parse_captured_bytes() {
-    let mut data = std::fs::read("/tmp/rpc-capture/small_sched_slice.bin").unwrap();
-    eprintln!("raw data: {} bytes, first 32: {:02x?}", data.len(), &data[..data.len().min(32)]);
-    if data.first() == Some(&0x0a) {
-        let mut p = 1usize;
-        let len = {
-            let (mut v, mut s) = (0u64, 0u32);
-            loop {
-                let b = data[p];
-                p += 1;
-                v |= ((b & 0x7F) as u64) << s;
-                if b & 0x80 == 0 {
-                    break v;
-                }
-                s += 7;
-            }
-        };
-        eprintln!("frame length varint = {len}");
-        data = data[p..].to_vec();
+fn strip_rpc_frame(data: &[u8]) -> Vec<u8> {
+    if data.first() != Some(&0x0a) {
+        return data.to_vec();
     }
-    eprintln!("stripped data: {} bytes, first 16: {:02x?}", data.len(), &data[..data.len().min(16)]);
-    let result = crate::rpc_client::parse_response(&data, None);
-    assert!(result.is_some(), "parse_response returned None for {} bytes", data.len());
-    let qr = result.unwrap();
-    eprintln!("columns={:?} rows={}", qr.column_names, qr.rows.len());
+    let mut p = 1usize;
+    let _len = {
+        let (mut v, mut s) = (0u64, 0u32);
+        loop {
+            let b = data[p];
+            p += 1;
+            v |= ((b & 0x7F) as u64) << s;
+            if b & 0x80 == 0 {
+                break v;
+            }
+            s += 7;
+        }
+    };
+    data[p..].to_vec()
 }
+
+fn parse_bytes(raw: &[u8]) -> crate::rpc_client::QueryResult {
+    let rpc = strip_rpc_frame(raw);
+    crate::rpc_client::parse_response(&rpc, None).expect("parse_response returned None")
+}
+
+macro_rules! fixture_test {
+    ($name:ident, $file:literal, $cols:expr, $rows:expr, $col_count:expr) => {
+        #[test]
+        fn $name() {
+            let qr = parse_bytes(include_bytes!(concat!("../../tests/fixtures/", $file)));
+            assert_eq!(qr.column_names.as_slice(), $cols);
+            assert_eq!(qr.rows.len(), $rows);
+            if !qr.rows.is_empty() {
+                assert_eq!(qr.rows[0].len(), $col_count);
+            }
+        }
+    };
+}
+
+fixture_test!(rpc_fixture_clock_snapshot, "clock_snapshot.bin", &["ts", "clock_value"], 5, 2);
+fixture_test!(rpc_fixture_sched_slice, "sched_slice.bin", &["id", "ts", "dur", "utid", "ucpu", "end_state"], 5, 6);
+fixture_test!(
+    rpc_fixture_thread_state,
+    "thread_state.bin",
+    &["id", "ts", "dur", "utid", "state", "io_wait", "blocked_function", "waker_utid", "cpu"],
+    5,
+    9
+);
+fixture_test!(rpc_fixture_ftrace_event, "ftrace_event.bin", &["id", "ts", "name", "cpu", "utid"], 5, 5);
+fixture_test!(rpc_fixture_spurious_wakeup, "spurious_wakeup.bin", &["id", "ts", "utid", "waker_utid"], 3, 4);
+fixture_test!(rpc_fixture_process, "process.bin", &["upid", "name", "pid"], 1, 3);
+fixture_test!(rpc_fixture_thread, "thread.bin", &["utid", "name", "tid", "upid", "is_main_thread"], 5, 5);
