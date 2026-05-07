@@ -22,3 +22,4 @@ Add to PATH or set `LJD_PERFETTO_TRACE_PROCESSOR` to point at
 ## Demos
 
 - [linux-data-record](linux-data-record/) — capture and inspect a system trace
+- [perfetto-to-logjet](perfetto-to-logjet/) — full end-to-end: record ftrace, import via plugin, view in ljx

@@ -5,17 +5,25 @@ the trace processor for interactive inspection.
 
 ## Prerequisites
 
-Build the Perfetto tools first (from the workspace root):
+Build the Perfetto tools (from workspace root):
 
 ```bash
-cd perfetto
-gn gen out/linux --args='is_debug=false'
-ninja -C out/linux trace_processor_shell traced traced_probes tracebox
-cd ..
+./scripts/build-perfetto.sh
 ```
 
-The script finds tools via `PERFETTO_OUT` (default: `perfetto/out/linux`).
+The script finds tools via `PERFETTO_OUT` (default: `perfetto/out/linux_release`).
 Set `PERFETTO_TRACE_OUT` to override the output trace path.
+
+## Permissions
+
+ftrace requires root. The script runs `tracebox` with `sudo`. If passwordless
+sudo is not configured, run the script with `sudo`:
+
+```bash
+sudo ./run-demo.sh
+```
+
+Or set up passwordless ftrace: `sudo chown -R $USER /sys/kernel/tracing`.
 
 ## Run
 
@@ -26,7 +34,7 @@ Set `PERFETTO_TRACE_OUT` to override the output trace path.
 ## What happens
 
 1. `traced` and `traced_probes` are started in the background.
-2. `tracebox` captures 5 seconds of ftrace (scheduler, syscalls) into a `.pftrace` file.
+2. `tracebox` captures 5 seconds of ftrace (scheduler, syscalls) via sudo into a `.pftrace` file.
 3. Tools are stopped.
 4. `trace_processor_shell` opens the trace in interactive SQL mode.
 5. Type `.q` to quit.

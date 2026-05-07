@@ -42,7 +42,32 @@ trap cleanup EXIT INT TERM
 sleep 1
 
 echo "Recording 5s of ftrace to $PERFETTO_TRACE_OUT..."
-"$TRACEBOX" -t 5s -o "$PERFETTO_TRACE_OUT"
+CONFIG_FILE="$SCRIPT_DIR/trace-config.txt"
+cat > "$CONFIG_FILE" <<'ENDCONFIG'
+buffers: {
+    size_kb: 4096
+    fill_policy: RING_BUFFER
+}
+data_sources: {
+    config {
+        name: "linux.ftrace"
+        ftrace_config {
+            ftrace_events: "sched/sched_switch"
+            ftrace_events: "sched/sched_waking"
+        }
+    }
+}
+duration_ms: 5000
+ENDCONFIG
+
+if [ "$(id -u)" -eq 0 ]; then
+    "$TRACEBOX" --txt -c "$CONFIG_FILE" -o "$PERFETTO_TRACE_OUT"
+else
+    sudo "$TRACEBOX" --txt -c "$CONFIG_FILE" -o "$PERFETTO_TRACE_OUT"
+    sudo chown "$(id -u):$(id -g)" "$PERFETTO_TRACE_OUT"
+fi
+
+rm -f "$CONFIG_FILE"
 
 cleanup
 
