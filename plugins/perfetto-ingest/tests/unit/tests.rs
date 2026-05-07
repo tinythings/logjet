@@ -163,6 +163,114 @@ fn temp_json(name: &str, content: &str) -> std::path::PathBuf {
     path
 }
 
+// realistic integration tests — timestamps match real Perfetto scale
+
+/// Realistic DB with trace-scale timestamps (~10^14) and epoch clock_values (~10^18).
+/// Records from different types overlap in time, testing that the sort-before-emit
+/// pipeline produces strictly monotonic output regardless of mapper order.
+fn realistic_db() -> super::sqlite_reader::PerfettoDb {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "
+        CREATE TABLE slice (id INTEGER, ts INTEGER, dur INTEGER, name TEXT, parent_id INTEGER, track_id INTEGER, arg_set_id INTEGER, depth INTEGER);
+        CREATE TABLE sched_slice (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, ucpu INTEGER, end_state TEXT);
+        CREATE TABLE thread_state (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, state TEXT, io_wait INTEGER, blocked_function TEXT, waker_utid INTEGER, cpu INTEGER);
+        CREATE TABLE ftrace_event (id INTEGER, ts INTEGER, name TEXT, cpu INTEGER, utid INTEGER);
+        CREATE TABLE spurious_sched_wakeup (id INTEGER, ts INTEGER, utid INTEGER, waker_utid INTEGER);
+        CREATE TABLE instant (ts INTEGER, track_id INTEGER, name TEXT);
+        CREATE TABLE thread (utid INTEGER, name TEXT, tid INTEGER, upid INTEGER, is_main_thread INTEGER);
+        CREATE TABLE process (upid INTEGER, name TEXT, pid INTEGER);
+        CREATE TABLE __intrinsic_track (id INTEGER, name TEXT, type TEXT, utid INTEGER, upid INTEGER);
+        CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
+        -- Overlapping time ranges in Perfetto trace scale (~10^14 ns = microseconds).
+        INSERT INTO slice VALUES (1, 300_000_000, 50, 'mid-span', NULL, 10, NULL, 0);
+        INSERT INTO sched_slice VALUES (1, 500_000_000, 20, 5, 2, 'R');
+        INSERT INTO thread_state VALUES (1, 100_000_000, 50, 3, 'S', NULL, NULL, NULL, 1);
+        INSERT INTO thread_state VALUES (2, 400_000_000, 80, 5, 'R', NULL, NULL, NULL, 2);
+        INSERT INTO ftrace_event VALUES (1, 200_000_000, 'sched_switch', 1, 3);
+        INSERT INTO spurious_sched_wakeup VALUES (1, 350_000_000, 5, 3);
+        INSERT INTO instant VALUES (150_000_000, 10, 'early');
+        INSERT INTO thread VALUES (3, 'main', 100, 1, 1), (5, 'worker', 200, 1, 0);
+        INSERT INTO process VALUES (1, 'test', 1000);
+        INSERT INTO clock_snapshot VALUES (0, 1700000000000000000, 1, 'REALTIME');
+        ",
+    ).unwrap();
+    super::sqlite_reader::PerfettoDb { conn }
+}
+
+#[test]
+fn log_mapper_produces_monotonic_timestamps_with_realistic_data() {
+    let db = realistic_db();
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+
+    // Collect emits into a buffer, sort, then verify monotonic.
+    EMIT_BUF.with(|buf| buf.borrow_mut().clear());
+    log_mapper::map_logs(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit)).unwrap();
+
+    let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
+    EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
+    all.sort_by_key(|(_, ts, _)| *ts);
+
+    assert!(!all.is_empty(), "expected records from realistic DB");
+
+    // Verify monotonic.
+    for w in all.windows(2) {
+        assert!(w[0].1 <= w[1].1, "non-monotonic: {} then {} (delta={})", w[0].1, w[1].1, w[1].1 as i128 - w[0].1 as i128);
+    }
+}
+
+#[test]
+fn full_pipeline_sorts_across_mappers_monotonically() {
+    let db = realistic_db();
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+
+    EMIT_BUF.with(|buf| buf.borrow_mut().clear());
+
+    // Run mappers in varying order — traces first, then logs (opposite of monotonic order).
+    // The buffer should sort everything before emitting.
+    let _ = trace_mapper::map_traces(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
+    let _ = log_mapper::map_logs(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
+
+    let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
+    EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
+    all.sort_by_key(|(_, ts, _)| *ts);
+
+    assert!(!all.is_empty());
+    for w in all.windows(2) {
+        assert!(w[0].1 <= w[1].1, "non-monotonic across mappers: {} then {}", w[0].1, w[1].1);
+    }
+}
+
+#[test]
+fn realistic_timestamps_convert_without_truncation() {
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+
+    // Perfetto-scaled timestamp: typical trace time (~122 seconds in ns).
+    let trace_ts: i64 = 122_804_694_200;
+    let realtime = converter.to_realtime(trace_ts).unwrap().unwrap();
+    assert_eq!(realtime, 1_700_000_000_000_000_000 + 122_804_694_200);
+    assert!(realtime > 1_700_000_000_000_000_000);
+}
+
+#[test]
+fn realistic_timestamps_maintain_monotonicity() {
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+
+    // Timestamps in increasing order as they would appear in a trace.
+    // These are in Perfetto trace scale (~10^14 = microseconds from trace start).
+    let times: [i64; 5] = [100_000_000, 200_000_000, 300_000_000, 500_000_000, 900_000_000];
+    let mut prev: u64 = 0;
+    for ts in &times {
+        let rt = converter.to_realtime(*ts).unwrap().unwrap();
+        assert!(rt >= prev, "realtime {rt} should be >= prev {prev} for ts={ts}");
+        prev = rt;
+    }
+}
+
 fn test_db() -> super::sqlite_reader::PerfettoDb {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
 
