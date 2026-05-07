@@ -413,10 +413,7 @@ fn timestamp_has_realtime() {
 #[test]
 fn trace_mapper_produces_spans_from_slices() {
     let db = test_db();
-    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot {
-        ts: 0,
-        clock_value: 1_700_000_000_000_000_000,
-    }];
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
     let emitted = run_trace_mapper(&db, &converter);
 
@@ -485,13 +482,8 @@ fn metric_mapper_flattens_nested_metrics() {
 
     let emitted = run_metric_mapper(&metrics);
     let payload = &emitted[0].2;
-    let req = opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest::decode(payload.as_slice())
-        .unwrap();
-    let names: Vec<&str> = req.resource_metrics[0].scope_metrics[0]
-        .metrics
-        .iter()
-        .map(|m| m.name.as_str())
-        .collect();
+    let req = opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest::decode(payload.as_slice()).unwrap();
+    let names: Vec<&str> = req.resource_metrics[0].scope_metrics[0].metrics.iter().map(|m| m.name.as_str()).collect();
     assert!(names.contains(&"parent"));
     assert!(names.contains(&"parent.child"));
 }
@@ -528,17 +520,11 @@ fn run_pipeline_integration_with_sqlite() {
 
 // test helpers for mapper tests
 
-fn run_trace_mapper(
-    db: &super::sqlite_reader::PerfettoDb,
-    converter: &timestamp::TimestampConverter,
-) -> Vec<EmittedRecord> {
+fn run_trace_mapper(db: &super::sqlite_reader::PerfettoDb, converter: &timestamp::TimestampConverter) -> Vec<EmittedRecord> {
     run_trace_mapper_result(db, converter).unwrap()
 }
 
-fn run_trace_mapper_result(
-    db: &super::sqlite_reader::PerfettoDb,
-    converter: &timestamp::TimestampConverter,
-) -> Result<Vec<EmittedRecord>, String> {
+fn run_trace_mapper_result(db: &super::sqlite_reader::PerfettoDb, converter: &timestamp::TimestampConverter) -> Result<Vec<EmittedRecord>, String> {
     let plugin = dummy_plugin(dummy_emit);
     trace_mapper::map_traces(db, converter, super::emit_generic, &plugin)?;
     Ok(take_records(&plugin))
@@ -649,13 +635,9 @@ fn log_mapper_produces_spurious_wakeup_records() {
     let has_sw = emitted.iter().any(|(_, _, payload)| {
         if let Ok(req) = prost::Message::decode(payload.as_slice()) {
             let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
-            req.resource_logs.iter().any(|rl| {
-                rl.scope_logs.iter().any(|sl| {
-                    sl.log_records.iter().any(|lr| {
-                        lr.attributes.iter().any(|kv| kv.key == "perfetto.sw.id")
-                    })
-                })
-            })
+            req.resource_logs
+                .iter()
+                .any(|rl| rl.scope_logs.iter().any(|sl| sl.log_records.iter().any(|lr| lr.attributes.iter().any(|kv| kv.key == "perfetto.sw.id"))))
         } else {
             false
         }

@@ -137,7 +137,6 @@ pub fn parse_string_filter(values: Vec<String>, label: &str) -> Result<Option<Ha
 }
 
 impl PredicateArgs {
-
     pub fn build(self) -> Result<RecordPredicate> {
         let mut payload_matchers = Vec::with_capacity(self.grep.len() + self.fixed_string.len());
         for pattern in self.grep {

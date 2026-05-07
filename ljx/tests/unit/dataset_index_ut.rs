@@ -64,10 +64,7 @@ fn sidecar_index_builds_bounds_and_log_summaries() {
     let path = std::env::temp_dir().join(format!("endor-sidecar-{}.logjet", std::process::id()));
     write_star_wars_logjet(
         &path,
-        &[
-            (4, 1_000, "rebel-fleet", "WARN", "Endor shield pulse"),
-            (9, 5_000, "rebel-fleet", "ERROR", "Death Star reactor breach"),
-        ],
+        &[(4, 1_000, "rebel-fleet", "WARN", "Endor shield pulse"), (9, 5_000, "rebel-fleet", "ERROR", "Death Star reactor breach")],
         32,
     );
 
@@ -96,10 +93,7 @@ fn sidecar_index_rebuilds_when_source_changes() {
 
     write_star_wars_logjet(
         &path,
-        &[
-            (3, 300, "empire", "INFO", "Vader arrives with probe droids"),
-            (8, 800, "empire", "ERROR", "Mustafar lava surge alert"),
-        ],
+        &[(3, 300, "empire", "INFO", "Vader arrives with probe droids"), (8, 800, "empire", "ERROR", "Mustafar lava surge alert")],
         128,
     );
     let second = Dataset::from_inputs(std::slice::from_ref(&path)).unwrap();

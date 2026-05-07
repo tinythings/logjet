@@ -218,8 +218,7 @@ pub struct PerfettoDb {
 impl PerfettoDb {
     /// Opens an exported Perfetto SQLite database.
     pub fn open(path: &Path) -> Result<Self, String> {
-        let conn = rusqlite::Connection::open(path)
-            .map_err(|err| format!("failed to open exported SQLite DB {}: {err}", path.display()))?;
+        let conn = rusqlite::Connection::open(path).map_err(|err| format!("failed to open exported SQLite DB {}: {err}", path.display()))?;
 
         // Enable WAL mode for better read concurrency.
         let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA read_uncommitted=1;");
@@ -268,9 +267,7 @@ impl PerfettoDb {
             .map_err(|err| format!("failed to prepare flow query: {err}"))?;
 
         let rows = stmt
-            .query_map([], |row| {
-                Ok(PerfettoFlow { id: row.get(0)?, slice_out: row.get(1)?, slice_in: row.get(2)? })
-            })
+            .query_map([], |row| Ok(PerfettoFlow { id: row.get(0)?, slice_out: row.get(1)?, slice_in: row.get(2)? }))
             .map_err(|err| format!("failed to query flows: {err}"))?;
 
         let mut out = Vec::new();
@@ -288,9 +285,7 @@ impl PerfettoDb {
             .map_err(|err| format!("failed to prepare process query: {err}"))?;
 
         let rows = stmt
-            .query_map([], |row| {
-                Ok(PerfettoProcess { upid: row.get(0)?, name: row.get(1)?, pid: row.get(2)? })
-            })
+            .query_map([], |row| Ok(PerfettoProcess { upid: row.get(0)?, name: row.get(1)?, pid: row.get(2)? }))
             .map_err(|err| format!("failed to query processes: {err}"))?;
 
         let mut out = Vec::new();
@@ -336,13 +331,7 @@ impl PerfettoDb {
 
         let rows = stmt
             .query_map([], |row| {
-                Ok(PerfettoTrack {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    track_type: row.get(2)?,
-                    utid: row.get(3)?,
-                    upid: row.get(4)?,
-                })
+                Ok(PerfettoTrack { id: row.get(0)?, name: row.get(1)?, track_type: row.get(2)?, utid: row.get(3)?, upid: row.get(4)? })
             })
             .map_err(|err| format!("failed to query tracks: {err}"))?;
 
@@ -394,10 +383,7 @@ impl PerfettoDb {
 
         let mut stmt = self.conn.prepare(&sql).map_err(|err| format!("failed to prepare args IN query: {err}"))?;
 
-        let params: Vec<&dyn rusqlite::types::ToSql> = arg_set_ids
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = arg_set_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
 
         let rows = stmt
             .query_map(params.as_slice(), |row| {
@@ -521,9 +507,7 @@ impl PerfettoDb {
             .map_err(|err| format!("failed to prepare ftrace_event query: {err}"))?;
 
         let rows = stmt
-            .query_map([], |row| {
-                Ok(PerfettoFtraceEvent { id: row.get(0)?, ts: row.get(1)?, name: row.get(2)?, cpu: row.get(3)?, utid: row.get(4)? })
-            })
+            .query_map([], |row| Ok(PerfettoFtraceEvent { id: row.get(0)?, ts: row.get(1)?, name: row.get(2)?, cpu: row.get(3)?, utid: row.get(4)? }))
             .map_err(|err| format!("failed to query ftrace_event: {err}"))?;
 
         let mut out = Vec::new();
@@ -545,9 +529,7 @@ impl PerfettoDb {
             .map_err(|err| format!("failed to prepare spurious_sched_wakeup query: {err}"))?;
 
         let rows = stmt
-            .query_map([], |row| {
-                Ok(PerfettoSpuriousWakeup { id: row.get(0)?, ts: row.get(1)?, utid: row.get(2)?, waker_utid: row.get(3)? })
-            })
+            .query_map([], |row| Ok(PerfettoSpuriousWakeup { id: row.get(0)?, ts: row.get(1)?, utid: row.get(2)?, waker_utid: row.get(3)? }))
             .map_err(|err| format!("failed to query spurious_sched_wakeup: {err}"))?;
 
         let mut out = Vec::new();
@@ -559,56 +541,83 @@ impl PerfettoDb {
 
     /// Reads instant events ordered by ts.
     pub fn read_instants(&self) -> Result<Vec<PerfettoInstant>, String> {
-        let mut stmt = self.conn.prepare("SELECT ts, track_id, name FROM instant ORDER BY ts")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT ts, track_id, name FROM instant ORDER BY ts")
             .map_err(|err| format!("failed to prepare instant query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoInstant { ts: row.get(0)?, track_id: row.get(1)?, name: row.get(2)? }))
+        let rows = stmt
+            .query_map([], |row| Ok(PerfettoInstant { ts: row.get(0)?, track_id: row.get(1)?, name: row.get(2)? }))
             .map_err(|err| format!("failed to query instant: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read instant row: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read instant row: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads counter values ordered by ts.
     pub fn read_counters(&self) -> Result<Vec<PerfettoCounter>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, ts, track_id, value FROM counter ORDER BY ts")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, ts, track_id, value FROM counter ORDER BY ts")
             .map_err(|err| format!("failed to prepare counter query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoCounter { id: row.get(0)?, ts: row.get(1)?, track_id: row.get(2)?, value: row.get(3)? }))
+        let rows = stmt
+            .query_map([], |row| Ok(PerfettoCounter { id: row.get(0)?, ts: row.get(1)?, track_id: row.get(2)?, value: row.get(3)? }))
             .map_err(|err| format!("failed to query counter: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read counter row: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read counter row: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads CPU topology.
     pub fn read_cpus(&self) -> Result<Vec<PerfettoCpu>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, cpu, cluster_id, processor FROM cpu ORDER BY id")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, cpu, cluster_id, processor FROM cpu ORDER BY id")
             .map_err(|err| format!("failed to prepare cpu query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoCpu { id: row.get(0)?, cpu: row.get(1)?, cluster_id: row.get(2)?, processor: row.get(3)? }))
+        let rows = stmt
+            .query_map([], |row| Ok(PerfettoCpu { id: row.get(0)?, cpu: row.get(1)?, cluster_id: row.get(2)?, processor: row.get(3)? }))
             .map_err(|err| format!("failed to query cpu: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read cpu row: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read cpu row: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads machine info.
     pub fn read_machines(&self) -> Result<Vec<PerfettoMachine>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, arch, num_cpus, sysname, release FROM machine ORDER BY id")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, arch, num_cpus, sysname, release FROM machine ORDER BY id")
             .map_err(|err| format!("failed to prepare machine query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoMachine { id: row.get(0)?, arch: row.get(1)?, num_cpus: row.get(2)?, sysname: row.get(3)?, release: row.get(4)? }))
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoMachine { id: row.get(0)?, arch: row.get(1)?, num_cpus: row.get(2)?, sysname: row.get(3)?, release: row.get(4)? })
+            })
             .map_err(|err| format!("failed to query machine: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read machine row: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read machine row: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads trace metadata entries.
     pub fn read_metadata(&self) -> Result<Vec<PerfettoMetadata>, String> {
-        let mut stmt = self.conn.prepare("SELECT name, int_value, str_value FROM metadata ORDER BY name")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, int_value, str_value FROM metadata ORDER BY name")
             .map_err(|err| format!("failed to prepare metadata query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoMetadata { name: row.get(0)?, int_value: row.get(1)?, str_value: row.get(2)? }))
+        let rows = stmt
+            .query_map([], |row| Ok(PerfettoMetadata { name: row.get(0)?, int_value: row.get(1)?, str_value: row.get(2)? }))
             .map_err(|err| format!("failed to query metadata: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read metadata row: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read metadata row: {err}"))?);
+        }
         Ok(out)
     }
 
@@ -616,78 +625,130 @@ impl PerfettoDb {
 
     /// Reads memory snapshots.
     pub fn read_memory_snapshots(&self) -> Result<Vec<PerfettoMemorySnapshot>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, timestamp, track_id, detail_level FROM memory_snapshot ORDER BY id")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, timestamp, track_id, detail_level FROM memory_snapshot ORDER BY id")
             .map_err(|err| format!("failed to prepare memory_snapshot query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoMemorySnapshot { id: row.get(0)?, timestamp: row.get(1)?, track_id: row.get(2)?, detail_level: row.get(3)? }))
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoMemorySnapshot { id: row.get(0)?, timestamp: row.get(1)?, track_id: row.get(2)?, detail_level: row.get(3)? })
+            })
             .map_err(|err| format!("failed to query memory_snapshot: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read memory_snapshot: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read memory_snapshot: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads CPU profile stack samples.
     pub fn read_cpu_profile_samples(&self) -> Result<Vec<PerfettoCpuProfileSample>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, ts, callsite_id, utid FROM cpu_profile_stack_sample ORDER BY ts")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, ts, callsite_id, utid FROM cpu_profile_stack_sample ORDER BY ts")
             .map_err(|err| format!("failed to prepare cpu_profile_stack_sample query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoCpuProfileSample { id: row.get(0)?, ts: row.get(1)?, callsite_id: row.get(2)?, utid: row.get(3)? }))
+        let rows = stmt
+            .query_map([], |row| Ok(PerfettoCpuProfileSample { id: row.get(0)?, ts: row.get(1)?, callsite_id: row.get(2)?, utid: row.get(3)? }))
             .map_err(|err| format!("failed to query cpu_profile_stack_sample: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read cpu_profile_stack_sample: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read cpu_profile_stack_sample: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads stack profile frames.
     pub fn read_stack_frames(&self) -> Result<Vec<PerfettoStackFrame>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, name, mapping_id FROM stack_profile_frame ORDER BY id")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, mapping_id FROM stack_profile_frame ORDER BY id")
             .map_err(|err| format!("failed to prepare stack_profile_frame query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoStackFrame { id: row.get(0)?, name: row.get(1)?, mapping_id: row.get(2)? }))
+        let rows = stmt
+            .query_map([], |row| Ok(PerfettoStackFrame { id: row.get(0)?, name: row.get(1)?, mapping_id: row.get(2)? }))
             .map_err(|err| format!("failed to query stack_profile_frame: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read stack_profile_frame: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read stack_profile_frame: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads heap profile allocations.
     pub fn read_heap_allocations(&self) -> Result<Vec<PerfettoHeapAllocation>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, ts, upid, size, count FROM heap_profile_allocation ORDER BY ts")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, ts, upid, size, count FROM heap_profile_allocation ORDER BY ts")
             .map_err(|err| format!("failed to prepare heap_profile_allocation query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoHeapAllocation { id: row.get(0)?, ts: row.get(1)?, upid: row.get(2)?, size: row.get(3)?, count: row.get(4)? }))
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoHeapAllocation { id: row.get(0)?, ts: row.get(1)?, upid: row.get(2)?, size: row.get(3)?, count: row.get(4)? })
+            })
             .map_err(|err| format!("failed to query heap_profile_allocation: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read heap_profile_allocation: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read heap_profile_allocation: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads protolog entries.
     pub fn read_protologs(&self) -> Result<Vec<PerfettoProtolog>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, ts, level, tag, message FROM protolog ORDER BY ts")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, ts, level, tag, message FROM protolog ORDER BY ts")
             .map_err(|err| format!("failed to prepare protolog query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoProtolog { id: row.get(0)?, ts: row.get(1)?, level: row.get(2)?, tag: row.get(3)?, message: row.get(4)? }))
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoProtolog { id: row.get(0)?, ts: row.get(1)?, level: row.get(2)?, tag: row.get(3)?, message: row.get(4)? })
+            })
             .map_err(|err| format!("failed to query protolog: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read protolog: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read protolog: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads Android log entries.
     pub fn read_android_logs(&self) -> Result<Vec<PerfettoAndroidLog>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, ts, utid, prio, tag, msg FROM android_logs ORDER BY ts")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, ts, utid, prio, tag, msg FROM android_logs ORDER BY ts")
             .map_err(|err| format!("failed to prepare android_logs query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoAndroidLog { id: row.get(0)?, ts: row.get(1)?, utid: row.get(2)?, prio: row.get(3)?, tag: row.get(4)?, msg: row.get(5)? }))
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoAndroidLog { id: row.get(0)?, ts: row.get(1)?, utid: row.get(2)?, prio: row.get(3)?, tag: row.get(4)?, msg: row.get(5)? })
+            })
             .map_err(|err| format!("failed to query android_logs: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read android_logs: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read android_logs: {err}"))?);
+        }
         Ok(out)
     }
 
     /// Reads file descriptor events.
     pub fn read_filedescriptors(&self) -> Result<Vec<PerfettoFileDescriptor>, String> {
-        let mut stmt = self.conn.prepare("SELECT id, ufd, fd, ts, upid, path FROM filedescriptor ORDER BY ts")
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, ufd, fd, ts, upid, path FROM filedescriptor ORDER BY ts")
             .map_err(|err| format!("failed to prepare filedescriptor query: {err}"))?;
-        let rows = stmt.query_map([], |row| Ok(PerfettoFileDescriptor { id: row.get(0)?, ufd: row.get(1)?, fd: row.get(2)?, ts: row.get(3)?, upid: row.get(4)?, path: row.get(5)? }))
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoFileDescriptor {
+                    id: row.get(0)?,
+                    ufd: row.get(1)?,
+                    fd: row.get(2)?,
+                    ts: row.get(3)?,
+                    upid: row.get(4)?,
+                    path: row.get(5)?,
+                })
+            })
             .map_err(|err| format!("failed to query filedescriptor: {err}"))?;
         let mut out = Vec::new();
-        for row in rows { out.push(row.map_err(|err| format!("failed to read filedescriptor: {err}"))?); }
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read filedescriptor: {err}"))?);
+        }
         Ok(out)
     }
 }

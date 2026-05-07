@@ -583,16 +583,14 @@ fn verify_otlp_payload_rejects_invalid_log_payload() {
 
 #[test]
 fn verify_otlp_payload_rejects_invalid_metrics_payload() {
-    let record =
-        logjet::OwnedRecord { record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 1, payload: b"not metrics protobuf".to_vec() };
+    let record = logjet::OwnedRecord { record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 1, payload: b"not metrics protobuf".to_vec() };
     let err = super::verify_otlp_payload(&record).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
 #[test]
 fn verify_otlp_payload_rejects_invalid_traces_payload() {
-    let record =
-        logjet::OwnedRecord { record_type: RecordType::Traces, seq: 1, ts_unix_ns: 1, payload: b"not traces protobuf".to_vec() };
+    let record = logjet::OwnedRecord { record_type: RecordType::Traces, seq: 1, ts_unix_ns: 1, payload: b"not traces protobuf".to_vec() };
     let err = super::verify_otlp_payload(&record).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
@@ -617,8 +615,7 @@ fn verify_otlp_payload_accepts_events_as_log_payload() {
 
 #[test]
 fn verify_otlp_payload_rejects_invalid_events_payload() {
-    let record =
-        logjet::OwnedRecord { record_type: RecordType::Events, seq: 1, ts_unix_ns: 1, payload: b"not protobuf".to_vec() };
+    let record = logjet::OwnedRecord { record_type: RecordType::Events, seq: 1, ts_unix_ns: 1, payload: b"not protobuf".to_vec() };
     let err = super::verify_otlp_payload(&record).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }

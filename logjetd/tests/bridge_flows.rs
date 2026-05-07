@@ -81,7 +81,10 @@ fn bridge_drain_consumes_upstream_records() -> io::Result<()> {
     )?;
     let bridge_config = dir.write(
         "bridge.conf",
-        &format!("collector.url: http://127.0.0.1:{}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: drain\n", reserved_port_addr(&collector_port)),
+        &format!(
+            "collector.url: http://127.0.0.1:{}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: drain\n",
+            reserved_port_addr(&collector_port)
+        ),
     )?;
 
     let _appliance = ChildGuard::spawn({

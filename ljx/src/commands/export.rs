@@ -134,7 +134,10 @@ fn insert_otlp_log_fields_with_preview(
 ) {
     target.insert(
         "body".to_string(),
-        JsonValue::String(truncate_preview(&log_record.body.as_ref().map(|v| format_any_value(Some(v))).filter(|s| !s.is_empty()).unwrap_or_default(), preview_bytes)),
+        JsonValue::String(truncate_preview(
+            &log_record.body.as_ref().map(|v| format_any_value(Some(v))).filter(|s| !s.is_empty()).unwrap_or_default(),
+            preview_bytes,
+        )),
     );
     target.insert("timestamp".to_string(), JsonValue::String(format_timestamp(log_record.time_unix_nano.max(fallback_ts_unix_ns))));
     if log_record.observed_time_unix_nano > 0 {
@@ -229,7 +232,9 @@ fn any_value_to_json(value: &AnyValue, preview_bytes: Option<usize>) -> Option<J
         Some(Value::IntValue(number)) => Some(JsonValue::Number((*number).into())),
         Some(Value::DoubleValue(number)) => serde_json::Number::from_f64(*number).map(JsonValue::Number),
         Some(Value::BytesValue(bytes)) => Some(JsonValue::String(truncate_preview(&format!("<{} bytes>", bytes.len()), preview_bytes))),
-        Some(Value::ArrayValue(array)) => Some(JsonValue::Array(array.values.iter().filter_map(|value| any_value_to_json(value, preview_bytes)).collect())),
+        Some(Value::ArrayValue(array)) => {
+            Some(JsonValue::Array(array.values.iter().filter_map(|value| any_value_to_json(value, preview_bytes)).collect()))
+        }
         Some(Value::KvlistValue(map)) => Some(JsonValue::Object(
             map.values
                 .iter()
@@ -282,4 +287,3 @@ fn format_timestamp(ts_unix_ns: u64) -> String {
 #[cfg(test)]
 #[path = "../../tests/unit/commands/top_level_query_ut.rs"]
 mod top_level_query_ut;
-

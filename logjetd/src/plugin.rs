@@ -500,9 +500,9 @@ struct LjLogRecord {
 #[repr(C)]
 struct LjIngestRecordV1 {
     struct_size: u32,
-    record_type: u32,        // LJ_INGEST_RECORD_TYPE_*
+    record_type: u32, // LJ_INGEST_RECORD_TYPE_*
     timestamp_unix_ns: u64,
-    payload: *const u8,      // pre-encoded OTLP protobuf bytes
+    payload: *const u8, // pre-encoded OTLP protobuf bytes
     payload_len: usize,
     flags: u32,
     reserved: [u64; 4],
@@ -557,21 +557,11 @@ impl PluginHandle {
             let fetch: Option<FetchFn> = lib.get::<FetchFn>(b"lj_ingest_fetch\0").ok().map(|sym| *sym);
             let set_generic_callback: Option<SetGenericCallbackFn> =
                 lib.get::<SetGenericCallbackFn>(b"lj_ingest_set_generic_callback\0").ok().map(|sym| *sym);
-            let last_error: Option<LastErrorFn> =
-                lib.get::<LastErrorFn>(b"lj_ingest_last_error\0").ok().map(|sym| *sym);
+            let last_error: Option<LastErrorFn> = lib.get::<LastErrorFn>(b"lj_ingest_last_error\0").ok().map(|sym| *sym);
             let free: libloading::Symbol<FreeFn> =
                 lib.get(b"lj_ingest_free\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_free: {err}")))?;
 
-            Ok(Self {
-                create: *create,
-                set_callback: *set_callback,
-                feed: *feed,
-                fetch,
-                set_generic_callback,
-                last_error,
-                free: *free,
-                _lib: lib,
-            })
+            Ok(Self { create: *create, set_callback: *set_callback, feed: *feed, fetch, set_generic_callback, last_error, free: *free, _lib: lib })
         }
     }
 
@@ -879,13 +869,14 @@ fn run_active_plugin(handle: &PluginHandle, spool: Arc<super::daemon::SharedSpoo
     let rc = unsafe { fetch(plugin_ctx) };
 
     if rc != 0
-        && let Some(last_error_fn) = handle.last_error {
-            let msg = unsafe { last_error_fn(plugin_ctx) };
-            if !msg.is_null() {
-                let msg_str = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
-                eprintln!("ljd plugin error: {msg_str}");
-            }
+        && let Some(last_error_fn) = handle.last_error
+    {
+        let msg = unsafe { last_error_fn(plugin_ctx) };
+        if !msg.is_null() {
+            let msg_str = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
+            eprintln!("ljd plugin error: {msg_str}");
         }
+    }
 
     unsafe { (handle.free)(plugin_ctx) };
     let _ = unsafe { Box::from_raw(ctx_ptr as *mut CallbackCtx) };

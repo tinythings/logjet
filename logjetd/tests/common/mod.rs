@@ -16,8 +16,8 @@ use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs, S
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 use rcgen::{BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, SanType};
-use tokio::runtime::Builder;
 use tokio::net::TcpListener as TokioTcpListener;
+use tokio::runtime::Builder;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status};
@@ -269,9 +269,7 @@ impl MockGrpcCollector {
                     GrpcTlsMode::Tls { tls } => {
                         let server_cert = fs::read(&tls.server_cert).expect("gRPC TLS server cert");
                         let server_key = fs::read(&tls.server_key).expect("gRPC TLS server key");
-                        builder
-                            .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(server_cert, server_key)))
-                            .expect("gRPC TLS config")
+                        builder.tls_config(ServerTlsConfig::new().identity(Identity::from_pem(server_cert, server_key))).expect("gRPC TLS config")
                     }
                     GrpcTlsMode::Mtls { tls } => {
                         let ca = fs::read(&tls.ca).expect("gRPC mTLS CA");
@@ -289,11 +287,7 @@ impl MockGrpcCollector {
 
                 let listener = TokioTcpListener::from_std(listener).expect("gRPC listener");
                 let incoming = TcpListenerStream::new(listener);
-                builder
-                    .add_service(LogsServiceServer::new(service))
-                    .serve_with_incoming(incoming)
-                    .await
-                    .expect("gRPC collector server");
+                builder.add_service(LogsServiceServer::new(service)).serve_with_incoming(incoming).await.expect("gRPC collector server");
             });
         });
         Ok(Self { received, _thread: thread })

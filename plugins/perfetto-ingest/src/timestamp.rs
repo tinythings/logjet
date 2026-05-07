@@ -54,10 +54,7 @@ impl TimestampConverter {
             let first = &self.snapshots[0];
             match self.policy {
                 TimestampPolicy::RequireRealtime => {
-                    return Err(format!(
-                        "trace timestamp {trace_ts} is before first REALTIME snapshot at {}",
-                        first.ts
-                    ));
+                    return Err(format!("trace timestamp {trace_ts} is before first REALTIME snapshot at {}", first.ts));
                 }
                 TimestampPolicy::BestEffort => {
                     let delta = first.ts - trace_ts;
@@ -84,8 +81,7 @@ impl TimestampConverter {
                 Ok(Some(prev.clock_value as u64))
             } else {
                 let offset = trace_ts - prev.ts;
-                let realtime = (prev.clock_value as i128)
-                    + (range_realtime as i128 * offset as i128) / range_ts as i128;
+                let realtime = (prev.clock_value as i128) + (range_realtime as i128 * offset as i128) / range_ts as i128;
                 Ok(Some(realtime.max(0) as u64))
             }
         }

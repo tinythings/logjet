@@ -16,10 +16,7 @@ pub fn find_trace_processor() -> io::Result<PathBuf> {
         if path.is_file() {
             return Ok(path);
         }
-        return Err(io::Error::other(format!(
-            "LJD_PERFETTO_TRACE_PROCESSOR is set but not a file: {}",
-            path.display()
-        )));
+        return Err(io::Error::other(format!("LJD_PERFETTO_TRACE_PROCESSOR is set but not a file: {}", path.display())));
     }
 
     for name in ["trace_processor", "trace_processor_shell"] {
@@ -28,9 +25,7 @@ pub fn find_trace_processor() -> io::Result<PathBuf> {
         }
     }
 
-    Err(io::Error::other(
-        "trace_processor not found. Set LJD_PERFETTO_TRACE_PROCESSOR or install Perfetto tools on PATH.",
-    ))
+    Err(io::Error::other("trace_processor not found. Set LJD_PERFETTO_TRACE_PROCESSOR or install Perfetto tools on PATH."))
 }
 
 #[allow(dead_code)]
@@ -109,10 +104,7 @@ pub fn export_metrics(trace_file: &Path, tp_path: &Path, metrics: &[&str]) -> io
 #[allow(dead_code)]
 fn temp_file_path(prefix: &str, suffix: &str) -> io::Result<PathBuf> {
     let pid = std::process::id();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_micros();
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros();
     let name = format!("{prefix}-{ts}-{pid}.{suffix}");
     Ok(env::temp_dir().join(name))
 }

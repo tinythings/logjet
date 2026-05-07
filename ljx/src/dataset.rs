@@ -89,12 +89,7 @@ impl Dataset {
 
         paths.sort_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
         paths.dedup();
-        Ok(Self {
-            entries: paths
-                .into_iter()
-                .map(|path| DatasetEntry::from_path(path, options))
-                .collect::<Result<Vec<_>>>()?,
-        })
+        Ok(Self { entries: paths.into_iter().map(|path| DatasetEntry::from_path(path, options)).collect::<Result<Vec<_>>>()? })
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -172,10 +167,7 @@ fn collect_dir_entries(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     if found == 0 {
-        return Err(Error::Usage(format!(
-            "input {} is a directory with no .logjet files",
-            dir.display()
-        )));
+        return Err(Error::Usage(format!("input {} is a directory with no .logjet files", dir.display())));
     }
     Ok(())
 }
@@ -185,10 +177,7 @@ fn looks_like_glob(path: &Path) -> bool {
 }
 
 fn modified_ns(meta: &Metadata) -> Option<u64> {
-    meta.modified()
-        .ok()
-        .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
-        .and_then(|dur| u64::try_from(dur.as_nanos()).ok())
+    meta.modified().ok().and_then(|ts| ts.duration_since(UNIX_EPOCH).ok()).and_then(|dur| u64::try_from(dur.as_nanos()).ok())
 }
 
 #[cfg(test)]
