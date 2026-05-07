@@ -10,6 +10,7 @@ mod metric_mapper;
 mod metrics_reader;
 mod perfetto_invoke;
 mod rpc_client;
+mod rpc_reader;
 mod sqlite_reader;
 mod timestamp;
 mod trace_mapper;
@@ -236,13 +237,100 @@ fn run_pipeline(plugin: &mut PerfettoPlugin, trace_file: &std::path::Path) -> Re
     let tp_path = perfetto_invoke::find_trace_processor().map_err(|err| format!("trace_processor not found: {err}"))?;
 
     eprintln!("perfetto-ingest: using trace_processor {}", tp_path.display());
-    eprintln!("perfetto-ingest: exporting SQLite from {}", trace_file.display());
 
-    let sqlite_path = perfetto_invoke::export_sqlite(trace_file, &tp_path).map_err(|err| format!("SQLite export failed: {err}"))?;
+    let use_rpc = std::env::var("LJD_PERFETTO_ACQUISITION").as_deref() == Ok("rpc");
 
-    let db = sqlite_reader::PerfettoDb::open(&sqlite_path).map_err(|err| format!("failed to open exported DB: {err}"))?;
+    if use_rpc {
+        eprintln!("perfetto-ingest: RPC acquisition mode");
+        let client = perfetto_invoke::start_server(trace_file, &tp_path).map_err(|err| format!("RPC server start: {err}"))?;
+        let mut reader = rpc_reader::RpcReader::new(client);
+        run_pipeline_impl(plugin, &mut reader, trace_file, &tp_path)
+    } else {
+        eprintln!("perfetto-ingest: exporting SQLite from {}", trace_file.display());
+        let sqlite_path = perfetto_invoke::export_sqlite(trace_file, &tp_path).map_err(|err| format!("SQLite export failed: {err}"))?;
+        let mut db = sqlite_reader::PerfettoDb::open(&sqlite_path).map_err(|err| format!("failed to open exported DB: {err}"))?;
+        let result = run_pipeline_impl(plugin, &mut db, trace_file, &tp_path);
+        let _ = std::fs::remove_file(&sqlite_path);
+        result
+    }
+}
 
-    let snaps = db.read_clock_snapshots().map_err(|err| format!("failed to read clock snapshots: {err}"))?;
+pub(crate) trait Reader {
+    fn read_clock_snapshots(&mut self) -> Result<Vec<sqlite_reader::PerfettoClockSnapshot>, String>;
+    fn read_slices(&mut self) -> Result<Vec<sqlite_reader::PerfettoSlice>, String>;
+    fn read_sched_slices(&mut self) -> Result<Vec<sqlite_reader::PerfettoSchedSlice>, String>;
+    fn read_thread_states(&mut self) -> Result<Vec<sqlite_reader::PerfettoThreadState>, String>;
+    fn read_ftrace_events(&mut self) -> Result<Vec<sqlite_reader::PerfettoFtraceEvent>, String>;
+    fn read_spurious_wakeups(&mut self) -> Result<Vec<sqlite_reader::PerfettoSpuriousWakeup>, String>;
+    fn read_instants(&mut self) -> Result<Vec<sqlite_reader::PerfettoInstant>, String>;
+    fn read_threads(&mut self) -> Result<Vec<sqlite_reader::PerfettoThread>, String>;
+    fn read_processes(&mut self) -> Result<Vec<sqlite_reader::PerfettoProcess>, String>;
+}
+
+impl Reader for sqlite_reader::PerfettoDb {
+    fn read_clock_snapshots(&mut self) -> Result<Vec<sqlite_reader::PerfettoClockSnapshot>, String> {
+        sqlite_reader::PerfettoDb::read_clock_snapshots(self)
+    }
+    fn read_slices(&mut self) -> Result<Vec<sqlite_reader::PerfettoSlice>, String> {
+        sqlite_reader::PerfettoDb::read_slices(self)
+    }
+    fn read_sched_slices(&mut self) -> Result<Vec<sqlite_reader::PerfettoSchedSlice>, String> {
+        sqlite_reader::PerfettoDb::read_sched_slices(self)
+    }
+    fn read_thread_states(&mut self) -> Result<Vec<sqlite_reader::PerfettoThreadState>, String> {
+        sqlite_reader::PerfettoDb::read_thread_states(self)
+    }
+    fn read_ftrace_events(&mut self) -> Result<Vec<sqlite_reader::PerfettoFtraceEvent>, String> {
+        sqlite_reader::PerfettoDb::read_ftrace_events(self)
+    }
+    fn read_spurious_wakeups(&mut self) -> Result<Vec<sqlite_reader::PerfettoSpuriousWakeup>, String> {
+        sqlite_reader::PerfettoDb::read_spurious_wakeups(self)
+    }
+    fn read_instants(&mut self) -> Result<Vec<sqlite_reader::PerfettoInstant>, String> {
+        sqlite_reader::PerfettoDb::read_instants(self)
+    }
+    fn read_threads(&mut self) -> Result<Vec<sqlite_reader::PerfettoThread>, String> {
+        sqlite_reader::PerfettoDb::read_threads(self)
+    }
+    fn read_processes(&mut self) -> Result<Vec<sqlite_reader::PerfettoProcess>, String> {
+        sqlite_reader::PerfettoDb::read_processes(self)
+    }
+}
+
+impl Reader for rpc_reader::RpcReader {
+    fn read_clock_snapshots(&mut self) -> Result<Vec<sqlite_reader::PerfettoClockSnapshot>, String> {
+        self.read_clock_snapshots().map_err(|e| e.to_string())
+    }
+    fn read_slices(&mut self) -> Result<Vec<sqlite_reader::PerfettoSlice>, String> {
+        self.read_slices().map_err(|e| e.to_string())
+    }
+    fn read_sched_slices(&mut self) -> Result<Vec<sqlite_reader::PerfettoSchedSlice>, String> {
+        self.read_sched_slices().map_err(|e| e.to_string())
+    }
+    fn read_thread_states(&mut self) -> Result<Vec<sqlite_reader::PerfettoThreadState>, String> {
+        self.read_thread_states().map_err(|e| e.to_string())
+    }
+    fn read_ftrace_events(&mut self) -> Result<Vec<sqlite_reader::PerfettoFtraceEvent>, String> {
+        self.read_ftrace_events().map_err(|e| e.to_string())
+    }
+    fn read_spurious_wakeups(&mut self) -> Result<Vec<sqlite_reader::PerfettoSpuriousWakeup>, String> {
+        self.read_spurious_wakeups().map_err(|e| e.to_string())
+    }
+    fn read_instants(&mut self) -> Result<Vec<sqlite_reader::PerfettoInstant>, String> {
+        self.read_instants().map_err(|e| e.to_string())
+    }
+    fn read_threads(&mut self) -> Result<Vec<sqlite_reader::PerfettoThread>, String> {
+        self.read_threads().map_err(|e| e.to_string())
+    }
+    fn read_processes(&mut self) -> Result<Vec<sqlite_reader::PerfettoProcess>, String> {
+        self.read_processes().map_err(|e| e.to_string())
+    }
+}
+
+fn run_pipeline_impl(
+    plugin: &mut PerfettoPlugin, reader: &mut impl Reader, _trace_file: &std::path::Path, _tp_path: &std::path::Path,
+) -> Result<(), String> {
+    let snaps = reader.read_clock_snapshots()?;
 
     let policy = match std::env::var("LJD_PERFETTO_TIMESTAMP_POLICY").as_deref() {
         Ok("require-realtime") => timestamp::TimestampPolicy::RequireRealtime,
@@ -257,30 +345,10 @@ fn run_pipeline(plugin: &mut PerfettoPlugin, trace_file: &std::path::Path) -> Re
         eprintln!("perfetto-ingest: no realtime clock snapshots — timestamps will be unavailable");
     }
 
-    // Buffer all emissions through a thread-local buffer, sort by timestamp,
-    // then flush through the real callback. This guarantees monotonicity.
     EMIT_BUF.with(|buf| buf.borrow_mut().clear());
 
-    // Skip trace mapping for now — ljx view doesn't decode ExportTraceServiceRequest
-    // yet, so trace records render as binary garbage.
-    // eprintln!("perfetto-ingest: mapping traces...");
-    // trace_mapper::map_traces(&db, &converter, buffer_emit, plugin)?;
-
     eprintln!("perfetto-ingest: mapping logs...");
-    log_mapper::map_logs(&db, &converter, buffer_emit, plugin)?;
-
-    // Optional metrics
-    let metrics_names: Vec<String> =
-        std::env::var("LJD_PERFETTO_METRICS").ok().map(|s| s.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>()).unwrap_or_default();
-    let metrics_refs: Vec<&str> = metrics_names.iter().map(|s| s.as_str()).collect();
-    if !metrics_refs.is_empty()
-        && let Ok(Some(metrics_path)) = perfetto_invoke::export_metrics(trace_file, &tp_path, &metrics_refs)
-    {
-        eprintln!("perfetto-ingest: mapping metrics...");
-        let metrics = metrics_reader::parse_metrics_json(&metrics_path).map_err(|err| format!("failed to parse metrics JSON: {err}"))?;
-        metric_mapper::map_metrics(&metrics, &converter, buffer_emit, plugin)?;
-        let _ = std::fs::remove_file(&metrics_path);
-    }
+    log_mapper::map_logs(reader, &converter, buffer_emit, plugin)?;
 
     let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
     EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
@@ -289,8 +357,6 @@ fn run_pipeline(plugin: &mut PerfettoPlugin, trace_file: &std::path::Path) -> Re
     for (rt, ts, payload) in &all {
         unsafe { emit_generic(plugin, *rt, *ts, payload) };
     }
-
-    let _ = std::fs::remove_file(&sqlite_path);
 
     eprintln!("perfetto-ingest: done");
     Ok(())

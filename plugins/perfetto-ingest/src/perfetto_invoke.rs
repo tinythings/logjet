@@ -102,6 +102,12 @@ pub fn export_metrics(trace_file: &Path, tp_path: &Path, metrics: &[&str]) -> io
 }
 
 #[allow(dead_code)]
+/// Runs `trace_processor server stdio <trace>` and returns a connected
+/// `RpcClient`. The process stays alive until the client is shut down.
+pub fn start_server(trace_file: &Path, tp_path: &Path) -> io::Result<crate::rpc_client::RpcClient> {
+    crate::rpc_client::RpcClient::connect(tp_path, trace_file)
+}
+
 fn temp_file_path(prefix: &str, suffix: &str) -> io::Result<PathBuf> {
     let pid = std::process::id();
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros();

@@ -7,9 +7,7 @@ use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 
-use crate::sqlite_reader::{
-    PerfettoDb, PerfettoFtraceEvent, PerfettoInstant, PerfettoSchedSlice, PerfettoSlice, PerfettoSpuriousWakeup, PerfettoThreadState,
-};
+use crate::sqlite_reader::{PerfettoFtraceEvent, PerfettoInstant, PerfettoSchedSlice, PerfettoSlice, PerfettoSpuriousWakeup, PerfettoThreadState};
 use crate::timestamp::TimestampConverter;
 
 const SEVERITY_INFO: i32 = 9;
@@ -19,8 +17,8 @@ fn dur_str(ns: i64) -> String {
 }
 
 pub fn map_logs(
-    db: &PerfettoDb, converter: &TimestampConverter, emit: unsafe fn(ctx: &crate::PerfettoPlugin, record_type: u32, ts_unix_ns: u64, payload: &[u8]),
-    plugin: &crate::PerfettoPlugin,
+    db: &mut impl crate::Reader, converter: &TimestampConverter,
+    emit: unsafe fn(ctx: &crate::PerfettoPlugin, record_type: u32, ts_unix_ns: u64, payload: &[u8]), plugin: &crate::PerfettoPlugin,
 ) -> Result<(), String> {
     let mut all: Vec<LogRecord> = Vec::new();
 

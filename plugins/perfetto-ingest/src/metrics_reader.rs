@@ -1,7 +1,5 @@
 //! Parses Perfetto metrics JSON output.
-//!
-//! The `trace_processor metrics --run NAMES --output json` command writes
-//! JSON to stdout. Each metric is a top-level key in the JSON object.
+#![allow(dead_code)]
 
 use std::path::Path;
 
