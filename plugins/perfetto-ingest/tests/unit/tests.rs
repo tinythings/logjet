@@ -180,6 +180,7 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
         CREATE TABLE thread_state (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, state TEXT, io_wait INTEGER, blocked_function TEXT, waker_utid INTEGER, cpu INTEGER);
         CREATE TABLE ftrace_event (id INTEGER, ts INTEGER, name TEXT, cpu INTEGER, utid INTEGER);
         CREATE TABLE spurious_sched_wakeup (id INTEGER, ts INTEGER, utid INTEGER, waker_utid INTEGER);
+        CREATE TABLE instant (ts INTEGER, track_id INTEGER, name TEXT);
         CREATE TABLE args (arg_set_id INTEGER, flat_key TEXT, string_value TEXT, int_value INTEGER, real_value REAL);
         CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
 
@@ -193,6 +194,12 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
         INSERT INTO __intrinsic_track VALUES (10, 'test-track', 'thread_track', 200, NULL);
         INSERT INTO args VALUES (1, 'slice.name', 'early-slice', NULL, NULL);
         INSERT INTO args VALUES (2, 'slice.name', 'main-slice', NULL, NULL);
+        INSERT INTO thread_state VALUES (1, 5000, 10000, 1, 'R', NULL, NULL, NULL, 0);
+        INSERT INTO thread_state VALUES (2, 15000, 5000, 2, 'S', 1, 'pipe_wait', 1, 0);
+        INSERT INTO ftrace_event VALUES (1, 5000, 'sched_switch', 0, 1);
+        INSERT INTO ftrace_event VALUES (2, 15000, 'sched_waking', 2, 3);
+        INSERT INTO spurious_sched_wakeup VALUES (1, 5000, 1, 2);
+        INSERT INTO instant VALUES (10000, 10, 'test-instant');
         INSERT INTO clock_snapshot VALUES
             (0, 1700000000000000000, 1, 'REALTIME'),
             (10000, 1700000000000010000, 1, 'REALTIME');
@@ -422,6 +429,131 @@ fn run_log_mapper(db: &super::sqlite_reader::PerfettoDb) -> Vec<EmittedRecord> {
     take_records(&plugin)
 }
 
+// sqlite_reader tests for P1/P2 types
+
+#[test]
+fn sqlite_reader_reads_thread_states() {
+    let db = test_db();
+    let states = db.read_thread_states().unwrap();
+    assert_eq!(states.len(), 2);
+    assert_eq!(states[0].state.as_deref(), Some("R"));
+    assert_eq!(states[1].io_wait, Some(true));
+    assert_eq!(states[1].blocked_function.as_deref(), Some("pipe_wait"));
+}
+
+#[test]
+fn sqlite_reader_reads_ftrace_events() {
+    let db = test_db();
+    let events = db.read_ftrace_events().unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].name.as_deref(), Some("sched_switch"));
+    assert_eq!(events[1].name.as_deref(), Some("sched_waking"));
+}
+
+#[test]
+fn sqlite_reader_reads_spurious_wakeups() {
+    let db = test_db();
+    let wakeups = db.read_spurious_wakeups().unwrap();
+    assert_eq!(wakeups.len(), 1);
+    assert_eq!(wakeups[0].utid, Some(1));
+    assert_eq!(wakeups[0].waker_utid, Some(2));
+}
+
+#[test]
+fn sqlite_reader_reads_instants() {
+    let db = test_db();
+    let instants = db.read_instants().unwrap();
+    assert_eq!(instants.len(), 1);
+    assert_eq!(instants[0].name.as_deref(), Some("test-instant"));
+}
+
+#[test]
+fn log_mapper_produces_thread_state_records() {
+    let db = test_db();
+    let emitted = run_log_mapper(&db);
+    // Should include 2 thread_state records + slices + sched + ftrace + spurious + instant + summary
+    assert!(emitted.iter().any(|(rt, _, _)| *rt == crate::LJ_INGEST_RECORD_TYPE_LOGS));
+    // Verify thread_state attributes in payload
+    let has_ts_attrs = emitted.iter().any(|(_, _, payload)| {
+        if let Ok(req) = prost::Message::decode(payload.as_slice()) {
+            let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
+            req.resource_logs.iter().any(|rl| {
+                rl.scope_logs.iter().any(|sl| {
+                    sl.log_records.iter().any(|lr| {
+                        lr.attributes.iter().any(|kv| kv.key == "perfetto.ts.state" && kv.value.as_ref().is_some_and(|v| v.value.is_some()))
+                    })
+                })
+            })
+        } else {
+            false
+        }
+    });
+    assert!(has_ts_attrs, "expected thread_state attributes in emitted records");
+}
+
+#[test]
+fn log_mapper_produces_ftrace_event_records() {
+    let db = test_db();
+    let emitted = run_log_mapper(&db);
+    let has_ftrace = emitted.iter().any(|(_, _, payload)| {
+        if let Ok(req) = prost::Message::decode(payload.as_slice()) {
+            let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
+            req.resource_logs.iter().any(|rl| {
+                rl.scope_logs.iter().any(|sl| {
+                    sl.log_records.iter().any(|lr| {
+                        lr.attributes.iter().any(|kv| kv.key == "perfetto.ftrace.name" && kv.value.as_ref().is_some_and(|v| v.value.is_some()))
+                    })
+                })
+            })
+        } else {
+            false
+        }
+    });
+    assert!(has_ftrace, "expected ftrace_event attributes in emitted records");
+}
+
+#[test]
+fn log_mapper_produces_spurious_wakeup_records() {
+    let db = test_db();
+    let emitted = run_log_mapper(&db);
+    let has_sw = emitted.iter().any(|(_, _, payload)| {
+        if let Ok(req) = prost::Message::decode(payload.as_slice()) {
+            let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
+            req.resource_logs.iter().any(|rl| {
+                rl.scope_logs.iter().any(|sl| {
+                    sl.log_records.iter().any(|lr| {
+                        lr.attributes.iter().any(|kv| kv.key == "perfetto.sw.id")
+                    })
+                })
+            })
+        } else {
+            false
+        }
+    });
+    assert!(has_sw, "expected spurious_wakeup attributes in emitted records");
+}
+
+#[test]
+fn log_mapper_produces_instant_records() {
+    let db = test_db();
+    let emitted = run_log_mapper(&db);
+    let has_instant = emitted.iter().any(|(_, _, payload)| {
+        if let Ok(req) = prost::Message::decode(payload.as_slice()) {
+            let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
+            req.resource_logs.iter().any(|rl| {
+                rl.scope_logs.iter().any(|sl| {
+                    sl.log_records.iter().any(|lr| {
+                        lr.attributes.iter().any(|kv| kv.key == "perfetto.instant.name" && kv.value.as_ref().is_some_and(|v| v.value.is_some()))
+                    })
+                })
+            })
+        } else {
+            false
+        }
+    });
+    assert!(has_instant, "expected instant event attributes in emitted records");
+}
+
 fn run_core_pipeline(sqlite_path: &std::path::Path) -> Vec<EmittedRecord> {
     let plugin = dummy_plugin(dummy_emit);
     let db = super::sqlite_reader::PerfettoDb::open(sqlite_path).unwrap();
@@ -478,6 +610,7 @@ fn temp_sqlite_file() -> std::path::PathBuf {
         CREATE TABLE thread_state (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, state TEXT, io_wait INTEGER, blocked_function TEXT, waker_utid INTEGER, cpu INTEGER);
         CREATE TABLE ftrace_event (id INTEGER, ts INTEGER, name TEXT, cpu INTEGER, utid INTEGER);
         CREATE TABLE spurious_sched_wakeup (id INTEGER, ts INTEGER, utid INTEGER, waker_utid INTEGER);
+        CREATE TABLE instant (ts INTEGER, track_id INTEGER, name TEXT);
         CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
         INSERT INTO slice VALUES (1, 5000, 3000, 'test', NULL, 10, NULL, 0), (2, 10000, 500, 'child', 1, 10, NULL, 1);
         INSERT INTO thread VALUES (1, 'main', 100, 1, 1);

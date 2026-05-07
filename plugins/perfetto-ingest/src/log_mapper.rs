@@ -7,7 +7,7 @@ use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 
-use crate::sqlite_reader::{PerfettoDb, PerfettoFtraceEvent, PerfettoSchedSlice, PerfettoSlice, PerfettoSpuriousWakeup, PerfettoThreadState};
+use crate::sqlite_reader::{PerfettoDb, PerfettoFtraceEvent, PerfettoInstant, PerfettoSchedSlice, PerfettoSlice, PerfettoSpuriousWakeup, PerfettoThreadState};
 use crate::timestamp::TimestampConverter;
 
 const SEVERITY_INFO: i32 = 9;
@@ -92,6 +92,16 @@ pub fn map_logs(
         if batch.len() >= SLICES_PER_LOG_BATCH {
             flush_log_batch(&mut batch, &mut batch_min_ts, emit, plugin);
         }
+    }
+    flush_log_batch(&mut batch, &mut batch_min_ts, emit, plugin);
+
+    // Emit instant events as log records.
+    let instants = db.read_instants()?;
+    for inst in &instants {
+        let ts = converter.to_realtime(inst.ts).ok().flatten().unwrap_or(0);
+        if batch.is_empty() || ts < batch_min_ts { batch_min_ts = ts; }
+        batch.push(instant_to_log(inst, converter));
+        if batch.len() >= SLICES_PER_LOG_BATCH { flush_log_batch(&mut batch, &mut batch_min_ts, emit, plugin); }
     }
     flush_log_batch(&mut batch, &mut batch_min_ts, emit, plugin);
 
@@ -265,6 +275,23 @@ fn spurious_wakeup_to_log(w: &PerfettoSpuriousWakeup, converter: &TimestampConve
         severity_number: SEVERITY_INFO, severity_text: "INFO".to_string(),
         body: Some(AnyValue { value: Some(Value::StringValue(body)) }),
         attributes: attrs,
+        dropped_attributes_count: 0, flags: 0,
+        trace_id: Vec::new(), span_id: Vec::new(), event_name: String::new(),
+    }
+}
+
+fn instant_to_log(inst: &PerfettoInstant, converter: &TimestampConverter) -> LogRecord {
+    let t = converter.to_realtime(inst.ts).ok().flatten().unwrap_or(0);
+    let name = inst.name.as_deref().unwrap_or("?");
+    let body = name.to_string();
+    LogRecord {
+        time_unix_nano: t, observed_time_unix_nano: t,
+        severity_number: SEVERITY_INFO, severity_text: "INFO".to_string(),
+        body: Some(AnyValue { value: Some(Value::StringValue(body)) }),
+        attributes: vec![
+            KeyValue { key: "perfetto.instant.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(name.to_string())) }) },
+            KeyValue { key: "perfetto.instant.track_id".to_string(), value: Some(AnyValue { value: Some(Value::IntValue(inst.track_id)) }) },
+        ],
         dropped_attributes_count: 0, flags: 0,
         trace_id: Vec::new(), span_id: Vec::new(), event_name: String::new(),
     }
