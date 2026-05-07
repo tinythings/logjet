@@ -79,6 +79,36 @@ pub struct PerfettoSchedSlice {
     pub end_state: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PerfettoThreadState {
+    pub id: i64,
+    pub ts: i64,
+    pub dur: i64,
+    pub utid: i64,
+    pub state: Option<String>,
+    pub io_wait: Option<bool>,
+    pub blocked_function: Option<String>,
+    pub waker_utid: Option<i64>,
+    pub cpu: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PerfettoFtraceEvent {
+    pub id: i64,
+    pub ts: i64,
+    pub name: Option<String>,
+    pub cpu: Option<i64>,
+    pub utid: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PerfettoSpuriousWakeup {
+    pub id: i64,
+    pub ts: i64,
+    pub utid: Option<i64>,
+    pub waker_utid: Option<i64>,
+}
+
 pub struct PerfettoDb {
     pub(crate) conn: rusqlite::Connection,
 }
@@ -339,6 +369,88 @@ impl PerfettoDb {
         let mut out = Vec::new();
         for row in rows {
             out.push(row.map_err(|err| format!("failed to read sched_slice row: {err}"))?);
+        }
+        Ok(out)
+    }
+
+    /// Reads thread state transitions ordered by ts.
+    pub fn read_thread_states(&self) -> Result<Vec<PerfettoThreadState>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, ts, dur, utid, state, io_wait, blocked_function, waker_utid, cpu
+                 FROM thread_state
+                 ORDER BY ts",
+            )
+            .map_err(|err| format!("failed to prepare thread_state query: {err}"))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoThreadState {
+                    id: row.get(0)?,
+                    ts: row.get(1)?,
+                    dur: row.get(2)?,
+                    utid: row.get(3)?,
+                    state: row.get(4)?,
+                    io_wait: row.get::<_, Option<i32>>(5)?.map(|v| v != 0),
+                    blocked_function: row.get(6)?,
+                    waker_utid: row.get(7)?,
+                    cpu: row.get(8)?,
+                })
+            })
+            .map_err(|err| format!("failed to query thread_state: {err}"))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read thread_state row: {err}"))?);
+        }
+        Ok(out)
+    }
+
+    /// Reads ftrace events ordered by ts.
+    pub fn read_ftrace_events(&self) -> Result<Vec<PerfettoFtraceEvent>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, ts, name, cpu, utid
+                 FROM ftrace_event
+                 ORDER BY ts",
+            )
+            .map_err(|err| format!("failed to prepare ftrace_event query: {err}"))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoFtraceEvent { id: row.get(0)?, ts: row.get(1)?, name: row.get(2)?, cpu: row.get(3)?, utid: row.get(4)? })
+            })
+            .map_err(|err| format!("failed to query ftrace_event: {err}"))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read ftrace_event row: {err}"))?);
+        }
+        Ok(out)
+    }
+
+    /// Reads spurious sched wakeup events ordered by ts.
+    pub fn read_spurious_wakeups(&self) -> Result<Vec<PerfettoSpuriousWakeup>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, ts, utid, waker_utid
+                 FROM spurious_sched_wakeup
+                 ORDER BY ts",
+            )
+            .map_err(|err| format!("failed to prepare spurious_sched_wakeup query: {err}"))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoSpuriousWakeup { id: row.get(0)?, ts: row.get(1)?, utid: row.get(2)?, waker_utid: row.get(3)? })
+            })
+            .map_err(|err| format!("failed to query spurious_sched_wakeup: {err}"))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read spurious_sched_wakeup row: {err}"))?);
         }
         Ok(out)
     }
