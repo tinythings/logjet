@@ -9,6 +9,7 @@ mod log_mapper;
 mod metric_mapper;
 mod metrics_reader;
 mod perfetto_invoke;
+mod rpc_client;
 mod sqlite_reader;
 mod timestamp;
 mod trace_mapper;
@@ -232,20 +233,16 @@ pub unsafe extern "C" fn lj_ingest_fetch(ctx: *mut PerfettoPlugin) -> c_int {
 }
 
 fn run_pipeline(plugin: &mut PerfettoPlugin, trace_file: &std::path::Path) -> Result<(), String> {
-    let tp_path = perfetto_invoke::find_trace_processor()
-        .map_err(|err| format!("trace_processor not found: {err}"))?;
+    let tp_path = perfetto_invoke::find_trace_processor().map_err(|err| format!("trace_processor not found: {err}"))?;
 
     eprintln!("perfetto-ingest: using trace_processor {}", tp_path.display());
     eprintln!("perfetto-ingest: exporting SQLite from {}", trace_file.display());
 
-    let sqlite_path = perfetto_invoke::export_sqlite(trace_file, &tp_path)
-        .map_err(|err| format!("SQLite export failed: {err}"))?;
+    let sqlite_path = perfetto_invoke::export_sqlite(trace_file, &tp_path).map_err(|err| format!("SQLite export failed: {err}"))?;
 
-    let db = sqlite_reader::PerfettoDb::open(&sqlite_path)
-        .map_err(|err| format!("failed to open exported DB: {err}"))?;
+    let db = sqlite_reader::PerfettoDb::open(&sqlite_path).map_err(|err| format!("failed to open exported DB: {err}"))?;
 
-    let snaps = db.read_clock_snapshots()
-        .map_err(|err| format!("failed to read clock snapshots: {err}"))?;
+    let snaps = db.read_clock_snapshots().map_err(|err| format!("failed to read clock snapshots: {err}"))?;
 
     let policy = match std::env::var("LJD_PERFETTO_TIMESTAMP_POLICY").as_deref() {
         Ok("require-realtime") => timestamp::TimestampPolicy::RequireRealtime,
@@ -273,19 +270,17 @@ fn run_pipeline(plugin: &mut PerfettoPlugin, trace_file: &std::path::Path) -> Re
     log_mapper::map_logs(&db, &converter, buffer_emit, plugin)?;
 
     // Optional metrics
-    let metrics_names: Vec<String> = std::env::var("LJD_PERFETTO_METRICS")
-        .ok()
-        .map(|s| s.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let metrics_names: Vec<String> =
+        std::env::var("LJD_PERFETTO_METRICS").ok().map(|s| s.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>()).unwrap_or_default();
     let metrics_refs: Vec<&str> = metrics_names.iter().map(|s| s.as_str()).collect();
     if !metrics_refs.is_empty()
-        && let Ok(Some(metrics_path)) = perfetto_invoke::export_metrics(trace_file, &tp_path, &metrics_refs) {
-            eprintln!("perfetto-ingest: mapping metrics...");
-            let metrics = metrics_reader::parse_metrics_json(&metrics_path)
-                .map_err(|err| format!("failed to parse metrics JSON: {err}"))?;
-            metric_mapper::map_metrics(&metrics, &converter, buffer_emit, plugin)?;
-            let _ = std::fs::remove_file(&metrics_path);
-        }
+        && let Ok(Some(metrics_path)) = perfetto_invoke::export_metrics(trace_file, &tp_path, &metrics_refs)
+    {
+        eprintln!("perfetto-ingest: mapping metrics...");
+        let metrics = metrics_reader::parse_metrics_json(&metrics_path).map_err(|err| format!("failed to parse metrics JSON: {err}"))?;
+        metric_mapper::map_metrics(&metrics, &converter, buffer_emit, plugin)?;
+        let _ = std::fs::remove_file(&metrics_path);
+    }
 
     let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
     EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
@@ -322,12 +317,7 @@ pub unsafe extern "C" fn lj_ingest_free(ctx: *mut PerfettoPlugin) {
 ///
 /// `ctx` must have a generic callback set.
 #[allow(dead_code)]
-pub(crate) unsafe fn emit_generic(
-    ctx: &PerfettoPlugin,
-    record_type: u32,
-    ts_unix_ns: u64,
-    payload: &[u8],
-) {
+pub(crate) unsafe fn emit_generic(ctx: &PerfettoPlugin, record_type: u32, ts_unix_ns: u64, payload: &[u8]) {
     let Some(cb) = ctx.generic_callback else {
         return;
     };
