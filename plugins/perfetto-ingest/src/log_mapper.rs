@@ -63,11 +63,10 @@ pub fn map_logs(
 
 fn slice_to_log(slice: &PerfettoSlice, converter: &TimestampConverter) -> LogRecord {
     let ts = converter.to_realtime(slice.ts).ok().flatten().unwrap_or(0);
-    let dur_ns = slice.dur as u64;
-    let dur_us = dur_ns as f64 / 1000.0;
+    let dur_us = slice.dur as f64 / 1000.0;
     let name = slice.name.as_deref().unwrap_or("(unnamed)");
 
-    let body = format!("{name}  ts={ts}  dur={dur_us:.1}us  depth={}", slice.depth);
+    let body = format!("{name}  dur={dur_us:.1}us  depth={}", slice.depth);
 
     LogRecord {
         time_unix_nano: ts,
@@ -103,9 +102,10 @@ fn slice_to_log(slice: &PerfettoSlice, converter: &TimestampConverter) -> LogRec
 
 fn sched_slice_to_log(s: &PerfettoSchedSlice, converter: &TimestampConverter) -> LogRecord {
     let ts = converter.to_realtime(s.ts).ok().flatten().unwrap_or(0);
-    let dur_us = s.dur as f64 / 1000.0;
     let end = s.end_state.as_deref().unwrap_or("?");
-    let body = format!("cpu={} dur={dur_us:.1}us state={end} utid={} ts={ts}", s.cpu, s.utid);
+    let dur_ns = s.dur as u64;
+    let dur_us = dur_ns as f64 / 1000.0;
+    let body = format!("cpu={} state={end} utid={}  dur={dur_us:.1}us", s.cpu, s.utid);
 
     LogRecord {
         time_unix_nano: ts,
@@ -121,6 +121,10 @@ fn sched_slice_to_log(s: &PerfettoSchedSlice, converter: &TimestampConverter) ->
             KeyValue {
                 key: "perfetto.sched.cpu".to_string(),
                 value: Some(AnyValue { value: Some(Value::IntValue(s.cpu)) }),
+            },
+            KeyValue {
+                key: "perfetto.sched.dur_ns".to_string(),
+                value: Some(AnyValue { value: Some(Value::IntValue(s.dur)) }),
             },
             KeyValue {
                 key: "perfetto.sched.end_state".to_string(),
