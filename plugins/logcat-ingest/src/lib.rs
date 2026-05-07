@@ -13,7 +13,7 @@ use std::ffi::{CString, c_char, c_int, c_void};
 use std::io::{self, BufRead, BufReader};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// ── C ABI types (must match liblogjet.h exactly) ────────────────────────────
+// C ABI types (must match liblogjet.h exactly)
 
 #[repr(C)]
 pub struct LjAttribute {
@@ -71,7 +71,7 @@ pub extern "C" fn lj_ingest_descriptor_v1() -> *const LjIngestDescriptorV1 {
     &LOGCAT_INGEST_DESCRIPTOR.0
 }
 
-// ── Severity constants ──────────────────────────────────────────────────────
+// Severity constants
 
 const LJ_SEVERITY_TRACE: i32 = 1;
 const LJ_SEVERITY_DEBUG: i32 = 5;
@@ -81,14 +81,14 @@ const LJ_SEVERITY_ERROR: i32 = 17;
 const LJ_SEVERITY_FATAL: i32 = 21;
 const LJ_ATTR_STRING: i32 = 0;
 
-// ── Plugin context ──────────────────────────────────────────────────────────
+// Plugin context
 
 pub struct LogcatPlugin {
     callback: Option<RecordCallback>,
     user: *mut c_void,
 }
 
-// ── Exported C ABI ──────────────────────────────────────────────────────────
+// Exported C ABI
 
 /// Creates a new logcat parsing context.
 #[unsafe(no_mangle)]
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn lj_ingest_free(ctx: *mut LogcatPlugin) {
     let _ = unsafe { Box::from_raw(ctx) };
 }
 
-// ── Logcat parsing ──────────────────────────────────────────────────────────
+// Logcat parsing
 
 struct Parsed<'a> {
     severity: i32,
@@ -263,7 +263,7 @@ fn map_logcat_level(ch: u8) -> (i32, &'static str) {
     }
 }
 
-// ── Record emission ─────────────────────────────────────────────────────────
+// Record emission
 
 fn emit_record(ctx: &LogcatPlugin, line: &str) {
     let Some(cb) = ctx.callback else { return };

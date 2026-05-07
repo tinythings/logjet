@@ -7,7 +7,7 @@
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// ── C ABI types (must match liblogjet.h exactly) ────────────────────────────
+// C ABI types (must match liblogjet.h exactly)
 
 #[repr(C)]
 pub struct LjAttribute {
@@ -65,7 +65,7 @@ pub extern "C" fn lj_ingest_descriptor_v1() -> *const LjIngestDescriptorV1 {
     &SYSLOG_INGEST_DESCRIPTOR.0
 }
 
-// ── Severity constants matching liblogjet.h ─────────────────────────────────
+// Severity constants matching liblogjet.h
 
 const LJ_SEVERITY_TRACE: i32 = 1;
 const LJ_SEVERITY_DEBUG: i32 = 5;
@@ -75,7 +75,7 @@ const LJ_SEVERITY_ERROR: i32 = 17;
 const LJ_SEVERITY_FATAL: i32 = 21;
 const LJ_ATTR_STRING: i32 = 0;
 
-// ── Plugin context ──────────────────────────────────────────────────────────
+// Plugin context
 
 /// Parsing context accumulates partial lines from the TCP stream.
 pub struct SyslogPlugin {
@@ -84,7 +84,7 @@ pub struct SyslogPlugin {
     user: *mut c_void,
 }
 
-// ── Exported C ABI ──────────────────────────────────────────────────────────
+// Exported C ABI
 
 /// Creates a new syslog parsing context.
 #[unsafe(no_mangle)]
@@ -155,7 +155,7 @@ pub unsafe extern "C" fn lj_ingest_free(ctx: *mut SyslogPlugin) {
     let _ = unsafe { Box::from_raw(ctx) };
 }
 
-// ── Syslog parsing ─────────────────────────────────────────────────────────
+// Syslog parsing
 
 /// Parsed fields from a syslog line.
 struct Parsed<'a> {
@@ -249,7 +249,7 @@ fn facility_name(facility: u32) -> &'static str {
     TABLE.get(facility as usize).copied().unwrap_or("unknown")
 }
 
-// ── Record emission ─────────────────────────────────────────────────────────
+// Record emission
 
 /// Emits a parsed syslog record through the C callback.
 fn emit_record(ctx: &SyslogPlugin, line: &[u8]) {

@@ -6,7 +6,7 @@
 
 use std::ffi::{CString, c_char, c_int, c_void};
 
-// ── C ABI types (must match liblogjet.h) ────────────────────────────────────
+// C ABI types (must match liblogjet.h)
 
 #[repr(C)]
 pub struct LjAttribute {
@@ -66,14 +66,14 @@ pub extern "C" fn lj_ingest_descriptor_v1() -> *const LjIngestDescriptorV1 {
     &STRESS_INGEST_DESCRIPTOR.0
 }
 
-// ── Plugin context ──────────────────────────────────────────────────────────
+// Plugin context
 
 pub struct StressPlugin {
     callback: Option<RecordCallback>,
     user: *mut c_void,
 }
 
-// ── Exported C ABI ──────────────────────────────────────────────────────────
+// Exported C ABI
 
 #[unsafe(no_mangle)]
 pub extern "C" fn lj_ingest_create() -> *mut StressPlugin {
@@ -140,7 +140,7 @@ pub unsafe extern "C" fn lj_ingest_free(ctx: *mut StressPlugin) {
     let _ = unsafe { Box::from_raw(ctx) };
 }
 
-// ── Record generation ───────────────────────────────────────────────────────
+// Record generation
 
 fn emit_record(ctx: &StressPlugin, cb: RecordCallback, seq: u64) {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;

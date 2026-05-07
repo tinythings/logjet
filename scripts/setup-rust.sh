@@ -14,7 +14,7 @@ have_rustup() { command -v rustup >/dev/null 2>&1; }
 have_cc() { command -v cc >/dev/null 2>&1; }
 have_nextest() { command -v cargo-nextest >/dev/null 2>&1; }
 
-# ── CC / system package helpers ─────────────────────────────────────────────
+# CC / system package helpers
 
 detect_pkg_manager() {
     case "$(uname -s)" in
@@ -106,7 +106,7 @@ ensure_cc() {
     echo "C compiler installed: $(cc --version 2>&1 | head -1)"
 }
 
-# ── Main ────────────────────────────────────────────────────────────────────
+# Main
 
 # Already installed: silent unless something needs fixing.
 if have_rustc && have_cargo && have_rustup; then

@@ -265,18 +265,60 @@ fn build(path: &Path, size: u64, modified_ns: Option<u64>) -> Result<DatasetInde
     let mut offset = 0u64;
 
     while offset < size {
-        let Some(block) = read_block_summary(&mut file, offset)? else {
-            break;
-        };
-        summary.merge(&block);
-        offset = block.offset + block.len;
-        blocks.push(block);
+        match read_block_summary(&mut file, offset)? {
+            Some(block) => {
+                summary.merge(&block);
+                offset = block.offset + block.len;
+                blocks.push(block);
+            }
+            None => {
+                // No sync marker at expected offset — resync by scanning forward.
+                offset = match find_next_sync_marker(&mut file, offset, size)? {
+                    Some(next) => next,
+                    None => break,
+                };
+            }
+        }
     }
 
     if blocks.is_empty() {
         return Err(logjet::Error::InvalidHeader("missing block sync").into());
     }
     Ok(DatasetIndex { summary: summary.finish(size, modified_ns), blocks })
+}
+
+/// Scans forward from `offset` looking for the logjet sync marker.
+/// Returns the offset of the start of the sync marker, or None if not found
+/// before `size`.
+fn find_next_sync_marker(file: &mut File, start: u64, size: u64) -> Result<Option<u64>> {
+    let mut buf = [0u8; 4096];
+    let mut matched = 0usize;
+    let mut scan_pos = start;
+
+    file.seek(SeekFrom::Start(start))?;
+
+    while scan_pos < size {
+        let space = buf.len().min((size - scan_pos) as usize);
+        if space == 0 {
+            break;
+        }
+        let n = file.read(&mut buf[..space])?;
+        if n == 0 {
+            break;
+        }
+        for (idx, &byte) in buf[..n].iter().enumerate() {
+            if byte == logjet::DEFAULT_SYNC_MARKER[matched] {
+                matched += 1;
+                if matched == logjet::DEFAULT_SYNC_MARKER.len() {
+                    return Ok(Some(scan_pos + idx as u64 + 1 - logjet::DEFAULT_SYNC_MARKER.len() as u64));
+                }
+            } else {
+                matched = usize::from(byte == logjet::DEFAULT_SYNC_MARKER[0]);
+            }
+        }
+        scan_pos += n as u64;
+    }
+    Ok(None)
 }
 
 fn persist(path: &Path, sidecar_path: &Path, index: &DatasetIndex) -> Result<()> {

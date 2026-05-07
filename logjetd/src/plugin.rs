@@ -449,7 +449,7 @@ fn push_unique_path(roots: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
-// ── C ABI types mirroring liblogjet.h ───────────────────────────────────────
+// C ABI types mirroring liblogjet.h
 
 // Legacy log-only signal mask (used when reserved[0] == 0 for old plugins).
 #[allow(dead_code)]
@@ -516,11 +516,12 @@ type SetCallbackFn = unsafe extern "C" fn(*mut LjIngestPlugin, RecordCallback, *
 type FeedFn = unsafe extern "C" fn(*mut LjIngestPlugin, *const u8, usize) -> c_int;
 type FetchFn = unsafe extern "C" fn(*mut LjIngestPlugin) -> c_int;
 type FreeFn = unsafe extern "C" fn(*mut LjIngestPlugin);
+type LastErrorFn = unsafe extern "C" fn(*mut LjIngestPlugin) -> *const c_char;
 type RecordCallback = unsafe extern "C" fn(*mut c_void, *const LjLogRecord);
 type GenericRecordCallback = unsafe extern "C" fn(*mut c_void, *const LjIngestRecordV1);
 type SetGenericCallbackFn = unsafe extern "C" fn(*mut LjIngestPlugin, GenericRecordCallback, *mut c_void);
 
-// ── Plugin handle ───────────────────────────────────────────────────────────
+// Plugin handle
 
 /// Resolved symbols from a loaded ingest plugin.
 struct PluginHandle {
@@ -534,6 +535,8 @@ struct PluginHandle {
     /// Multi-signal plugins export `lj_ingest_set_generic_callback`. If
     /// present, ljd calls it instead of `lj_ingest_set_callback`.
     set_generic_callback: Option<SetGenericCallbackFn>,
+    /// Optional error message retrieval (`lj_ingest_last_error`).
+    last_error: Option<LastErrorFn>,
     free: FreeFn,
 }
 
@@ -554,6 +557,8 @@ impl PluginHandle {
             let fetch: Option<FetchFn> = lib.get::<FetchFn>(b"lj_ingest_fetch\0").ok().map(|sym| *sym);
             let set_generic_callback: Option<SetGenericCallbackFn> =
                 lib.get::<SetGenericCallbackFn>(b"lj_ingest_set_generic_callback\0").ok().map(|sym| *sym);
+            let last_error: Option<LastErrorFn> =
+                lib.get::<LastErrorFn>(b"lj_ingest_last_error\0").ok().map(|sym| *sym);
             let free: libloading::Symbol<FreeFn> =
                 lib.get(b"lj_ingest_free\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_free: {err}")))?;
 
@@ -563,6 +568,7 @@ impl PluginHandle {
                 feed: *feed,
                 fetch,
                 set_generic_callback,
+                last_error,
                 free: *free,
                 _lib: lib,
             })
@@ -575,7 +581,7 @@ impl PluginHandle {
     }
 }
 
-// ── Callback plumbing ───────────────────────────────────────────────────────
+// Callback plumbing
 
 /// Passed through the `void *user` pointer in the C callback.
 struct CallbackCtx {
@@ -777,7 +783,7 @@ pub(crate) fn build_otlp_payload(rec: OtlpRecord<'_>) -> Vec<u8> {
     request.encode_to_vec()
 }
 
-// ── Public entry point ──────────────────────────────────────────────────────
+// Public entry point
 
 /// Runs the plugin ingest loop: loads the .so, then either calls
 /// `lj_ingest_fetch` (active plugin) or binds TCP and feeds bytes (passive).
@@ -869,6 +875,15 @@ fn run_active_plugin(handle: &PluginHandle, spool: Arc<super::daemon::SharedSpoo
     }
 
     let rc = unsafe { fetch(plugin_ctx) };
+
+    if rc != 0
+        && let Some(last_error_fn) = handle.last_error {
+            let msg = unsafe { last_error_fn(plugin_ctx) };
+            if !msg.is_null() {
+                let msg_str = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
+                eprintln!("ljd plugin error: {msg_str}");
+            }
+        }
 
     unsafe { (handle.free)(plugin_ctx) };
     let _ = unsafe { Box::from_raw(ctx_ptr as *mut CallbackCtx) };
