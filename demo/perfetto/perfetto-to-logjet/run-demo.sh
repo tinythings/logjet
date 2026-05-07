@@ -57,7 +57,7 @@ echo "Recording 5s of ftrace to $TRACE_FILE..."
 CONFIG_FILE="$SCRIPT_DIR/trace-config.txt"
 cat > "$CONFIG_FILE" <<'ENDCONFIG'
 buffers: {
-    size_kb: 4096
+    size_kb: 8192
     fill_policy: RING_BUFFER
 }
 data_sources: {
@@ -66,7 +66,13 @@ data_sources: {
         ftrace_config {
             ftrace_events: "sched/sched_switch"
             ftrace_events: "sched/sched_waking"
+            ftrace_events: "sched/sched_process_exec"
+            ftrace_events: "sched/sched_process_fork"
+            ftrace_events: "sched/sched_process_exit"
             ftrace_events: "power/cpu_frequency"
+            ftrace_events: "power/cpu_idle"
+            ftrace_events: "irq/irq_handler_entry"
+            ftrace_events: "irq/irq_handler_exit"
         }
     }
 }
