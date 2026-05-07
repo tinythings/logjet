@@ -5,17 +5,18 @@ ecosystem as OTel logs, traces, and metrics.
 
 ## Architecture
 
+Two acquisition modes — selectable via `ingest.plugin-env` config:
+
 ```
  .pftrace ──→ trace_processor (spawned as subprocess)
-                 ├── export sqlite  ──→ sqlite_reader ──→ trace_mapper ──→ OTel spans
-                 └── --run-metrics  ──→ metrics_reader ──→ metric_mapper ──→ OTel metrics
-                                                              log_mapper ──→ OTel logs
-                                                                                  │
-                                                                                  ▼
-                                                                         buffer & sort by ts
-                                                                                  │
-                                                                                  ▼
-                                                                           ljd spool (.logjet)
+                ├── SQLite (default): export sqlite → sqlite_reader → mappers
+                └── RPC:   server stdio → rpc_reader → mappers
+                                                     │
+                                                     ▼
+                                            buffer & sort by ts
+                                                     │
+                                                     ▼
+                                              ljd spool (.logjet)
 ```
 
 The plugin is an **active source** (`mode: 1`). ljd calls `lj_ingest_fetch()` once,
@@ -34,11 +35,9 @@ to guarantee monotonic timestamps in the logjet block format.
 
 ## Usage
 
-```bash
-# Build the plugin and ljd:
-make dev
+### SQLite path (default)
 
-# Create a config file (ljd uses YAML config, not CLI flags):
+```bash
 cat > /tmp/perfetto.conf <<EOF
 output: file
 file.path: ./spool
@@ -48,11 +47,33 @@ ingest.protocol: plugin
 ingest.plugin-path: ./target/debug/liblj_perfetto_ingest.so
 EOF
 
-# Run the import:
 LJD_PERFETTO_TRACE_FILE=/path/to/trace.pftrace \
 LJD_PERFETTO_TRACE_PROCESSOR=/path/to/trace_processor_shell \
   ljd serve --config /tmp/perfetto.conf
 ```
+
+### RPC path (no temp SQLite files)
+
+```bash
+cat > /tmp/perfetto-rpc.conf <<EOF
+output: file
+file.path: ./spool
+file.size: 10mb
+file.name: perfetto.logjet
+ingest.protocol: plugin
+ingest.plugin-path: ./target/debug/liblj_perfetto_ingest.so
+ingest.plugin-env:
+  - LJD_PERFETTO_ACQUISITION=rpc
+EOF
+
+LJD_PERFETTO_TRACE_FILE=/path/to/trace.pftrace \
+LJD_PERFETTO_TRACE_PROCESSOR=/path/to/trace_processor_shell \
+  ljd serve --config /tmp/perfetto-rpc.conf
+```
+
+`ingest.plugin-env` is a generic ljd config key that passes `KEY=VALUE` pairs
+to plugins as environment variables before loading. This avoids plugin-specific
+config keys.
 
 See `demo/perfetto/perfetto-to-logjet/run-demo.sh` for a complete end-to-end
 example that records, imports, and opens the result in `ljx view`.
@@ -64,6 +85,7 @@ example that records, imports, and opens the result in `ljx view`.
 | `LJD_PERFETTO_TRACE_FILE` | **Yes** | — | Path to the `.pftrace` input file. |
 | `LJD_PERFETTO_TRACE_PROCESSOR` | No | PATH search | Path to `trace_processor_shell` binary. |
 | `LJD_PERFETTO_TIMESTAMP_POLICY` | No | `best-effort` | `best-effort` or `require-realtime`. |
+| `LJD_PERFETTO_ACQUISITION` | No | `sqlite` | `rpc` for stdio RPC mode (no temp SQLite files). |
 | `LJD_PERFETTO_METRICS` | No | (none) | Comma-separated metric names to run, e.g. `trace_stats`. |
 
 ## Covered Perfetto Types

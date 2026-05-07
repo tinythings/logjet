@@ -1,7 +1,5 @@
 //! Parses Perfetto metrics JSON output.
-//!
-//! The `trace_processor metrics --run NAMES --output json` command writes
-//! JSON to stdout. Each metric is a top-level key in the JSON object.
+#![allow(dead_code)]
 
 use std::path::Path;
 
@@ -36,11 +34,9 @@ pub struct PerfettoMetric {
 /// ```
 /// or for structured metrics with nested entries.
 pub fn parse_metrics_json(path: &Path) -> Result<Vec<PerfettoMetric>, String> {
-    let bytes = std::fs::read(path)
-        .map_err(|err| format!("failed to read metrics JSON file {}: {err}", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|err| format!("failed to read metrics JSON file {}: {err}", path.display()))?;
 
-    let root: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|err| format!("failed to parse metrics JSON: {err}"))?;
+    let root: serde_json::Value = serde_json::from_slice(&bytes).map_err(|err| format!("failed to parse metrics JSON: {err}"))?;
 
     let obj = root.as_object().ok_or_else(|| format!("metrics JSON root is not an object: {}", path.display()))?;
 
@@ -55,10 +51,7 @@ pub fn parse_metrics_json(path: &Path) -> Result<Vec<PerfettoMetric>, String> {
 fn parse_metric(name: &str, value: &serde_json::Value) -> PerfettoMetric {
     let obj = value.as_object();
 
-    let scalar_value = obj
-        .and_then(|o| o.get("value"))
-        .and_then(|v| v.as_f64())
-        .or_else(|| value.as_f64());
+    let scalar_value = obj.and_then(|o| o.get("value")).and_then(|v| v.as_f64()).or_else(|| value.as_f64());
 
     let description = obj.and_then(|o| o.get("description")).and_then(|v| v.as_str()).map(String::from);
 
@@ -73,14 +66,7 @@ fn parse_metric(name: &str, value: &serde_json::Value) -> PerfettoMetric {
         })
         .unwrap_or_default();
 
-    let children = obj
-        .map(|o| {
-            o.iter()
-                .filter(|(_, v)| v.is_object())
-                .map(|(k, v)| parse_metric(k, v))
-                .collect()
-        })
-        .unwrap_or_default();
+    let children = obj.map(|o| o.iter().filter(|(_, v)| v.is_object()).map(|(k, v)| parse_metric(k, v)).collect()).unwrap_or_default();
 
     PerfettoMetric { name: name.to_string(), description, unit, scalar_value, labels, children }
 }

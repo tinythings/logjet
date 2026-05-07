@@ -112,9 +112,8 @@ pub(crate) fn sidecar_path(path: &Path) -> PathBuf {
 }
 
 fn cache_root_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| {
-        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache"))
-    })?;
+    let base =
+        std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))?;
     let dir = base.join("ljx");
     if std::fs::create_dir_all(&dir).is_err() {
         return None;
@@ -217,7 +216,11 @@ impl IndexBlock {
 fn load_fresh(path: &Path, size: u64, modified_ns: Option<u64>, sidecar_path: &Path) -> Option<DatasetIndex> {
     let bytes = std::fs::read(sidecar_path).ok()?;
     let disk: DiskIndex = serde_json::from_slice(&bytes).ok()?;
-    if disk.version != INDEX_VERSION || disk.source_path != path.display().to_string() || disk.source_size != size || disk.source_modified_ns != modified_ns {
+    if disk.version != INDEX_VERSION
+        || disk.source_path != path.display().to_string()
+        || disk.source_size != size
+        || disk.source_modified_ns != modified_ns
+    {
         return None;
     }
     Some(from_disk(disk))
@@ -473,7 +476,13 @@ impl SummaryBuilder {
         self.last_ts_unix_ns = Some(record.ts_unix_ns);
         self.record_types |= record_type_bit(record.record_type);
         if record.record_type == RecordType::Logs {
-            collect_log_summaries(&record.payload, &mut self.services, &mut self.services_complete, &mut self.severities, &mut self.severities_complete);
+            collect_log_summaries(
+                &record.payload,
+                &mut self.services,
+                &mut self.services_complete,
+                &mut self.severities,
+                &mut self.severities_complete,
+            );
         }
     }
 

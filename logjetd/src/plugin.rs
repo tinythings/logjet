@@ -500,9 +500,9 @@ struct LjLogRecord {
 #[repr(C)]
 struct LjIngestRecordV1 {
     struct_size: u32,
-    record_type: u32,        // LJ_INGEST_RECORD_TYPE_*
+    record_type: u32, // LJ_INGEST_RECORD_TYPE_*
     timestamp_unix_ns: u64,
-    payload: *const u8,      // pre-encoded OTLP protobuf bytes
+    payload: *const u8, // pre-encoded OTLP protobuf bytes
     payload_len: usize,
     flags: u32,
     reserved: [u64; 4],
@@ -557,21 +557,11 @@ impl PluginHandle {
             let fetch: Option<FetchFn> = lib.get::<FetchFn>(b"lj_ingest_fetch\0").ok().map(|sym| *sym);
             let set_generic_callback: Option<SetGenericCallbackFn> =
                 lib.get::<SetGenericCallbackFn>(b"lj_ingest_set_generic_callback\0").ok().map(|sym| *sym);
-            let last_error: Option<LastErrorFn> =
-                lib.get::<LastErrorFn>(b"lj_ingest_last_error\0").ok().map(|sym| *sym);
+            let last_error: Option<LastErrorFn> = lib.get::<LastErrorFn>(b"lj_ingest_last_error\0").ok().map(|sym| *sym);
             let free: libloading::Symbol<FreeFn> =
                 lib.get(b"lj_ingest_free\0").map_err(|err| io::Error::other(format!("symbol lj_ingest_free: {err}")))?;
 
-            Ok(Self {
-                create: *create,
-                set_callback: *set_callback,
-                feed: *feed,
-                fetch,
-                set_generic_callback,
-                last_error,
-                free: *free,
-                _lib: lib,
-            })
+            Ok(Self { create: *create, set_callback: *set_callback, feed: *feed, fetch, set_generic_callback, last_error, free: *free, _lib: lib })
         }
     }
 
@@ -789,35 +779,59 @@ pub(crate) fn build_otlp_payload(rec: OtlpRecord<'_>) -> Vec<u8> {
 
 /// Runs the plugin ingest loop: loads the .so, then either calls
 /// `lj_ingest_fetch` (active plugin) or binds TCP and feeds bytes (passive).
-pub fn plugin_ingest_loop(bind_addr: &str, plugin_path: &Path, spool: Arc<super::daemon::SharedSpool>, next_seq: Arc<AtomicU64>) -> io::Result<()> {
+pub fn plugin_ingest_loop(
+    bind_addr: &str, plugin_path: &Path, plugin_env: &[String], spool: Arc<super::daemon::SharedSpool>, next_seq: Arc<AtomicU64>,
+) -> io::Result<()> {
+    // Set plugin-specific environment variables before loading.
+    let prev_vars: Vec<_> = plugin_env
+        .iter()
+        .filter_map(|env| {
+            let (k, v) = env.split_once('=')?;
+            let prev = std::env::var(k).ok();
+            unsafe { std::env::set_var(k, v) };
+            Some((k.to_string(), prev))
+        })
+        .collect();
+
     let handle = Arc::new(PluginHandle::load(plugin_path)?);
 
-    if handle.is_active() {
+    let result = if handle.is_active() {
         eprintln!("ljd ingest using active plugin {}", plugin_path.display());
-        return run_active_plugin(&handle, spool, next_seq);
+        run_active_plugin(&handle, spool, next_seq)
+    } else {
+        let listener = TcpListener::bind(bind_addr)?;
+        eprintln!("ljd ingest listening on {bind_addr} using passive plugin {}", plugin_path.display());
+        let mut first = true;
+        for stream in listener.incoming() {
+            let stream = stream?;
+            let peer = stream.peer_addr().ok();
+            let handle = Arc::clone(&handle);
+            let spool = Arc::clone(&spool);
+            let next_seq = Arc::clone(&next_seq);
+
+            thread::Builder::new().name("ljd-plugin-client".to_string()).spawn(move || {
+                if let Err(err) = handle_plugin_client(stream, &handle, spool, next_seq) {
+                    eprintln!("ljd plugin client error: {err}");
+                }
+                if let Some(peer) = peer {
+                    eprintln!("ljd plugin client disconnected: {peer}");
+                }
+            })?;
+            first = false;
+        }
+        #[allow(unreachable_code)]
+        if first { Ok(()) } else { unreachable!() }
+    };
+
+    // Restore previous environment variables.
+    for (k, prev) in prev_vars {
+        match prev {
+            Some(val) => unsafe { std::env::set_var(&k, val) },
+            None => unsafe { std::env::remove_var(&k) },
+        }
     }
 
-    let listener = TcpListener::bind(bind_addr)?;
-    eprintln!("ljd ingest listening on {bind_addr} using passive plugin {}", plugin_path.display());
-
-    for stream in listener.incoming() {
-        let stream = stream?;
-        let peer = stream.peer_addr().ok();
-        let handle = Arc::clone(&handle);
-        let spool = Arc::clone(&spool);
-        let next_seq = Arc::clone(&next_seq);
-
-        thread::Builder::new().name("ljd-plugin-client".to_string()).spawn(move || {
-            if let Err(err) = handle_plugin_client(stream, &handle, spool, next_seq) {
-                eprintln!("ljd plugin client error: {err}");
-            }
-            if let Some(peer) = peer {
-                eprintln!("ljd plugin client disconnected: {peer}");
-            }
-        })?;
-    }
-
-    Ok(())
+    result
 }
 
 /// Handles a single TCP client through the plugin parser.
@@ -879,13 +893,14 @@ fn run_active_plugin(handle: &PluginHandle, spool: Arc<super::daemon::SharedSpoo
     let rc = unsafe { fetch(plugin_ctx) };
 
     if rc != 0
-        && let Some(last_error_fn) = handle.last_error {
-            let msg = unsafe { last_error_fn(plugin_ctx) };
-            if !msg.is_null() {
-                let msg_str = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
-                eprintln!("ljd plugin error: {msg_str}");
-            }
+        && let Some(last_error_fn) = handle.last_error
+    {
+        let msg = unsafe { last_error_fn(plugin_ctx) };
+        if !msg.is_null() {
+            let msg_str = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
+            eprintln!("ljd plugin error: {msg_str}");
         }
+    }
 
     unsafe { (handle.free)(plugin_ctx) };
     let _ = unsafe { Box::from_raw(ctx_ptr as *mut CallbackCtx) };

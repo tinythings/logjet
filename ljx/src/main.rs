@@ -35,9 +35,12 @@ fn run() -> Result<()> {
     let mut matches = command.get_matches_mut();
     let cli = Cli::from_arg_matches_mut(&mut matches).map_err(|err| crate::error::Error::Usage(err.to_string()))?;
     if let Some(format) = cli.export.as_deref() {
-        let input = cli.input.as_deref().and_then(|inputs| inputs.first()).cloned().ok_or_else(|| {
-            Error::Usage("missing export input; use `ljx --export <format> <input> -o <output>`".to_string())
-        })?;
+        let input = cli
+            .input
+            .as_deref()
+            .and_then(|inputs| inputs.first())
+            .cloned()
+            .ok_or_else(|| Error::Usage("missing export input; use `ljx --export <format> <input> -o <output>`".to_string()))?;
         let output = cli.output.ok_or_else(|| Error::Usage("missing export output; use `ljx --export <format> <input> -o <output>`".to_string()))?;
         return commands::export::run(format, &input, &output, cli.force, &cli.fields);
     }
@@ -46,9 +49,7 @@ fn run() -> Result<()> {
         predicate.field_filter.services = crate::predicate::parse_string_filter(cli.services, "service")?;
         predicate.field_filter.severities = crate::predicate::parse_string_filter(cli.severities, "severity")?;
         return match cli.format.unwrap_or(ExportFormat::Ndjson) {
-            ExportFormat::Ndjson => {
-                commands::export::run_query_ndjson_multi(inputs, &predicate, &cli.fields, cli.preview_bytes)
-            }
+            ExportFormat::Ndjson => commands::export::run_query_ndjson_multi(inputs, &predicate, &cli.fields, cli.preview_bytes),
         };
     }
     if cli.format.is_some() || cli.predicate.has_filters() {

@@ -95,10 +95,7 @@ fn paged_entries(dataset: &Dataset, offset: usize, limit: Option<usize>) -> Resu
 }
 
 fn scan_entries_parallel(
-    entries: Vec<DatasetEntry>,
-    predicate: &RecordPredicate,
-    service_filter: Option<&HashSet<String>>,
-    severity_filter: Option<&HashSet<String>>,
+    entries: Vec<DatasetEntry>, predicate: &RecordPredicate, service_filter: Option<&HashSet<String>>, severity_filter: Option<&HashSet<String>>,
     workers: usize,
 ) -> Result<Vec<FileScan>> {
     if entries.is_empty() {
@@ -106,10 +103,7 @@ fn scan_entries_parallel(
     }
     let worker_count = workers.max(1).min(entries.len());
     if worker_count == 1 {
-        return entries
-            .iter()
-            .map(|entry| scan_entry(entry, predicate, service_filter, severity_filter))
-            .collect();
+        return entries.iter().map(|entry| scan_entry(entry, predicate, service_filter, severity_filter)).collect();
     }
 
     let predicate = predicate.clone();

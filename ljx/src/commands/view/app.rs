@@ -43,13 +43,11 @@ impl ViewApp {
         let catalog_bg = Arc::clone(&catalog);
         let dataset_bg = dataset.clone();
         let workers = crate::scan_workers::default_worker_count();
-        thread::Builder::new()
-            .name(format!("ljx-field-catalog-{workers}"))
-            .spawn(move || {
-                if let Ok(cat) = scan_field_catalog(&dataset_bg, workers) {
-                    *catalog_bg.lock().unwrap() = Some(cat);
-                }
-            })?;
+        thread::Builder::new().name(format!("ljx-field-catalog-{workers}")).spawn(move || {
+            if let Ok(cat) = scan_field_catalog(&dataset_bg, workers) {
+                *catalog_bg.lock().unwrap() = Some(cat);
+            }
+        })?;
 
         Ok(Self {
             input: dataset.primary_path().to_path_buf(),
@@ -1202,24 +1200,18 @@ impl ViewApp {
             let _ = std::fs::remove_file(scan.spool_path);
         }
         self.input = path;
-        let options = if self.nfs_mode {
-            crate::dataset::DatasetOptions::nfs()
-        } else {
-            crate::dataset::DatasetOptions::default()
-        };
+        let options = if self.nfs_mode { crate::dataset::DatasetOptions::nfs() } else { crate::dataset::DatasetOptions::default() };
         self.dataset = Dataset::from_inputs_with_options(std::slice::from_ref(&self.input), options)?;
 
         let catalog_bg = Arc::clone(&self.field_catalog);
         let dataset_bg = self.dataset.clone();
         *self.field_catalog.lock().unwrap() = None;
         let workers = crate::scan_workers::default_worker_count();
-        thread::Builder::new()
-            .name(format!("ljx-field-catalog-{workers}"))
-            .spawn(move || {
-                if let Ok(cat) = scan_field_catalog(&dataset_bg, workers) {
-                    *catalog_bg.lock().unwrap() = Some(cat);
-                }
-            })?;
+        thread::Builder::new().name(format!("ljx-field-catalog-{workers}")).spawn(move || {
+            if let Ok(cat) = scan_field_catalog(&dataset_bg, workers) {
+                *catalog_bg.lock().unwrap() = Some(cat);
+            }
+        })?;
 
         self.query_input.clear();
         self.apply_filter()

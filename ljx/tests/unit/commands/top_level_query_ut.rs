@@ -69,14 +69,7 @@ fn top_level_query_grep_scans_multiple_inputs() {
 
     let predicate = PredicateArgs { grep: vec!["timeout|bad".to_string()], ..PredicateArgs::default() }.build().unwrap();
     let mut output = Vec::new();
-    run_query_ndjson_multi_with_writer(
-        &[PathBuf::from(&a), PathBuf::from(&b)],
-        &predicate,
-        &[],
-        None,
-        &mut output,
-    )
-    .unwrap();
+    run_query_ndjson_multi_with_writer(&[PathBuf::from(&a), PathBuf::from(&b)], &predicate, &[], None, &mut output).unwrap();
 
     let text = String::from_utf8(output).unwrap();
     let rows = text.lines().map(|line| serde_json::from_str::<JsonValue>(line).unwrap()).collect::<Vec<_>>();

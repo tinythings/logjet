@@ -200,13 +200,13 @@ fn realistic_db() -> super::sqlite_reader::PerfettoDb {
 
 #[test]
 fn log_mapper_produces_monotonic_timestamps_with_realistic_data() {
-    let db = realistic_db();
+    let mut db = realistic_db();
     let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
 
     // Collect emits into a buffer, sort, then verify monotonic.
     EMIT_BUF.with(|buf| buf.borrow_mut().clear());
-    log_mapper::map_logs(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit)).unwrap();
+    log_mapper::map_logs(&mut db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit)).unwrap();
 
     let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
     EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
@@ -222,7 +222,7 @@ fn log_mapper_produces_monotonic_timestamps_with_realistic_data() {
 
 #[test]
 fn full_pipeline_sorts_across_mappers_monotonically() {
-    let db = realistic_db();
+    let mut db = realistic_db();
     let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
 
@@ -231,7 +231,7 @@ fn full_pipeline_sorts_across_mappers_monotonically() {
     // Run mappers in varying order — traces first, then logs (opposite of monotonic order).
     // The buffer should sort everything before emitting.
     let _ = trace_mapper::map_traces(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
-    let _ = log_mapper::map_logs(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
+    let _ = log_mapper::map_logs(&mut db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
 
     let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
     EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
@@ -413,10 +413,7 @@ fn timestamp_has_realtime() {
 #[test]
 fn trace_mapper_produces_spans_from_slices() {
     let db = test_db();
-    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot {
-        ts: 0,
-        clock_value: 1_700_000_000_000_000_000,
-    }];
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
     let emitted = run_trace_mapper(&db, &converter);
 
@@ -485,13 +482,8 @@ fn metric_mapper_flattens_nested_metrics() {
 
     let emitted = run_metric_mapper(&metrics);
     let payload = &emitted[0].2;
-    let req = opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest::decode(payload.as_slice())
-        .unwrap();
-    let names: Vec<&str> = req.resource_metrics[0].scope_metrics[0]
-        .metrics
-        .iter()
-        .map(|m| m.name.as_str())
-        .collect();
+    let req = opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest::decode(payload.as_slice()).unwrap();
+    let names: Vec<&str> = req.resource_metrics[0].scope_metrics[0].metrics.iter().map(|m| m.name.as_str()).collect();
     assert!(names.contains(&"parent"));
     assert!(names.contains(&"parent.child"));
 }
@@ -500,8 +492,8 @@ fn metric_mapper_flattens_nested_metrics() {
 
 #[test]
 fn log_mapper_produces_per_slice_and_summary_logs() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     // 3 slices + 1 summary = 4 log records
     assert!(emitted.len() >= 2, "expected per-slice logs + summary");
     assert!(emitted.iter().all(|(rt, _, _)| *rt == crate::LJ_INGEST_RECORD_TYPE_LOGS));
@@ -528,17 +520,11 @@ fn run_pipeline_integration_with_sqlite() {
 
 // test helpers for mapper tests
 
-fn run_trace_mapper(
-    db: &super::sqlite_reader::PerfettoDb,
-    converter: &timestamp::TimestampConverter,
-) -> Vec<EmittedRecord> {
+fn run_trace_mapper(db: &super::sqlite_reader::PerfettoDb, converter: &timestamp::TimestampConverter) -> Vec<EmittedRecord> {
     run_trace_mapper_result(db, converter).unwrap()
 }
 
-fn run_trace_mapper_result(
-    db: &super::sqlite_reader::PerfettoDb,
-    converter: &timestamp::TimestampConverter,
-) -> Result<Vec<EmittedRecord>, String> {
+fn run_trace_mapper_result(db: &super::sqlite_reader::PerfettoDb, converter: &timestamp::TimestampConverter) -> Result<Vec<EmittedRecord>, String> {
     let plugin = dummy_plugin(dummy_emit);
     trace_mapper::map_traces(db, converter, super::emit_generic, &plugin)?;
     Ok(take_records(&plugin))
@@ -551,7 +537,7 @@ fn run_metric_mapper(metrics: &[crate::metrics_reader::PerfettoMetric]) -> Vec<E
     take_records(&plugin)
 }
 
-fn run_log_mapper(db: &super::sqlite_reader::PerfettoDb) -> Vec<EmittedRecord> {
+fn run_log_mapper(db: &mut super::sqlite_reader::PerfettoDb) -> Vec<EmittedRecord> {
     let plugin = dummy_plugin(dummy_emit);
     let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
@@ -599,8 +585,8 @@ fn sqlite_reader_reads_instants() {
 
 #[test]
 fn log_mapper_produces_thread_state_records() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     // Should include 2 thread_state records + slices + sched + ftrace + spurious + instant + summary
     assert!(emitted.iter().any(|(rt, _, _)| *rt == crate::LJ_INGEST_RECORD_TYPE_LOGS));
     // Verify thread_state attributes in payload
@@ -623,8 +609,8 @@ fn log_mapper_produces_thread_state_records() {
 
 #[test]
 fn log_mapper_produces_ftrace_event_records() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     let has_ftrace = emitted.iter().any(|(_, _, payload)| {
         if let Ok(req) = prost::Message::decode(payload.as_slice()) {
             let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
@@ -644,18 +630,14 @@ fn log_mapper_produces_ftrace_event_records() {
 
 #[test]
 fn log_mapper_produces_spurious_wakeup_records() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     let has_sw = emitted.iter().any(|(_, _, payload)| {
         if let Ok(req) = prost::Message::decode(payload.as_slice()) {
             let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
-            req.resource_logs.iter().any(|rl| {
-                rl.scope_logs.iter().any(|sl| {
-                    sl.log_records.iter().any(|lr| {
-                        lr.attributes.iter().any(|kv| kv.key == "perfetto.sw.id")
-                    })
-                })
-            })
+            req.resource_logs
+                .iter()
+                .any(|rl| rl.scope_logs.iter().any(|sl| sl.log_records.iter().any(|lr| lr.attributes.iter().any(|kv| kv.key == "perfetto.sw.id"))))
         } else {
             false
         }
@@ -665,8 +647,8 @@ fn log_mapper_produces_spurious_wakeup_records() {
 
 #[test]
 fn log_mapper_produces_instant_records() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     let has_instant = emitted.iter().any(|(_, _, payload)| {
         if let Ok(req) = prost::Message::decode(payload.as_slice()) {
             let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
@@ -778,11 +760,11 @@ fn sqlite_reader_reads_filedescriptors() {
 
 fn run_core_pipeline(sqlite_path: &std::path::Path) -> Vec<EmittedRecord> {
     let plugin = dummy_plugin(dummy_emit);
-    let db = super::sqlite_reader::PerfettoDb::open(sqlite_path).unwrap();
+    let mut db = super::sqlite_reader::PerfettoDb::open(sqlite_path).unwrap();
     let snaps = db.read_clock_snapshots().unwrap();
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
     let _ = trace_mapper::map_traces(&db, &converter, super::emit_generic, &plugin);
-    let _ = log_mapper::map_logs(&db, &converter, super::emit_generic, &plugin);
+    let _ = log_mapper::map_logs(&mut db, &converter, super::emit_generic, &plugin);
     take_records(&plugin)
 }
 
@@ -842,3 +824,56 @@ fn temp_sqlite_file() -> std::path::PathBuf {
     ).unwrap();
     path
 }
+
+fn strip_rpc_frame(data: &[u8]) -> Vec<u8> {
+    if data.first() != Some(&0x0a) {
+        return data.to_vec();
+    }
+    let mut p = 1usize;
+    let _len = {
+        let (mut v, mut s) = (0u64, 0u32);
+        loop {
+            let b = data[p];
+            p += 1;
+            v |= ((b & 0x7F) as u64) << s;
+            if b & 0x80 == 0 {
+                break v;
+            }
+            s += 7;
+        }
+    };
+    data[p..].to_vec()
+}
+
+fn parse_bytes(raw: &[u8]) -> crate::rpc_client::QueryResult {
+    let rpc = strip_rpc_frame(raw);
+    crate::rpc_client::parse_response(&rpc, None).expect("parse_response returned None")
+}
+
+macro_rules! fixture_test {
+    ($name:ident, $file:literal, $cols:expr, $rows:expr, $col_count:expr) => {
+        #[test]
+        fn $name() {
+            let qr = parse_bytes(include_bytes!(concat!("../../tests/fixtures/", $file)));
+            assert_eq!(qr.column_names.as_slice(), $cols);
+            assert_eq!(qr.rows.len(), $rows);
+            if !qr.rows.is_empty() {
+                assert_eq!(qr.rows[0].len(), $col_count);
+            }
+        }
+    };
+}
+
+fixture_test!(rpc_fixture_clock_snapshot, "clock_snapshot.bin", &["ts", "clock_value"], 5, 2);
+fixture_test!(rpc_fixture_sched_slice, "sched_slice.bin", &["id", "ts", "dur", "utid", "ucpu", "end_state"], 5, 6);
+fixture_test!(
+    rpc_fixture_thread_state,
+    "thread_state.bin",
+    &["id", "ts", "dur", "utid", "state", "io_wait", "blocked_function", "waker_utid", "cpu"],
+    5,
+    9
+);
+fixture_test!(rpc_fixture_ftrace_event, "ftrace_event.bin", &["id", "ts", "name", "cpu", "utid"], 5, 5);
+fixture_test!(rpc_fixture_spurious_wakeup, "spurious_wakeup.bin", &["id", "ts", "utid", "waker_utid"], 3, 4);
+fixture_test!(rpc_fixture_process, "process.bin", &["upid", "name", "pid"], 1, 3);
+fixture_test!(rpc_fixture_thread, "thread.bin", &["utid", "name", "tid", "upid", "is_main_thread"], 5, 5);

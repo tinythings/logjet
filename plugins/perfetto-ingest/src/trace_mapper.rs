@@ -14,8 +14,8 @@ use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use opentelemetry_proto::tonic::trace::v1::span::SpanKind;
-use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span, Status};
 use opentelemetry_proto::tonic::trace::v1::status::StatusCode;
+use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span, Status};
 use prost::Message;
 
 use crate::sqlite_reader::{PerfettoDb, PerfettoSlice};
@@ -40,14 +40,8 @@ impl TraceContext {
         let _tracks = db.read_tracks()?;
         let processes = db.read_processes()?;
 
-        let thread_names: HashMap<i64, String> = threads
-            .iter()
-            .filter_map(|t| t.name.clone().map(|n| (t.utid, n)))
-            .collect();
-        let process_names: HashMap<i64, String> = processes
-            .iter()
-            .filter_map(|p| p.name.clone().map(|n| (p.upid, n)))
-            .collect();
+        let thread_names: HashMap<i64, String> = threads.iter().filter_map(|t| t.name.clone().map(|n| (t.utid, n))).collect();
+        let process_names: HashMap<i64, String> = processes.iter().filter_map(|p| p.name.clone().map(|n| (p.upid, n))).collect();
         let thread_process: HashMap<i64, i64> = threads.iter().filter_map(|t| t.upid.map(|u| (t.utid, u))).collect();
 
         Ok(Self { thread_names, process_names, thread_process })
@@ -56,9 +50,7 @@ impl TraceContext {
 
 /// Maps all slices in the DB to OTel spans and streams them through `emit`.
 pub fn map_traces(
-    db: &PerfettoDb,
-    converter: &TimestampConverter,
-    emit: unsafe fn(ctx: &crate::PerfettoPlugin, record_type: u32, ts_unix_ns: u64, payload: &[u8]),
+    db: &PerfettoDb, converter: &TimestampConverter, emit: unsafe fn(ctx: &crate::PerfettoPlugin, record_type: u32, ts_unix_ns: u64, payload: &[u8]),
     plugin: &crate::PerfettoPlugin,
 ) -> Result<(), String> {
     let ctx = TraceContext::build(db)?;
@@ -96,12 +88,7 @@ pub fn map_traces(
     Ok(())
 }
 
-fn build_span(
-    slice: &PerfettoSlice,
-    trace_id: &[u8; 16],
-    _ctx: &TraceContext,
-    converter: &TimestampConverter,
-) -> Result<Span, String> {
+fn build_span(slice: &PerfettoSlice, trace_id: &[u8; 16], _ctx: &TraceContext, converter: &TimestampConverter) -> Result<Span, String> {
     let start_time = converter.to_realtime(slice.ts)?.unwrap_or(0);
     let end_time = converter.to_realtime(slice.ts.saturating_add(slice.dur))?.unwrap_or_else(|| start_time.saturating_add(slice.dur.max(0) as u64));
 
@@ -145,11 +132,8 @@ fn build_span(
 }
 
 fn flush_batch(
-    batch: &mut Vec<Span>,
-    batch_min_ts: &mut Option<u64>,
-    _trace_id: &[u8; 16],
-    emit: unsafe fn(ctx: &crate::PerfettoPlugin, record_type: u32, ts_unix_ns: u64, payload: &[u8]),
-    plugin: &crate::PerfettoPlugin,
+    batch: &mut Vec<Span>, batch_min_ts: &mut Option<u64>, _trace_id: &[u8; 16],
+    emit: unsafe fn(ctx: &crate::PerfettoPlugin, record_type: u32, ts_unix_ns: u64, payload: &[u8]), plugin: &crate::PerfettoPlugin,
 ) -> Result<(), String> {
     if batch.is_empty() {
         return Ok(());
@@ -159,13 +143,8 @@ fn flush_batch(
     let ts = batch_min_ts.unwrap_or(0);
     *batch_min_ts = None;
 
-    let resource = Resource {
-        attributes: vec![
-            key_value("service.name", any_string("perfetto")),
-        ],
-        dropped_attributes_count: 0,
-        entity_refs: Vec::new(),
-    };
+    let resource =
+        Resource { attributes: vec![key_value("service.name", any_string("perfetto"))], dropped_attributes_count: 0, entity_refs: Vec::new() };
 
     let scope_spans = ScopeSpans {
         scope: Some(opentelemetry_proto::tonic::common::v1::InstrumentationScope {
@@ -179,11 +158,7 @@ fn flush_batch(
     };
 
     let request = ExportTraceServiceRequest {
-        resource_spans: vec![ResourceSpans {
-            resource: Some(resource),
-            scope_spans: vec![scope_spans],
-            schema_url: String::new(),
-        }],
+        resource_spans: vec![ResourceSpans { resource: Some(resource), scope_spans: vec![scope_spans], schema_url: String::new() }],
     };
 
     let payload = request.encode_to_vec();
@@ -196,10 +171,7 @@ fn flush_batch(
 
 fn make_trace_id() -> [u8; 16] {
     let mut id = [0u8; 16];
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
     id[..8].copy_from_slice(&ts.to_le_bytes());
     id[8..16].copy_from_slice(&(std::process::id() as u64).to_le_bytes());
     id

@@ -252,8 +252,7 @@ fn make_view_app(input: std::path::PathBuf) -> ViewApp {
 }
 
 fn make_view_app_inputs(inputs: Vec<std::path::PathBuf>) -> ViewApp {
-    ViewApp::new(ViewArgs { inputs, dataset_order: ViewOrderArg::Concat, nfs: false, hex_payload: false, tail: false })
-        .expect("view app")
+    ViewApp::new(ViewArgs { inputs, dataset_order: ViewOrderArg::Concat, nfs: false, hex_payload: false, tail: false }).expect("view app")
 }
 
 fn make_view_app_inputs_order(inputs: Vec<std::path::PathBuf>, dataset_order: ViewOrderArg) -> ViewApp {

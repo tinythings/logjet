@@ -39,14 +39,16 @@ pub(super) fn scan_field_catalog(dataset: &Dataset, workers: usize) -> Result<Fi
         let tx = tx.clone();
         let paths = Arc::clone(&paths);
         let cursor = Arc::clone(&cursor);
-        handles.push(thread::spawn(move || loop {
-            let idx = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if idx >= paths.len() {
-                break;
+        handles.push(thread::spawn(move || {
+            loop {
+                let idx = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if idx >= paths.len() {
+                    break;
+                }
+                let path = &paths[idx];
+                let result = scan_field_catalog_file(path);
+                let _ = tx.send(result);
             }
-            let path = &paths[idx];
-            let result = scan_field_catalog_file(path);
-            let _ = tx.send(result);
         }));
     }
     drop(tx);
@@ -351,7 +353,8 @@ struct IndexedScanState<'a> {
 }
 
 fn scan_indexed_entry(
-    entry: &crate::dataset::DatasetEntry, index: &crate::dataset_index::DatasetIndex, predicate: &crate::predicate::RecordPredicate, state: &mut IndexedScanState<'_>,
+    entry: &crate::dataset::DatasetEntry, index: &crate::dataset_index::DatasetIndex, predicate: &crate::predicate::RecordPredicate,
+    state: &mut IndexedScanState<'_>,
 ) -> Result<()> {
     for block in &index.blocks {
         if state.cancel.load(Ordering::Relaxed) {
