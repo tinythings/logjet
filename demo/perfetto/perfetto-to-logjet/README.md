@@ -8,7 +8,7 @@ plugin into a `.logjet` spool, and view the result in `ljx view`.
 ```bash
 # From workspace root
 make dev
-./scripts/build-perfetto.sh
+./demo/perfetto/build-perfetto.sh
 ```
 
 ## Run
@@ -48,5 +48,5 @@ Requires sudo for ftrace access.
 
 - **0 records**: The trace needs ftrace events — they require root. The script
   uses `sudo tracebox`. If passwordless sudo isn't configured, run `sudo ./run-demo.sh`.
-- **Fewer records than expected in ljx view**: Delete stale index cache:
-  `rm -rf ~/.cache/ljx && ./run-demo.sh`
+- **ljx view shows fewer records than expected**: The ljx index builder bug was fixed
+  in this PR. If you still see fewer records, delete `~/.cache/ljx/` and re-run.

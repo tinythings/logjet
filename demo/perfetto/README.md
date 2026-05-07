@@ -4,12 +4,12 @@
 
 ```bash
 # From workspace root — downloads deps and builds all needed tools.
-./scripts/build-perfetto.sh
+./demo/perfetto/build-perfetto.sh
 ```
 
 Or pass a custom source path:
 ```bash
-./scripts/build-perfetto.sh /path/to/perfetto
+./demo/perfetto/build-perfetto.sh /path/to/perfetto
 ```
 
 The script installs missing system packages (git, python3, curl, tar), downloads

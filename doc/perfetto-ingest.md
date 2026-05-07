@@ -24,7 +24,7 @@ callback.
 - Perfetto trace processor binary (`trace_processor` or `trace_processor_shell`).
   Build it from the bundled Perfetto source:
   ```bash
-  ./scripts/build-perfetto.sh
+  ./demo/perfetto/build-perfetto.sh
   ```
 - A `.pftrace` trace file to import.
 
