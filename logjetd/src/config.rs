@@ -16,6 +16,8 @@ pub struct Config {
     pub ingest_plugin_dir: Option<PathBuf>,
     /// Optional descriptor name selected from `ingest_plugin_dir` and system plugin roots.
     pub ingest_plugin_name: Option<String>,
+    /// Environment variables passed to the ingest plugin (KEY=VALUE pairs).
+    pub ingest_plugin_env: Vec<String>,
     pub replay_addr: String,
     pub replay_max_clients: usize,
     pub replay_client_timeout_ms: u64,
@@ -226,6 +228,8 @@ struct RawConfig {
     ingest_plugin: Option<String>,
     #[serde(rename = "ingest.use")]
     ingest_use: Option<String>,
+    #[serde(rename = "ingest.plugin-env", default)]
+    ingest_plugin_env: Vec<String>,
     #[serde(rename = "replay.listen")]
     replay_addr: Option<String>,
     #[serde(rename = "replay.max-clients")]
@@ -313,6 +317,7 @@ impl Config {
                 ingest_plugin_dir: None,
                 ingest_plugin: None,
                 ingest_use: None,
+                ingest_plugin_env: Vec::new(),
                 replay_addr: None,
                 replay_max_clients: None,
                 replay_client_timeout_ms: None,
@@ -497,6 +502,7 @@ impl Config {
             ingest_plugin_path,
             ingest_plugin_dir,
             ingest_plugin_name,
+            ingest_plugin_env: raw.ingest_plugin_env,
             replay_addr,
             replay_max_clients,
             replay_client_timeout_ms,

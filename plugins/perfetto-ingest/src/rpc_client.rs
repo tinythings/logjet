@@ -8,6 +8,9 @@ use std::io::Write;
 // Varint
 
 fn read_varint(buf: &[u8], pos: &mut usize) -> Option<u64> {
+    pub fn read_varint_public(buf: &[u8], pos: &mut usize) -> Option<u64> {
+        read_varint(buf, pos)
+    }
     let (mut value, mut shift) = (0u64, 0u32);
     loop {
         if *pos >= buf.len() {
@@ -76,7 +79,18 @@ fn read_next_tag<'a>(buf: &'a [u8], pos: &mut usize) -> Option<(u64, FieldValue<
             })
         }
         _ => {
-            let _ = read_varint(buf, pos);
+            let wire = (tag_raw & 0x07) as u8;
+            match wire {
+                0 => {
+                    let _ = read_varint(buf, pos);
+                }
+                // Skip length-delimited: varint length + bytes
+                _ => {
+                    if let Some(len) = read_varint(buf, pos) {
+                        *pos = (*pos + len as usize).min(buf.len());
+                    }
+                }
+            }
             Some((tag_raw >> 3, FieldValue::Varint(0)))
         }
     }
@@ -120,7 +134,7 @@ pub fn build_query_request(seq: u64, sql: &str) -> Vec<u8> {
 /// Parses a length-delimited `TraceProcessorRpc` response frame. Returns
 /// `Some(QueryResult)` if the frame is a `TPM_QUERY_STREAMING` response,
 /// or `None` otherwise.
-pub fn parse_response(rpc_bytes: &[u8]) -> Option<QueryResult> {
+pub fn parse_response(rpc_bytes: &[u8], fallback_ncols: Option<usize>) -> Option<QueryResult> {
     let (mut pos, mut qr_bytes, mut is_resp) = (0, None, false);
     while pos < rpc_bytes.len() {
         let (field, value) = read_next_tag(rpc_bytes, &mut pos)?;
@@ -134,25 +148,35 @@ pub fn parse_response(rpc_bytes: &[u8]) -> Option<QueryResult> {
             _ => {}
         }
     }
-    is_resp.then_some(()).and_then(|_| decode_query_result(qr_bytes?))
+    is_resp.then_some(()).and_then(|_| decode_query_result(qr_bytes?, fallback_ncols))
 }
 
-fn decode_query_result(bytes: &[u8]) -> Option<QueryResult> {
-    let (mut pos, mut column_names, mut error, mut all_rows) = (0, Vec::new(), None, Vec::new());
+fn decode_query_result(bytes: &[u8], fallback_ncols: Option<usize>) -> Option<QueryResult> {
+    let (mut pos, mut column_names, mut error, mut batches, mut is_last) = (0, Vec::new(), None, Vec::new(), false);
     while pos < bytes.len() {
         let (field, value) = read_next_tag(bytes, &mut pos)?;
         match (field, value) {
             (1, FieldValue::LengthDelimited(d)) => column_names.push(String::from_utf8_lossy(d).to_string()),
             (2, FieldValue::LengthDelimited(d)) => error = Some(String::from_utf8_lossy(d).to_string()),
-            (3, FieldValue::LengthDelimited(d)) => all_rows.extend(decode_cells_batch(d)?),
+            (3, FieldValue::LengthDelimited(d)) => {
+                batches.push(d.to_vec());
+            }
             _ => {}
         }
     }
-    Some(QueryResult { column_names, error, rows: all_rows, is_last: false })
+    let mut all_rows = Vec::new();
+    let ncols = if column_names.is_empty() { fallback_ncols.unwrap_or(0) } else { column_names.len() };
+    for batch in batches {
+        let (rows, batch_is_last) = decode_cells_batch(&batch, ncols)?;
+        all_rows.extend(rows);
+        is_last |= batch_is_last;
+    }
+    Some(QueryResult { column_names, error, rows: all_rows, is_last })
 }
 
-fn decode_cells_batch(data: &[u8]) -> Option<Vec<Vec<CellValue>>> {
-    let (mut pos, mut cell_types, mut varint_cells, mut float64_cells, mut string_cells) = (0, Vec::new(), Vec::new(), Vec::new(), Vec::new());
+fn decode_cells_batch(data: &[u8], ncols: usize) -> Option<(Vec<Vec<CellValue>>, bool)> {
+    let (mut pos, mut cell_types, mut varint_cells, mut float64_cells, mut string_cells, mut is_last_batch) =
+        (0, Vec::new(), Vec::new(), Vec::new(), Vec::new(), false);
     while pos < data.len() {
         let (field, value) = read_next_tag(data, &mut pos)?;
         match (field, value) {
@@ -162,12 +186,15 @@ fn decode_cells_batch(data: &[u8]) -> Option<Vec<Vec<CellValue>>> {
                 float64_cells = d.chunks(8).filter_map(|c| <[u8; 8]>::try_from(c).ok()).map(f64::from_le_bytes).collect()
             }
             (5, FieldValue::LengthDelimited(d)) => string_cells = String::from_utf8_lossy(d).split('\0').map(String::from).collect(),
+            (6, FieldValue::Varint(v)) => is_last_batch = v != 0,
             _ => {}
         }
     }
-    let ncols = cell_types.len();
     if ncols == 0 {
-        return Some(Vec::new());
+        return Some((Vec::new(), is_last_batch));
+    }
+    if cell_types.len() % ncols != 0 {
+        return None;
     }
     let nrows = cell_types.len() / ncols;
     let (mut rows, mut vi, mut fi, mut si) = (Vec::with_capacity(nrows), 0usize, 0usize, 0usize);
@@ -192,7 +219,7 @@ fn decode_cells_batch(data: &[u8]) -> Option<Vec<Vec<CellValue>>> {
         }
         rows.push(row);
     }
-    Some(rows)
+    Some((rows, is_last_batch))
 }
 
 fn decode_zigzag(v: u64) -> i64 {
@@ -247,7 +274,7 @@ impl RpcClient {
         let (mut result, mut got_columns) = (QueryResult { column_names: vec![], error: None, rows: vec![], is_last: false }, false);
         loop {
             let frame = self.read_frame()?;
-            if let Some(qr) = parse_response(&frame) {
+            if let Some(qr) = parse_response(&frame, (!result.column_names.is_empty()).then_some(result.column_names.len())) {
                 if !qr.column_names.is_empty() && !got_columns {
                     result.column_names = qr.column_names.clone();
                     got_columns = true;
@@ -259,7 +286,9 @@ impl RpcClient {
                     return Ok(result);
                 }
                 result.rows.extend(qr.rows);
-                result.column_names = qr.column_names.clone();
+                if !qr.column_names.is_empty() {
+                    result.column_names = qr.column_names.clone();
+                }
                 if qr.is_last {
                     result.is_last = true;
                     break;
@@ -270,15 +299,34 @@ impl RpcClient {
     }
 
     fn read_frame(&mut self) -> std::io::Result<Vec<u8>> {
-        use std::io::Read;
+        Self::read_frame_raw(&mut self.stdout)
+    }
+
+    /// Reads one length-delimited `TraceProcessorRpc` frame from a raw reader.
+    /// Useful for one-shot subprocess queries that don't need a full `RpcClient`.
+    pub fn read_frame_raw(r: &mut impl std::io::Read) -> std::io::Result<Vec<u8>> {
         let mut tag = [0u8; 1];
-        self.stdout.read_exact(&mut tag)?;
+        r.read_exact(&mut tag)?;
         if tag[0] != 0x0a {
             return Err(std::io::Error::other(format!("bad frame tag: {:#04x}", tag[0])));
         }
-        let len = self.read_stream_varint()? as usize;
+        let len = {
+            let (mut value, mut shift) = (0u64, 0u32);
+            loop {
+                let mut byte = [0u8; 1];
+                r.read_exact(&mut byte)?;
+                value |= ((byte[0] & 0x7F) as u64) << shift;
+                if byte[0] & 0x80 == 0 {
+                    break value as usize;
+                }
+                shift += 7;
+                if shift >= 64 {
+                    return Err(std::io::Error::other("varint overflow"));
+                }
+            }
+        };
         let mut body = vec![0u8; len];
-        self.stdout.read_exact(&mut body)?;
+        r.read_exact(&mut body)?;
         Ok(body)
     }
 

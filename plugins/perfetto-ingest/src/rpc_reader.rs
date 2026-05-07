@@ -1,27 +1,81 @@
 //! Reads Perfetto data via RPC instead of SQLite export.
+//!
+//! Simpler first cut: one trace_processor process per query. This avoids the
+//! current multi-query persistent-connection issue while still eliminating the
+//! SQLite temp-file round trip.
+
 #![allow(dead_code)]
 
-use crate::rpc_client::{CellValue, QueryResult, RpcClient};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use crate::rpc_client::{CellValue, QueryResult, RpcClient, build_query_request, parse_response};
 use crate::sqlite_reader::{
     PerfettoClockSnapshot, PerfettoFtraceEvent, PerfettoInstant, PerfettoProcess, PerfettoSchedSlice, PerfettoSlice, PerfettoSpuriousWakeup,
     PerfettoThread, PerfettoThreadState,
 };
 
 pub struct RpcReader {
-    client: RpcClient,
+    tp_path: PathBuf,
+    trace_file: PathBuf,
 }
 
 impl RpcReader {
-    pub fn new(client: RpcClient) -> Self {
-        Self { client }
+    pub fn new(tp_path: &Path, trace_file: &Path) -> Self {
+        Self { tp_path: tp_path.to_path_buf(), trace_file: trace_file.to_path_buf() }
+    }
+
+    fn query(&self, sql: &str) -> std::io::Result<QueryResult> {
+        eprintln!("perfetto-rpc: query {}", &sql[..sql.len().min(80)]);
+        let mut child = Command::new(&self.tp_path)
+            .args(["server", "stdio"])
+            .arg(&self.trace_file)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let mut stdin = child.stdin.take().expect("stdin");
+        let mut stdout = child.stdout.take().expect("stdout");
+        stdin.write_all(&build_query_request(0, sql))?;
+        drop(stdin);
+        let (mut result, mut got_columns) = (QueryResult { column_names: vec![], error: None, rows: vec![], is_last: false }, false);
+        loop {
+            eprintln!("perfetto-rpc: request sent, waiting frame");
+            let frame = match RpcClient::read_frame_raw(&mut stdout) {
+                Ok(frame) => frame,
+                Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(err) => return Err(err),
+            };
+            eprintln!("perfetto-rpc: got frame {} bytes", frame.len());
+            if let Some(qr) = parse_response(&frame, (!result.column_names.is_empty()).then_some(result.column_names.len())) {
+                if !qr.column_names.is_empty() && !got_columns {
+                    result.column_names = qr.column_names.clone();
+                    got_columns = true;
+                }
+                if let Some(ref err) = qr.error
+                    && !err.is_empty()
+                {
+                    result.error = Some(err.clone());
+                    break;
+                }
+                result.rows.extend(qr.rows);
+                if !qr.column_names.is_empty() {
+                    result.column_names = qr.column_names.clone();
+                }
+                if qr.is_last {
+                    result.is_last = true;
+                    break;
+                }
+            }
+        }
+        eprintln!("perfetto-rpc: parsed rows={} cols={}", result.rows.len(), result.column_names.len());
+        let _ = child.wait();
+        Ok(result)
     }
 
     fn col_idx(columns: &[String], name: &str) -> Option<usize> {
         columns.iter().position(|c| c == name)
-    }
-
-    fn query(&mut self, sql: &str) -> std::io::Result<QueryResult> {
-        self.client.query(sql)
     }
 
     pub fn read_slices(&mut self) -> std::io::Result<Vec<PerfettoSlice>> {
@@ -53,7 +107,6 @@ impl RpcReader {
 
     pub fn read_sched_slices(&mut self) -> std::io::Result<Vec<PerfettoSchedSlice>> {
         let r = self.query("SELECT id, ts, dur, utid, ucpu, end_state FROM sched_slice ORDER BY ts")?;
-        eprintln!("perfetto-rpc: sched_slice query done, {} rows, columns={:?}", r.rows.len(), r.column_names);
         let (id, ts, dur, utid, cpu, es) = (
             Self::col_idx(&r.column_names, "id"),
             Self::col_idx(&r.column_names, "ts"),
@@ -181,9 +234,7 @@ impl RpcReader {
 
     pub fn read_clock_snapshots(&mut self) -> std::io::Result<Vec<PerfettoClockSnapshot>> {
         let r = self.query("SELECT ts, clock_value FROM clock_snapshot WHERE clock_name = 'REALTIME' ORDER BY ts")?;
-        eprintln!("perfetto-rpc: clock_snapshots query done, {} rows", r.rows.len());
         let (ts, cv) = (Self::col_idx(&r.column_names, "ts"), Self::col_idx(&r.column_names, "clock_value"));
-        eprintln!("perfetto-rpc: columns={:?} ts_idx={ts:?} cv_idx={cv:?}", r.column_names);
         Ok(r.rows.iter().map(|row| PerfettoClockSnapshot { ts: i64_val(row, ts), clock_value: i64_val(row, cv) }).collect())
     }
 }
@@ -192,7 +243,7 @@ fn i64_val(row: &[CellValue], idx: Option<usize>) -> i64 {
     idx.and_then(|i| row.get(i)).and_then(cell_i64).unwrap_or(0)
 }
 fn i32_val(row: &[CellValue], idx: Option<usize>) -> i32 {
-    idx.and_then(|i| row.get(i)).and_then(cell_i64).unwrap_or(0) as i32
+    i64_val(row, idx) as i32
 }
 fn opt_i64_val(row: &[CellValue], idx: Option<usize>) -> Option<i64> {
     idx.and_then(|i| row.get(i)).and_then(cell_i64)
@@ -200,7 +251,6 @@ fn opt_i64_val(row: &[CellValue], idx: Option<usize>) -> Option<i64> {
 fn str_val(row: &[CellValue], idx: Option<usize>) -> Option<String> {
     idx.and_then(|i| row.get(i)).and_then(cell_str)
 }
-
 fn cell_i64(cv: &CellValue) -> Option<i64> {
     match cv {
         CellValue::Varint(v) => Some(*v),
@@ -211,7 +261,6 @@ fn cell_i64(cv: &CellValue) -> Option<i64> {
 fn cell_str(cv: &CellValue) -> Option<String> {
     match cv {
         CellValue::String(s) => Some(s.clone()),
-        CellValue::Null => None,
         _ => None,
     }
 }

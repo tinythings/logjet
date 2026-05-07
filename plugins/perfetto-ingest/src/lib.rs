@@ -242,8 +242,7 @@ fn run_pipeline(plugin: &mut PerfettoPlugin, trace_file: &std::path::Path) -> Re
 
     if use_rpc {
         eprintln!("perfetto-ingest: RPC acquisition mode");
-        let client = perfetto_invoke::start_server(trace_file, &tp_path).map_err(|err| format!("RPC server start: {err}"))?;
-        let mut reader = rpc_reader::RpcReader::new(client);
+        let mut reader = rpc_reader::RpcReader::new(&tp_path, trace_file);
         run_pipeline_impl(plugin, &mut reader, trace_file, &tp_path)
     } else {
         eprintln!("perfetto-ingest: exporting SQLite from {}", trace_file.display());
