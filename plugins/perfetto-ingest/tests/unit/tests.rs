@@ -200,13 +200,13 @@ fn realistic_db() -> super::sqlite_reader::PerfettoDb {
 
 #[test]
 fn log_mapper_produces_monotonic_timestamps_with_realistic_data() {
-    let db = realistic_db();
+    let mut db = realistic_db();
     let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
 
     // Collect emits into a buffer, sort, then verify monotonic.
     EMIT_BUF.with(|buf| buf.borrow_mut().clear());
-    log_mapper::map_logs(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit)).unwrap();
+    log_mapper::map_logs(&mut db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit)).unwrap();
 
     let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
     EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
@@ -222,7 +222,7 @@ fn log_mapper_produces_monotonic_timestamps_with_realistic_data() {
 
 #[test]
 fn full_pipeline_sorts_across_mappers_monotonically() {
-    let db = realistic_db();
+    let mut db = realistic_db();
     let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
 
@@ -231,7 +231,7 @@ fn full_pipeline_sorts_across_mappers_monotonically() {
     // Run mappers in varying order — traces first, then logs (opposite of monotonic order).
     // The buffer should sort everything before emitting.
     let _ = trace_mapper::map_traces(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
-    let _ = log_mapper::map_logs(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
+    let _ = log_mapper::map_logs(&mut db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
 
     let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
     EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
@@ -492,8 +492,8 @@ fn metric_mapper_flattens_nested_metrics() {
 
 #[test]
 fn log_mapper_produces_per_slice_and_summary_logs() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     // 3 slices + 1 summary = 4 log records
     assert!(emitted.len() >= 2, "expected per-slice logs + summary");
     assert!(emitted.iter().all(|(rt, _, _)| *rt == crate::LJ_INGEST_RECORD_TYPE_LOGS));
@@ -537,7 +537,7 @@ fn run_metric_mapper(metrics: &[crate::metrics_reader::PerfettoMetric]) -> Vec<E
     take_records(&plugin)
 }
 
-fn run_log_mapper(db: &super::sqlite_reader::PerfettoDb) -> Vec<EmittedRecord> {
+fn run_log_mapper(db: &mut super::sqlite_reader::PerfettoDb) -> Vec<EmittedRecord> {
     let plugin = dummy_plugin(dummy_emit);
     let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
@@ -585,8 +585,8 @@ fn sqlite_reader_reads_instants() {
 
 #[test]
 fn log_mapper_produces_thread_state_records() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     // Should include 2 thread_state records + slices + sched + ftrace + spurious + instant + summary
     assert!(emitted.iter().any(|(rt, _, _)| *rt == crate::LJ_INGEST_RECORD_TYPE_LOGS));
     // Verify thread_state attributes in payload
@@ -609,8 +609,8 @@ fn log_mapper_produces_thread_state_records() {
 
 #[test]
 fn log_mapper_produces_ftrace_event_records() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     let has_ftrace = emitted.iter().any(|(_, _, payload)| {
         if let Ok(req) = prost::Message::decode(payload.as_slice()) {
             let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
@@ -630,8 +630,8 @@ fn log_mapper_produces_ftrace_event_records() {
 
 #[test]
 fn log_mapper_produces_spurious_wakeup_records() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     let has_sw = emitted.iter().any(|(_, _, payload)| {
         if let Ok(req) = prost::Message::decode(payload.as_slice()) {
             let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
@@ -647,8 +647,8 @@ fn log_mapper_produces_spurious_wakeup_records() {
 
 #[test]
 fn log_mapper_produces_instant_records() {
-    let db = test_db();
-    let emitted = run_log_mapper(&db);
+    let mut db = test_db();
+    let emitted = run_log_mapper(&mut db);
     let has_instant = emitted.iter().any(|(_, _, payload)| {
         if let Ok(req) = prost::Message::decode(payload.as_slice()) {
             let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
@@ -760,11 +760,11 @@ fn sqlite_reader_reads_filedescriptors() {
 
 fn run_core_pipeline(sqlite_path: &std::path::Path) -> Vec<EmittedRecord> {
     let plugin = dummy_plugin(dummy_emit);
-    let db = super::sqlite_reader::PerfettoDb::open(sqlite_path).unwrap();
+    let mut db = super::sqlite_reader::PerfettoDb::open(sqlite_path).unwrap();
     let snaps = db.read_clock_snapshots().unwrap();
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
     let _ = trace_mapper::map_traces(&db, &converter, super::emit_generic, &plugin);
-    let _ = log_mapper::map_logs(&db, &converter, super::emit_generic, &plugin);
+    let _ = log_mapper::map_logs(&mut db, &converter, super::emit_generic, &plugin);
     take_records(&plugin)
 }
 
