@@ -69,7 +69,15 @@ pub struct PerfettoClockSnapshot {
     pub clock_value: i64,
 }
 
-// Database reader
+#[derive(Debug, Clone)]
+pub struct PerfettoSchedSlice {
+    pub id: i64,
+    pub ts: i64,
+    pub dur: i64,
+    pub utid: i64,
+    pub cpu: i64,
+    pub end_state: Option<String>,
+}
 
 pub struct PerfettoDb {
     pub(crate) conn: rusqlite::Connection,
@@ -186,11 +194,12 @@ impl PerfettoDb {
         Ok(out)
     }
 
-    /// Reads all tracks.
+    /// Reads all tracks. Queries the intrinsic table because the `track`
+    /// view does not expose utid/upid columns.
     pub fn read_tracks(&self) -> Result<Vec<PerfettoTrack>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, type, utid, upid FROM track ORDER BY id")
+            .prepare("SELECT id, name, type, utid, upid FROM __intrinsic_track ORDER BY id")
             .map_err(|err| format!("failed to prepare track query: {err}"))?;
 
         let rows = stmt
@@ -299,6 +308,37 @@ impl PerfettoDb {
                 Ok(entry) => out.push(entry),
                 Err(err) => return Err(format!("failed to read clock_snapshot row: {err}")),
             }
+        }
+        Ok(out)
+    }
+
+    /// Reads all sched_slice entries ordered by ts.
+    pub fn read_sched_slices(&self) -> Result<Vec<PerfettoSchedSlice>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, ts, dur, utid, ucpu, end_state
+                 FROM sched_slice
+                 ORDER BY ts",
+            )
+            .map_err(|err| format!("failed to prepare sched_slice query: {err}"))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PerfettoSchedSlice {
+                    id: row.get(0)?,
+                    ts: row.get(1)?,
+                    dur: row.get(2)?,
+                    utid: row.get(3)?,
+                    cpu: row.get(4)?,
+                    end_state: row.get(5)?,
+                })
+            })
+            .map_err(|err| format!("failed to query sched_slice: {err}"))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|err| format!("failed to read sched_slice row: {err}"))?);
         }
         Ok(out)
     }

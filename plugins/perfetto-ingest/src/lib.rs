@@ -269,7 +269,7 @@ fn run_pipeline(plugin: &mut PerfettoPlugin, trace_file: &std::path::Path) -> Re
         }
 
     eprintln!("perfetto-ingest: mapping logs...");
-    log_mapper::map_logs(&db, emit_generic, plugin)?;
+    log_mapper::map_logs(&db, &converter, emit_generic, plugin)?;
 
     let _ = std::fs::remove_file(&sqlite_path);
 

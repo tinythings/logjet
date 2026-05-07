@@ -84,8 +84,8 @@ impl TimestampConverter {
                 Ok(Some(prev.clock_value as u64))
             } else {
                 let offset = trace_ts - prev.ts;
-                let realtime = prev.clock_value
-                    + (range_realtime * offset) / range_ts;
+                let realtime = (prev.clock_value as i128)
+                    + (range_realtime as i128 * offset as i128) / range_ts as i128;
                 Ok(Some(realtime.max(0) as u64))
             }
         }
