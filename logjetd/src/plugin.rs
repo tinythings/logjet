@@ -672,7 +672,9 @@ unsafe extern "C" fn on_generic_record(user: *mut c_void, record: *const LjInges
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
     };
 
-    let wire = WireRecord { record_type, seq: ctx.next_seq.fetch_add(1, Ordering::Relaxed), ts_unix_ns: ts, payload };
+    let seq = ctx.next_seq.fetch_add(1, Ordering::Relaxed);
+
+    let wire = WireRecord { record_type, seq, ts_unix_ns: ts, payload };
 
     if let Err(err) = super::daemon::append_to_spool(&ctx.spool, wire) {
         eprintln!("ljd plugin callback spool error: {err}");

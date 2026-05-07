@@ -8,7 +8,7 @@ the trace processor for interactive inspection.
 Build the Perfetto tools (from workspace root):
 
 ```bash
-./scripts/build-perfetto.sh
+./demo/perfetto/build-perfetto.sh
 ```
 
 The script finds tools via `PERFETTO_OUT` (default: `perfetto/out/linux_release`).

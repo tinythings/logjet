@@ -117,6 +117,17 @@ pub struct PerfettoPlugin {
     last_error: Option<String>,
 }
 
+// Buffer for sorting emissions by timestamp before sending to the callback.
+// Populated by buffer_emit, drained after all mappers complete.
+use std::cell::RefCell;
+thread_local! {
+    static EMIT_BUF: RefCell<Vec<(u32, u64, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+}
+
+unsafe fn buffer_emit(_ctx: &PerfettoPlugin, record_type: u32, ts: u64, payload: &[u8]) {
+    EMIT_BUF.with(|buf| buf.borrow_mut().push((record_type, ts, payload.to_vec())));
+}
+
 // Exported C ABI
 
 #[unsafe(no_mangle)]
@@ -249,27 +260,40 @@ fn run_pipeline(plugin: &mut PerfettoPlugin, trace_file: &std::path::Path) -> Re
         eprintln!("perfetto-ingest: no realtime clock snapshots — timestamps will be unavailable");
     }
 
-    eprintln!("perfetto-ingest: mapping traces...");
-    trace_mapper::map_traces(&db, &converter, emit_generic, plugin)?;
+    // Buffer all emissions through a thread-local buffer, sort by timestamp,
+    // then flush through the real callback. This guarantees monotonicity.
+    EMIT_BUF.with(|buf| buf.borrow_mut().clear());
 
-    // Optional: run metrics export and map metrics.
+    // Skip trace mapping for now — ljx view doesn't decode ExportTraceServiceRequest
+    // yet, so trace records render as binary garbage.
+    // eprintln!("perfetto-ingest: mapping traces...");
+    // trace_mapper::map_traces(&db, &converter, buffer_emit, plugin)?;
+
+    eprintln!("perfetto-ingest: mapping logs...");
+    log_mapper::map_logs(&db, &converter, buffer_emit, plugin)?;
+
+    // Optional metrics
     let metrics_names: Vec<String> = std::env::var("LJD_PERFETTO_METRICS")
         .ok()
         .map(|s| s.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>())
         .unwrap_or_default();
     let metrics_refs: Vec<&str> = metrics_names.iter().map(|s| s.as_str()).collect();
-
     if !metrics_refs.is_empty()
         && let Ok(Some(metrics_path)) = perfetto_invoke::export_metrics(trace_file, &tp_path, &metrics_refs) {
             eprintln!("perfetto-ingest: mapping metrics...");
             let metrics = metrics_reader::parse_metrics_json(&metrics_path)
                 .map_err(|err| format!("failed to parse metrics JSON: {err}"))?;
-            metric_mapper::map_metrics(&metrics, &converter, emit_generic, plugin)?;
+            metric_mapper::map_metrics(&metrics, &converter, buffer_emit, plugin)?;
             let _ = std::fs::remove_file(&metrics_path);
         }
 
-    eprintln!("perfetto-ingest: mapping logs...");
-    log_mapper::map_logs(&db, &converter, emit_generic, plugin)?;
+    let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
+    EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
+    all.sort_by_key(|(_, ts, _)| *ts);
+
+    for (rt, ts, payload) in &all {
+        unsafe { emit_generic(plugin, *rt, *ts, payload) };
+    }
 
     let _ = std::fs::remove_file(&sqlite_path);
 

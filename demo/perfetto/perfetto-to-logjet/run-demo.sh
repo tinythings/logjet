@@ -27,7 +27,7 @@ done
 for bin in "$TRACED" "$TRACED_PROBES" "$TRACEBOX" "$TP"; do
     if [ ! -x "$bin" ]; then
         echo "missing $bin"
-        echo "build perfetto first with: ./scripts/build-perfetto.sh"
+        echo "build perfetto first with: ./demo/perfetto/build-perfetto.sh"
         exit 1
     fi
 done
@@ -57,7 +57,7 @@ echo "Recording 5s of ftrace to $TRACE_FILE..."
 CONFIG_FILE="$SCRIPT_DIR/trace-config.txt"
 cat > "$CONFIG_FILE" <<'ENDCONFIG'
 buffers: {
-    size_kb: 4096
+    size_kb: 8192
     fill_policy: RING_BUFFER
 }
 data_sources: {
@@ -66,7 +66,13 @@ data_sources: {
         ftrace_config {
             ftrace_events: "sched/sched_switch"
             ftrace_events: "sched/sched_waking"
+            ftrace_events: "sched/sched_process_exec"
+            ftrace_events: "sched/sched_process_fork"
+            ftrace_events: "sched/sched_process_exit"
             ftrace_events: "power/cpu_frequency"
+            ftrace_events: "power/cpu_idle"
+            ftrace_events: "irq/irq_handler_entry"
+            ftrace_events: "irq/irq_handler_exit"
         }
     }
 }
@@ -119,26 +125,29 @@ LJD_PID=$!
 cleanup_ljd() {
     kill "$LJD_PID" 2>/dev/null || true
     wait "$LJD_PID" 2>/dev/null || true
+    rm -f "$CONFIG_FILE"
 }
 
 trap cleanup_ljd EXIT INT TERM
 
-# Give the plugin time to finish processing (SQLite export + mapping takes a few seconds).
-sleep 10
+# Poll until records appear (plugin finishes), up to 60s.
+echo "Waiting for import..."
+elapsed=0
+while [ "$elapsed" -lt 60 ]; do
+    if [ -f "$SPOOL_DIR/perfetto.logjet" ]; then
+        COUNT=$("$LJX" count "$SPOOL_DIR/perfetto.logjet" 2>/dev/null || echo "0")
+        if [ "$COUNT" -gt 0 ] 2>/dev/null; then
+            echo "Imported $COUNT records into $SPOOL_DIR/perfetto.logjet"
+            break
+        fi
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+done
+
 kill "$LJD_PID" 2>/dev/null || true
 wait "$LJD_PID" 2>/dev/null || true
 trap - EXIT INT TERM
-
-rm -f "$CONFIG_FILE"
-
-if [ ! -f "$SPOOL_DIR/perfetto.logjet" ]; then
-    echo "No .logjet file produced."
-    exit 1
-fi
-
-RECORDS=$("$LJX" count "$SPOOL_DIR/perfetto.logjet" | tail -1)
-echo "Imported $RECORDS records into $SPOOL_DIR/perfetto.logjet"
-echo ""
 
 # ── View the result ───────────────────────────────────────────────────────────
 

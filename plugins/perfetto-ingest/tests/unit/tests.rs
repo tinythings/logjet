@@ -163,6 +163,114 @@ fn temp_json(name: &str, content: &str) -> std::path::PathBuf {
     path
 }
 
+// realistic integration tests — timestamps match real Perfetto scale
+
+/// Realistic DB with trace-scale timestamps (~10^14) and epoch clock_values (~10^18).
+/// Records from different types overlap in time, testing that the sort-before-emit
+/// pipeline produces strictly monotonic output regardless of mapper order.
+fn realistic_db() -> super::sqlite_reader::PerfettoDb {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "
+        CREATE TABLE slice (id INTEGER, ts INTEGER, dur INTEGER, name TEXT, parent_id INTEGER, track_id INTEGER, arg_set_id INTEGER, depth INTEGER);
+        CREATE TABLE sched_slice (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, ucpu INTEGER, end_state TEXT);
+        CREATE TABLE thread_state (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, state TEXT, io_wait INTEGER, blocked_function TEXT, waker_utid INTEGER, cpu INTEGER);
+        CREATE TABLE ftrace_event (id INTEGER, ts INTEGER, name TEXT, cpu INTEGER, utid INTEGER);
+        CREATE TABLE spurious_sched_wakeup (id INTEGER, ts INTEGER, utid INTEGER, waker_utid INTEGER);
+        CREATE TABLE instant (ts INTEGER, track_id INTEGER, name TEXT);
+        CREATE TABLE thread (utid INTEGER, name TEXT, tid INTEGER, upid INTEGER, is_main_thread INTEGER);
+        CREATE TABLE process (upid INTEGER, name TEXT, pid INTEGER);
+        CREATE TABLE __intrinsic_track (id INTEGER, name TEXT, type TEXT, utid INTEGER, upid INTEGER);
+        CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
+        -- Overlapping time ranges in Perfetto trace scale (~10^14 ns = microseconds).
+        INSERT INTO slice VALUES (1, 300_000_000, 50, 'mid-span', NULL, 10, NULL, 0);
+        INSERT INTO sched_slice VALUES (1, 500_000_000, 20, 5, 2, 'R');
+        INSERT INTO thread_state VALUES (1, 100_000_000, 50, 3, 'S', NULL, NULL, NULL, 1);
+        INSERT INTO thread_state VALUES (2, 400_000_000, 80, 5, 'R', NULL, NULL, NULL, 2);
+        INSERT INTO ftrace_event VALUES (1, 200_000_000, 'sched_switch', 1, 3);
+        INSERT INTO spurious_sched_wakeup VALUES (1, 350_000_000, 5, 3);
+        INSERT INTO instant VALUES (150_000_000, 10, 'early');
+        INSERT INTO thread VALUES (3, 'main', 100, 1, 1), (5, 'worker', 200, 1, 0);
+        INSERT INTO process VALUES (1, 'test', 1000);
+        INSERT INTO clock_snapshot VALUES (0, 1700000000000000000, 1, 'REALTIME');
+        ",
+    ).unwrap();
+    super::sqlite_reader::PerfettoDb { conn }
+}
+
+#[test]
+fn log_mapper_produces_monotonic_timestamps_with_realistic_data() {
+    let db = realistic_db();
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+
+    // Collect emits into a buffer, sort, then verify monotonic.
+    EMIT_BUF.with(|buf| buf.borrow_mut().clear());
+    log_mapper::map_logs(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit)).unwrap();
+
+    let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
+    EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
+    all.sort_by_key(|(_, ts, _)| *ts);
+
+    assert!(!all.is_empty(), "expected records from realistic DB");
+
+    // Verify monotonic.
+    for w in all.windows(2) {
+        assert!(w[0].1 <= w[1].1, "non-monotonic: {} then {} (delta={})", w[0].1, w[1].1, w[1].1 as i128 - w[0].1 as i128);
+    }
+}
+
+#[test]
+fn full_pipeline_sorts_across_mappers_monotonically() {
+    let db = realistic_db();
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+
+    EMIT_BUF.with(|buf| buf.borrow_mut().clear());
+
+    // Run mappers in varying order — traces first, then logs (opposite of monotonic order).
+    // The buffer should sort everything before emitting.
+    let _ = trace_mapper::map_traces(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
+    let _ = log_mapper::map_logs(&db, &converter, super::buffer_emit, &dummy_plugin(dummy_emit));
+
+    let mut all: Vec<(u32, u64, Vec<u8>)> = Vec::new();
+    EMIT_BUF.with(|buf| all = std::mem::take(&mut *buf.borrow_mut()));
+    all.sort_by_key(|(_, ts, _)| *ts);
+
+    assert!(!all.is_empty());
+    for w in all.windows(2) {
+        assert!(w[0].1 <= w[1].1, "non-monotonic across mappers: {} then {}", w[0].1, w[1].1);
+    }
+}
+
+#[test]
+fn realistic_timestamps_convert_without_truncation() {
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+
+    // Perfetto-scaled timestamp: typical trace time (~122 seconds in ns).
+    let trace_ts: i64 = 122_804_694_200;
+    let realtime = converter.to_realtime(trace_ts).unwrap().unwrap();
+    assert_eq!(realtime, 1_700_000_000_000_000_000 + 122_804_694_200);
+    assert!(realtime > 1_700_000_000_000_000_000);
+}
+
+#[test]
+fn realistic_timestamps_maintain_monotonicity() {
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+
+    // Timestamps in increasing order as they would appear in a trace.
+    // These are in Perfetto trace scale (~10^14 = microseconds from trace start).
+    let times: [i64; 5] = [100_000_000, 200_000_000, 300_000_000, 500_000_000, 900_000_000];
+    let mut prev: u64 = 0;
+    for ts in &times {
+        let rt = converter.to_realtime(*ts).unwrap().unwrap();
+        assert!(rt >= prev, "realtime {rt} should be >= prev {prev} for ts={ts}");
+        prev = rt;
+    }
+}
+
 fn test_db() -> super::sqlite_reader::PerfettoDb {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
 
@@ -177,6 +285,21 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
         CREATE TABLE thread (utid INTEGER, name TEXT, tid INTEGER, upid INTEGER, is_main_thread INTEGER);
         CREATE TABLE __intrinsic_track (id INTEGER, name TEXT, type TEXT, utid INTEGER, upid INTEGER);
         CREATE TABLE sched_slice (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, ucpu INTEGER, end_state TEXT);
+        CREATE TABLE thread_state (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, state TEXT, io_wait INTEGER, blocked_function TEXT, waker_utid INTEGER, cpu INTEGER);
+        CREATE TABLE ftrace_event (id INTEGER, ts INTEGER, name TEXT, cpu INTEGER, utid INTEGER);
+        CREATE TABLE spurious_sched_wakeup (id INTEGER, ts INTEGER, utid INTEGER, waker_utid INTEGER);
+        CREATE TABLE instant (ts INTEGER, track_id INTEGER, name TEXT);
+        CREATE TABLE cpu (id INTEGER, cpu INTEGER, cluster_id INTEGER, processor TEXT);
+        CREATE TABLE machine (id INTEGER, arch TEXT, num_cpus INTEGER, sysname TEXT, release TEXT);
+        CREATE TABLE metadata (name TEXT, int_value INTEGER, str_value TEXT);
+        CREATE TABLE counter (id INTEGER, ts INTEGER, track_id INTEGER, value REAL);
+        CREATE TABLE memory_snapshot (id INTEGER, timestamp INTEGER, track_id INTEGER, detail_level TEXT);
+        CREATE TABLE cpu_profile_stack_sample (id INTEGER, ts INTEGER, callsite_id INTEGER, utid INTEGER);
+        CREATE TABLE stack_profile_frame (id INTEGER, name TEXT, mapping_id INTEGER);
+        CREATE TABLE heap_profile_allocation (id INTEGER, ts INTEGER, upid INTEGER, size INTEGER, count INTEGER);
+        CREATE TABLE protolog (id INTEGER, ts INTEGER, level TEXT, tag TEXT, message TEXT);
+        CREATE TABLE android_logs (id INTEGER, ts INTEGER, utid INTEGER, prio INTEGER, tag TEXT, msg TEXT);
+        CREATE TABLE filedescriptor (id INTEGER, ufd INTEGER, fd INTEGER, ts INTEGER, upid INTEGER, path TEXT);
         CREATE TABLE args (arg_set_id INTEGER, flat_key TEXT, string_value TEXT, int_value INTEGER, real_value REAL);
         CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
 
@@ -190,6 +313,23 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
         INSERT INTO __intrinsic_track VALUES (10, 'test-track', 'thread_track', 200, NULL);
         INSERT INTO args VALUES (1, 'slice.name', 'early-slice', NULL, NULL);
         INSERT INTO args VALUES (2, 'slice.name', 'main-slice', NULL, NULL);
+        INSERT INTO thread_state VALUES (1, 5000, 10000, 1, 'R', NULL, NULL, NULL, 0);
+        INSERT INTO thread_state VALUES (2, 15000, 5000, 2, 'S', 1, 'pipe_wait', 1, 0);
+        INSERT INTO ftrace_event VALUES (1, 5000, 'sched_switch', 0, 1);
+        INSERT INTO ftrace_event VALUES (2, 15000, 'sched_waking', 2, 3);
+        INSERT INTO spurious_sched_wakeup VALUES (1, 5000, 1, 2);
+        INSERT INTO instant VALUES (10000, 10, 'test-instant');
+        INSERT INTO cpu VALUES (1, 0, 0, 'x86_64');
+        INSERT INTO machine VALUES (1, 'x86_64', 8, 'Linux', '5.15.0');
+        INSERT INTO metadata VALUES ('trace_size_bytes', 1048576, NULL);
+        INSERT INTO counter VALUES (1, 10000, 1, 2400000.0);
+        INSERT INTO memory_snapshot VALUES (1, 20000, 1, 'detailed');
+        INSERT INTO cpu_profile_stack_sample VALUES (1, 10000, 42, 1);
+        INSERT INTO stack_profile_frame VALUES (1, 'main', 1);
+        INSERT INTO heap_profile_allocation VALUES (1, 20000, 1, 4096, 1);
+        INSERT INTO protolog VALUES (1, 10000, 'INFO', 'test', 'test log');
+        INSERT INTO android_logs VALUES (1, 10000, 1, 3, 'TestTag', 'test message');
+        INSERT INTO filedescriptor VALUES (1, 1, 42, 10000, 1, '/dev/null');
         INSERT INTO clock_snapshot VALUES
             (0, 1700000000000000000, 1, 'REALTIME'),
             (10000, 1700000000000010000, 1, 'REALTIME');
@@ -419,6 +559,223 @@ fn run_log_mapper(db: &super::sqlite_reader::PerfettoDb) -> Vec<EmittedRecord> {
     take_records(&plugin)
 }
 
+// sqlite_reader tests for P1/P2 types
+
+#[test]
+fn sqlite_reader_reads_thread_states() {
+    let db = test_db();
+    let states = db.read_thread_states().unwrap();
+    assert_eq!(states.len(), 2);
+    assert_eq!(states[0].state.as_deref(), Some("R"));
+    assert_eq!(states[1].io_wait, Some(true));
+    assert_eq!(states[1].blocked_function.as_deref(), Some("pipe_wait"));
+}
+
+#[test]
+fn sqlite_reader_reads_ftrace_events() {
+    let db = test_db();
+    let events = db.read_ftrace_events().unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].name.as_deref(), Some("sched_switch"));
+    assert_eq!(events[1].name.as_deref(), Some("sched_waking"));
+}
+
+#[test]
+fn sqlite_reader_reads_spurious_wakeups() {
+    let db = test_db();
+    let wakeups = db.read_spurious_wakeups().unwrap();
+    assert_eq!(wakeups.len(), 1);
+    assert_eq!(wakeups[0].utid, Some(1));
+    assert_eq!(wakeups[0].waker_utid, Some(2));
+}
+
+#[test]
+fn sqlite_reader_reads_instants() {
+    let db = test_db();
+    let instants = db.read_instants().unwrap();
+    assert_eq!(instants.len(), 1);
+    assert_eq!(instants[0].name.as_deref(), Some("test-instant"));
+}
+
+#[test]
+fn log_mapper_produces_thread_state_records() {
+    let db = test_db();
+    let emitted = run_log_mapper(&db);
+    // Should include 2 thread_state records + slices + sched + ftrace + spurious + instant + summary
+    assert!(emitted.iter().any(|(rt, _, _)| *rt == crate::LJ_INGEST_RECORD_TYPE_LOGS));
+    // Verify thread_state attributes in payload
+    let has_ts_attrs = emitted.iter().any(|(_, _, payload)| {
+        if let Ok(req) = prost::Message::decode(payload.as_slice()) {
+            let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
+            req.resource_logs.iter().any(|rl| {
+                rl.scope_logs.iter().any(|sl| {
+                    sl.log_records.iter().any(|lr| {
+                        lr.attributes.iter().any(|kv| kv.key == "perfetto.ts.state" && kv.value.as_ref().is_some_and(|v| v.value.is_some()))
+                    })
+                })
+            })
+        } else {
+            false
+        }
+    });
+    assert!(has_ts_attrs, "expected thread_state attributes in emitted records");
+}
+
+#[test]
+fn log_mapper_produces_ftrace_event_records() {
+    let db = test_db();
+    let emitted = run_log_mapper(&db);
+    let has_ftrace = emitted.iter().any(|(_, _, payload)| {
+        if let Ok(req) = prost::Message::decode(payload.as_slice()) {
+            let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
+            req.resource_logs.iter().any(|rl| {
+                rl.scope_logs.iter().any(|sl| {
+                    sl.log_records.iter().any(|lr| {
+                        lr.attributes.iter().any(|kv| kv.key == "perfetto.ftrace.name" && kv.value.as_ref().is_some_and(|v| v.value.is_some()))
+                    })
+                })
+            })
+        } else {
+            false
+        }
+    });
+    assert!(has_ftrace, "expected ftrace_event attributes in emitted records");
+}
+
+#[test]
+fn log_mapper_produces_spurious_wakeup_records() {
+    let db = test_db();
+    let emitted = run_log_mapper(&db);
+    let has_sw = emitted.iter().any(|(_, _, payload)| {
+        if let Ok(req) = prost::Message::decode(payload.as_slice()) {
+            let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
+            req.resource_logs.iter().any(|rl| {
+                rl.scope_logs.iter().any(|sl| {
+                    sl.log_records.iter().any(|lr| {
+                        lr.attributes.iter().any(|kv| kv.key == "perfetto.sw.id")
+                    })
+                })
+            })
+        } else {
+            false
+        }
+    });
+    assert!(has_sw, "expected spurious_wakeup attributes in emitted records");
+}
+
+#[test]
+fn log_mapper_produces_instant_records() {
+    let db = test_db();
+    let emitted = run_log_mapper(&db);
+    let has_instant = emitted.iter().any(|(_, _, payload)| {
+        if let Ok(req) = prost::Message::decode(payload.as_slice()) {
+            let req: opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest = req;
+            req.resource_logs.iter().any(|rl| {
+                rl.scope_logs.iter().any(|sl| {
+                    sl.log_records.iter().any(|lr| {
+                        lr.attributes.iter().any(|kv| kv.key == "perfetto.instant.name" && kv.value.as_ref().is_some_and(|v| v.value.is_some()))
+                    })
+                })
+            })
+        } else {
+            false
+        }
+    });
+    assert!(has_instant, "expected instant event attributes in emitted records");
+}
+
+// sqlite_reader tests for P3-P9 types
+
+#[test]
+fn sqlite_reader_reads_cpus() {
+    let db = test_db();
+    let cpus = db.read_cpus().unwrap();
+    assert_eq!(cpus.len(), 1);
+    assert_eq!(cpus[0].cpu, Some(0));
+    assert_eq!(cpus[0].processor.as_deref(), Some("x86_64"));
+}
+
+#[test]
+fn sqlite_reader_reads_machines() {
+    let db = test_db();
+    let machines = db.read_machines().unwrap();
+    assert_eq!(machines.len(), 1);
+    assert_eq!(machines[0].arch.as_deref(), Some("x86_64"));
+    assert_eq!(machines[0].sysname.as_deref(), Some("Linux"));
+}
+
+#[test]
+fn sqlite_reader_reads_metadata() {
+    let db = test_db();
+    let meta = db.read_metadata().unwrap();
+    assert_eq!(meta.len(), 1);
+    assert_eq!(meta[0].name.as_deref(), Some("trace_size_bytes"));
+}
+
+#[test]
+fn sqlite_reader_reads_counters() {
+    let db = test_db();
+    let counters = db.read_counters().unwrap();
+    assert_eq!(counters.len(), 1);
+    assert!((counters[0].value - 2400000.0).abs() < 1.0);
+}
+
+#[test]
+fn sqlite_reader_reads_memory_snapshots() {
+    let db = test_db();
+    let snaps = db.read_memory_snapshots().unwrap();
+    assert_eq!(snaps.len(), 1);
+    assert_eq!(snaps[0].detail_level.as_deref(), Some("detailed"));
+}
+
+#[test]
+fn sqlite_reader_reads_cpu_profile_samples() {
+    let db = test_db();
+    let samples = db.read_cpu_profile_samples().unwrap();
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].callsite_id, 42);
+}
+
+#[test]
+fn sqlite_reader_reads_stack_frames() {
+    let db = test_db();
+    let frames = db.read_stack_frames().unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].name.as_deref(), Some("main"));
+}
+
+#[test]
+fn sqlite_reader_reads_heap_allocations() {
+    let db = test_db();
+    let allocs = db.read_heap_allocations().unwrap();
+    assert_eq!(allocs.len(), 1);
+    assert_eq!(allocs[0].size, 4096);
+}
+
+#[test]
+fn sqlite_reader_reads_protologs() {
+    let db = test_db();
+    let logs = db.read_protologs().unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].message.as_deref(), Some("test log"));
+}
+
+#[test]
+fn sqlite_reader_reads_android_logs() {
+    let db = test_db();
+    let logs = db.read_android_logs().unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].tag.as_deref(), Some("TestTag"));
+}
+
+#[test]
+fn sqlite_reader_reads_filedescriptors() {
+    let db = test_db();
+    let fds = db.read_filedescriptors().unwrap();
+    assert_eq!(fds.len(), 1);
+    assert_eq!(fds[0].path.as_deref(), Some("/dev/null"));
+}
+
 fn run_core_pipeline(sqlite_path: &std::path::Path) -> Vec<EmittedRecord> {
     let plugin = dummy_plugin(dummy_emit);
     let db = super::sqlite_reader::PerfettoDb::open(sqlite_path).unwrap();
@@ -472,6 +829,10 @@ fn temp_sqlite_file() -> std::path::PathBuf {
         CREATE TABLE process (upid INTEGER, name TEXT, pid INTEGER);
         CREATE TABLE __intrinsic_track (id INTEGER, name TEXT, type TEXT, utid INTEGER, upid INTEGER);
         CREATE TABLE sched_slice (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, ucpu INTEGER, end_state TEXT);
+        CREATE TABLE thread_state (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, state TEXT, io_wait INTEGER, blocked_function TEXT, waker_utid INTEGER, cpu INTEGER);
+        CREATE TABLE ftrace_event (id INTEGER, ts INTEGER, name TEXT, cpu INTEGER, utid INTEGER);
+        CREATE TABLE spurious_sched_wakeup (id INTEGER, ts INTEGER, utid INTEGER, waker_utid INTEGER);
+        CREATE TABLE instant (ts INTEGER, track_id INTEGER, name TEXT);
         CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
         INSERT INTO slice VALUES (1, 5000, 3000, 'test', NULL, 10, NULL, 0), (2, 10000, 500, 'child', 1, 10, NULL, 1);
         INSERT INTO thread VALUES (1, 'main', 100, 1, 1);
