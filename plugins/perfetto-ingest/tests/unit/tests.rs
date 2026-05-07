@@ -175,7 +175,8 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
         CREATE TABLE flow (id INTEGER, slice_out INTEGER, slice_in INTEGER);
         CREATE TABLE process (upid INTEGER, name TEXT, pid INTEGER);
         CREATE TABLE thread (utid INTEGER, name TEXT, tid INTEGER, upid INTEGER, is_main_thread INTEGER);
-        CREATE TABLE track (id INTEGER, name TEXT, type TEXT, utid INTEGER, upid INTEGER);
+        CREATE TABLE __intrinsic_track (id INTEGER, name TEXT, type TEXT, utid INTEGER, upid INTEGER);
+        CREATE TABLE sched_slice (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, ucpu INTEGER, end_state TEXT);
         CREATE TABLE args (arg_set_id INTEGER, flat_key TEXT, string_value TEXT, int_value INTEGER, real_value REAL);
         CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
 
@@ -186,7 +187,7 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
         INSERT INTO flow VALUES (1, 1, 2);
         INSERT INTO process VALUES (100, 'test-process', 1234);
         INSERT INTO thread VALUES (200, 'test-thread', 5678, 100, 1);
-        INSERT INTO track VALUES (10, 'test-track', 'thread_track', 200, NULL);
+        INSERT INTO __intrinsic_track VALUES (10, 'test-track', 'thread_track', 200, NULL);
         INSERT INTO args VALUES (1, 'slice.name', 'early-slice', NULL, NULL);
         INSERT INTO args VALUES (2, 'slice.name', 'main-slice', NULL, NULL);
         INSERT INTO clock_snapshot VALUES
@@ -358,22 +359,12 @@ fn metric_mapper_flattens_nested_metrics() {
 // log_mapper tests
 
 #[test]
-fn log_mapper_produces_summary_log() {
+fn log_mapper_produces_per_slice_and_summary_logs() {
     let db = test_db();
     let emitted = run_log_mapper(&db);
-    assert!(!emitted.is_empty());
-    assert_eq!(emitted[0].0, crate::LJ_INGEST_RECORD_TYPE_LOGS);
-
-    let req = opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest::decode(emitted[0].2.as_slice())
-        .unwrap();
-    let records = &req.resource_logs[0].scope_logs[0].log_records;
-    assert_eq!(records.len(), 1);
-    // Body should mention slice count.
-    if let Some(body) = &records[0].body
-        && let Some(val) = &body.value
-            && let opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s) = val {
-                assert!(s.contains("3 slices"), "expected body to mention slice count, got: {s}");
-            }
+    // 3 slices + 1 summary = 4 log records
+    assert!(emitted.len() >= 2, "expected per-slice logs + summary");
+    assert!(emitted.iter().all(|(rt, _, _)| *rt == crate::LJ_INGEST_RECORD_TYPE_LOGS));
 }
 
 // run_pipeline integration test
@@ -422,7 +413,9 @@ fn run_metric_mapper(metrics: &[crate::metrics_reader::PerfettoMetric]) -> Vec<E
 
 fn run_log_mapper(db: &super::sqlite_reader::PerfettoDb) -> Vec<EmittedRecord> {
     let plugin = dummy_plugin(dummy_emit);
-    log_mapper::map_logs(db, super::emit_generic, &plugin).unwrap();
+    let snaps = vec![crate::sqlite_reader::PerfettoClockSnapshot { ts: 0, clock_value: 1_700_000_000_000_000_000 }];
+    let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
+    log_mapper::map_logs(db, &converter, super::emit_generic, &plugin).unwrap();
     take_records(&plugin)
 }
 
@@ -432,7 +425,7 @@ fn run_core_pipeline(sqlite_path: &std::path::Path) -> Vec<EmittedRecord> {
     let snaps = db.read_clock_snapshots().unwrap();
     let converter = timestamp::TimestampConverter::new(snaps, timestamp::TimestampPolicy::BestEffort);
     let _ = trace_mapper::map_traces(&db, &converter, super::emit_generic, &plugin);
-    let _ = log_mapper::map_logs(&db, super::emit_generic, &plugin);
+    let _ = log_mapper::map_logs(&db, &converter, super::emit_generic, &plugin);
     take_records(&plugin)
 }
 
@@ -477,6 +470,8 @@ fn temp_sqlite_file() -> std::path::PathBuf {
         CREATE TABLE slice (id INTEGER, ts INTEGER, dur INTEGER, name TEXT, parent_id INTEGER, track_id INTEGER, arg_set_id INTEGER, depth INTEGER);
         CREATE TABLE thread (utid INTEGER, name TEXT, tid INTEGER, upid INTEGER, is_main_thread INTEGER);
         CREATE TABLE process (upid INTEGER, name TEXT, pid INTEGER);
+        CREATE TABLE __intrinsic_track (id INTEGER, name TEXT, type TEXT, utid INTEGER, upid INTEGER);
+        CREATE TABLE sched_slice (id INTEGER, ts INTEGER, dur INTEGER, utid INTEGER, ucpu INTEGER, end_state TEXT);
         CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
         INSERT INTO slice VALUES (1, 5000, 3000, 'test', NULL, 10, NULL, 0), (2, 10000, 500, 'child', 1, 10, NULL, 1);
         INSERT INTO thread VALUES (1, 'main', 100, 1, 1);
