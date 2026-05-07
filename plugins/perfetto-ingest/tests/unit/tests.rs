@@ -181,6 +181,17 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
         CREATE TABLE ftrace_event (id INTEGER, ts INTEGER, name TEXT, cpu INTEGER, utid INTEGER);
         CREATE TABLE spurious_sched_wakeup (id INTEGER, ts INTEGER, utid INTEGER, waker_utid INTEGER);
         CREATE TABLE instant (ts INTEGER, track_id INTEGER, name TEXT);
+        CREATE TABLE cpu (id INTEGER, cpu INTEGER, cluster_id INTEGER, processor TEXT);
+        CREATE TABLE machine (id INTEGER, arch TEXT, num_cpus INTEGER, sysname TEXT, release TEXT);
+        CREATE TABLE metadata (name TEXT, int_value INTEGER, str_value TEXT);
+        CREATE TABLE counter (id INTEGER, ts INTEGER, track_id INTEGER, value REAL);
+        CREATE TABLE memory_snapshot (id INTEGER, timestamp INTEGER, track_id INTEGER, detail_level TEXT);
+        CREATE TABLE cpu_profile_stack_sample (id INTEGER, ts INTEGER, callsite_id INTEGER, utid INTEGER);
+        CREATE TABLE stack_profile_frame (id INTEGER, name TEXT, mapping_id INTEGER);
+        CREATE TABLE heap_profile_allocation (id INTEGER, ts INTEGER, upid INTEGER, size INTEGER, count INTEGER);
+        CREATE TABLE protolog (id INTEGER, ts INTEGER, level TEXT, tag TEXT, message TEXT);
+        CREATE TABLE android_logs (id INTEGER, ts INTEGER, utid INTEGER, prio INTEGER, tag TEXT, msg TEXT);
+        CREATE TABLE filedescriptor (id INTEGER, ufd INTEGER, fd INTEGER, ts INTEGER, upid INTEGER, path TEXT);
         CREATE TABLE args (arg_set_id INTEGER, flat_key TEXT, string_value TEXT, int_value INTEGER, real_value REAL);
         CREATE TABLE clock_snapshot (ts INTEGER, clock_value INTEGER, clock_id INTEGER, clock_name TEXT);
 
@@ -200,6 +211,17 @@ fn test_db() -> super::sqlite_reader::PerfettoDb {
         INSERT INTO ftrace_event VALUES (2, 15000, 'sched_waking', 2, 3);
         INSERT INTO spurious_sched_wakeup VALUES (1, 5000, 1, 2);
         INSERT INTO instant VALUES (10000, 10, 'test-instant');
+        INSERT INTO cpu VALUES (1, 0, 0, 'x86_64');
+        INSERT INTO machine VALUES (1, 'x86_64', 8, 'Linux', '5.15.0');
+        INSERT INTO metadata VALUES ('trace_size_bytes', 1048576, NULL);
+        INSERT INTO counter VALUES (1, 10000, 1, 2400000.0);
+        INSERT INTO memory_snapshot VALUES (1, 20000, 1, 'detailed');
+        INSERT INTO cpu_profile_stack_sample VALUES (1, 10000, 42, 1);
+        INSERT INTO stack_profile_frame VALUES (1, 'main', 1);
+        INSERT INTO heap_profile_allocation VALUES (1, 20000, 1, 4096, 1);
+        INSERT INTO protolog VALUES (1, 10000, 'INFO', 'test', 'test log');
+        INSERT INTO android_logs VALUES (1, 10000, 1, 3, 'TestTag', 'test message');
+        INSERT INTO filedescriptor VALUES (1, 1, 42, 10000, 1, '/dev/null');
         INSERT INTO clock_snapshot VALUES
             (0, 1700000000000000000, 1, 'REALTIME'),
             (10000, 1700000000000010000, 1, 'REALTIME');
@@ -552,6 +574,98 @@ fn log_mapper_produces_instant_records() {
         }
     });
     assert!(has_instant, "expected instant event attributes in emitted records");
+}
+
+// sqlite_reader tests for P3-P9 types
+
+#[test]
+fn sqlite_reader_reads_cpus() {
+    let db = test_db();
+    let cpus = db.read_cpus().unwrap();
+    assert_eq!(cpus.len(), 1);
+    assert_eq!(cpus[0].cpu, Some(0));
+    assert_eq!(cpus[0].processor.as_deref(), Some("x86_64"));
+}
+
+#[test]
+fn sqlite_reader_reads_machines() {
+    let db = test_db();
+    let machines = db.read_machines().unwrap();
+    assert_eq!(machines.len(), 1);
+    assert_eq!(machines[0].arch.as_deref(), Some("x86_64"));
+    assert_eq!(machines[0].sysname.as_deref(), Some("Linux"));
+}
+
+#[test]
+fn sqlite_reader_reads_metadata() {
+    let db = test_db();
+    let meta = db.read_metadata().unwrap();
+    assert_eq!(meta.len(), 1);
+    assert_eq!(meta[0].name.as_deref(), Some("trace_size_bytes"));
+}
+
+#[test]
+fn sqlite_reader_reads_counters() {
+    let db = test_db();
+    let counters = db.read_counters().unwrap();
+    assert_eq!(counters.len(), 1);
+    assert!((counters[0].value - 2400000.0).abs() < 1.0);
+}
+
+#[test]
+fn sqlite_reader_reads_memory_snapshots() {
+    let db = test_db();
+    let snaps = db.read_memory_snapshots().unwrap();
+    assert_eq!(snaps.len(), 1);
+    assert_eq!(snaps[0].detail_level.as_deref(), Some("detailed"));
+}
+
+#[test]
+fn sqlite_reader_reads_cpu_profile_samples() {
+    let db = test_db();
+    let samples = db.read_cpu_profile_samples().unwrap();
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].callsite_id, 42);
+}
+
+#[test]
+fn sqlite_reader_reads_stack_frames() {
+    let db = test_db();
+    let frames = db.read_stack_frames().unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].name.as_deref(), Some("main"));
+}
+
+#[test]
+fn sqlite_reader_reads_heap_allocations() {
+    let db = test_db();
+    let allocs = db.read_heap_allocations().unwrap();
+    assert_eq!(allocs.len(), 1);
+    assert_eq!(allocs[0].size, 4096);
+}
+
+#[test]
+fn sqlite_reader_reads_protologs() {
+    let db = test_db();
+    let logs = db.read_protologs().unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].message.as_deref(), Some("test log"));
+}
+
+#[test]
+fn sqlite_reader_reads_android_logs() {
+    let db = test_db();
+    let logs = db.read_android_logs().unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].tag.as_deref(), Some("TestTag"));
+}
+
+#[test]
+fn sqlite_reader_reads_filedescriptors() {
+    let db = test_db();
+    let fds = db.read_filedescriptors().unwrap();
+    assert_eq!(fds.len(), 1);
+    assert_eq!(fds[0].path.as_deref(), Some("/dev/null"));
 }
 
 fn run_core_pipeline(sqlite_path: &std::path::Path) -> Vec<EmittedRecord> {
