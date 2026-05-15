@@ -1,4 +1,4 @@
-.PHONY: build dev devel check fix test test-unit test-integration test-abi-matrix test-exporter-release-smoke setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo man
+.PHONY: build dev devel check fix test test-unit test-integration test-abi-matrix test-exporter-release-smoke setup clean stats arm-devel arm x86-devel x86 setup-arm setup-x86 demo man advisory
 
 DEFAULT_TARGET := build
 ARM_TARGET ?= aarch64-unknown-linux-musl
@@ -69,6 +69,10 @@ $(MANPAGE_OUT): doc/manpage/%.1: doc/manpage/%.1.md
 	@command -v pandoc >/dev/null 2>&1 || { echo "pandoc not found. Install pandoc to build manpages."; exit 1; }
 	@mkdir -p doc/manpage
 	pandoc --standalone --to man $< -o $@
+
+advisory:
+	@cargo audit --version >/dev/null 2>&1 || { echo "Installing cargo-audit..."; cargo install cargo-audit --locked; }
+	@scripts/audit-table.sh
 
 clean:
 	cargo clean
