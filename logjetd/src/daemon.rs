@@ -16,6 +16,10 @@ use opentelemetry_proto::tonic::collector::metrics::v1::{
     ExportMetricsServiceRequest, ExportMetricsServiceResponse,
     metrics_service_server::{MetricsService, MetricsServiceServer},
 };
+use opentelemetry_proto::tonic::collector::trace::v1::{
+    ExportTraceServiceRequest, ExportTraceServiceResponse,
+    trace_service_server::{TraceService, TraceServiceServer},
+};
 use prost::Message;
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use tiny_http::{Method, Response, Server, StatusCode};
@@ -264,15 +268,16 @@ fn ingest_loop(
                 return otlp_http_tls_loop(bind_addr, ingest_tls, ingest_limits, ingest_policy, spool, next_seq, limiter);
             }
             let server = Server::http(&bind_addr).map_err(|err| io::Error::other(err.to_string()))?;
-            eprintln!("ljd ingest listening on http://{bind_addr}/v1/logs /v1/metrics using otlp-http max-batch-bytes={}", ingest_limits.max_batch_bytes);
+            eprintln!("ljd ingest listening on http://{bind_addr}/v1/logs /v1/metrics /v1/traces using otlp-http max-batch-bytes={}", ingest_limits.max_batch_bytes);
 
             for mut request in server.incoming_requests() {
-                if request.method() != &Method::Post || !matches!(request.url(), "/v1/logs" | "/v1/metrics") {
+                if request.method() != &Method::Post || !matches!(request.url(), "/v1/logs" | "/v1/metrics" | "/v1/traces") {
                     let response = Response::from_string("not found").with_status_code(StatusCode(404));
                     let _ = request.respond(response);
                     continue;
                 }
                 let is_metrics = request.url() == "/v1/metrics";
+                let is_traces = request.url() == "/v1/traces";
 
                 let content_encoding = request.headers().iter().find(|h| h.field.equiv("content-encoding")).map(|h| h.value.to_string());
 
@@ -305,6 +310,31 @@ fn ingest_loop(
                                 record_type: logjet::RecordType::Metrics,
                                 seq: next_seq.fetch_add(1, Ordering::Relaxed),
                                 ts_unix_ns: extract_batch_timestamp_metrics(&batch).unwrap_or_else(unix_time_nanos),
+                                payload: body,
+                            };
+                            append_batch_record(&spool, record)?;
+
+                            let response = Response::empty(200);
+                            request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
+                        }
+                        Err(err) => {
+                            let response = Response::from_string(format!("decode error: {err}")).with_status_code(StatusCode(400));
+                            request.respond(response).map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
+                        }
+                    }
+                } else if is_traces {
+                    match ExportTraceServiceRequest::decode(body.as_slice()) {
+                        Ok(batch) => {
+                            let decision = ingest_policy.decide(BatchPriority::Unknown)?;
+                            if matches!(decision, IngestDecision::RejectRateLimited) {
+                                let response = Response::from_string("rate limit exceeded").with_status_code(StatusCode(429));
+                                request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
+                                continue;
+                            }
+                            let record = WireRecord {
+                                record_type: logjet::RecordType::Traces,
+                                seq: next_seq.fetch_add(1, Ordering::Relaxed),
+                                ts_unix_ns: extract_batch_timestamp_traces(&batch).unwrap_or_else(unix_time_nanos),
                                 payload: body,
                             };
                             append_batch_record(&spool, record)?;
@@ -357,7 +387,8 @@ fn ingest_loop(
 
             let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|err| io::Error::other(err.to_string()))?;
             let logs_service = OtlpGrpcLogsService { spool: Arc::clone(&spool), next_seq: Arc::clone(&next_seq), ingest_policy: Arc::clone(&ingest_policy) };
-            let metrics_service = OtlpGrpcMetricsService { spool, next_seq, ingest_policy };
+            let metrics_service = OtlpGrpcMetricsService { spool: Arc::clone(&spool), next_seq: Arc::clone(&next_seq), ingest_policy: Arc::clone(&ingest_policy) };
+            let traces_service = OtlpGrpcTracesService { spool, next_seq, ingest_policy };
             let grpc_tls = if ingest_tls.enable { Some(build_grpc_server_tls_config(&ingest_tls)?) } else { None };
 
             runtime.block_on(async move {
@@ -369,6 +400,7 @@ fn ingest_loop(
                     .concurrency_limit_per_connection(ingest_limits.max_clients)
                     .add_service(LogsServiceServer::new(logs_service).max_decoding_message_size(ingest_limits.max_batch_bytes))
                     .add_service(MetricsServiceServer::new(metrics_service).max_decoding_message_size(ingest_limits.max_batch_bytes))
+                    .add_service(TraceServiceServer::new(traces_service).max_decoding_message_size(ingest_limits.max_batch_bytes))
                     .serve(addr)
                     .await
                     .map_err(|err| io::Error::other(err.to_string()))
@@ -386,7 +418,7 @@ fn otlp_http_tls_loop(
     let listener = TcpListener::bind(&bind_addr)?;
     let tls_server = load_ingest_server_config(&ingest_tls)?;
     eprintln!(
-        "ljd ingest listening on https://{bind_addr}/v1/logs /v1/metrics using otlp-http max-batch-bytes={} max-clients={}",
+        "ljd ingest listening on https://{bind_addr}/v1/logs /v1/metrics /v1/traces using otlp-http max-batch-bytes={} max-clients={}",
         ingest_limits.max_batch_bytes, ingest_limits.max_clients
     );
 
@@ -438,7 +470,8 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
         Err(err) => return Err(err),
     };
     let is_metrics = request.path == "/v1/metrics";
-    if request.method != "POST" || !matches!(request.path.as_str(), "/v1/logs" | "/v1/metrics") {
+    let is_traces = request.path == "/v1/traces";
+    if request.method != "POST" || !matches!(request.path.as_str(), "/v1/logs" | "/v1/metrics" | "/v1/traces") {
         write_http_response(transport, 404, "not found")?;
         return Ok(());
     }
@@ -456,6 +489,28 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
                     record_type: logjet::RecordType::Metrics,
                     seq: next_seq.fetch_add(1, Ordering::Relaxed),
                     ts_unix_ns: extract_batch_timestamp_metrics(&batch).unwrap_or_else(unix_time_nanos),
+                    payload: body,
+                };
+                append_batch_record(&spool, record)?;
+                write_http_response(transport, 200, "")?;
+            }
+            Err(err) => {
+                write_http_response(transport, 400, &format!("decode error: {err}"))?;
+            }
+        }
+    } else if is_traces {
+        let body = maybe_decompress_body(request.body, request.content_encoding.as_deref())?;
+        match ExportTraceServiceRequest::decode(body.as_slice()) {
+            Ok(batch) => {
+                let decision = ingest_policy.decide(BatchPriority::Unknown)?;
+                if matches!(decision, IngestDecision::RejectRateLimited) {
+                    write_http_response(transport, 429, "rate limit exceeded")?;
+                    return Ok(());
+                }
+                let record = WireRecord {
+                    record_type: logjet::RecordType::Traces,
+                    seq: next_seq.fetch_add(1, Ordering::Relaxed),
+                    ts_unix_ns: extract_batch_timestamp_traces(&batch).unwrap_or_else(unix_time_nanos),
                     payload: body,
                 };
                 append_batch_record(&spool, record)?;
@@ -874,6 +929,50 @@ fn extract_batch_timestamp_metrics(batch: &ExportMetricsServiceRequest) -> Optio
         }
     }
     None
+}
+
+fn extract_batch_timestamp_traces(batch: &ExportTraceServiceRequest) -> Option<u64> {
+    for resource_spans in &batch.resource_spans {
+        for scope_spans in &resource_spans.scope_spans {
+            for span in &scope_spans.spans {
+                if span.start_time_unix_nano != 0 {
+                    return Some(span.start_time_unix_nano);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[derive(Clone)]
+struct OtlpGrpcTracesService {
+    spool: Arc<SharedSpool>,
+    next_seq: Arc<AtomicU64>,
+    ingest_policy: Arc<SharedIngestPolicy>,
+}
+
+#[tonic::async_trait]
+impl TraceService for OtlpGrpcTracesService {
+    async fn export(&self, request: Request<ExportTraceServiceRequest>) -> Result<GrpcResponse<ExportTraceServiceResponse>, Status> {
+        let batch = request.into_inner();
+        match self.ingest_policy.decide(BatchPriority::Unknown).map_err(|err| Status::internal(err.to_string()))? {
+            IngestDecision::Accept | IngestDecision::AcceptPriorityBypass => {}
+            IngestDecision::RejectRateLimited => {
+                return Err(Status::resource_exhausted("ingest rate limit exceeded"));
+            }
+        }
+        let payload = batch.encode_to_vec();
+        let record = WireRecord {
+            record_type: logjet::RecordType::Traces,
+            seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
+            ts_unix_ns: extract_batch_timestamp_traces(&batch).unwrap_or_else(unix_time_nanos),
+            payload,
+        };
+
+        append_batch_record(&self.spool, record).map_err(|err| Status::internal(err.to_string()))?;
+
+        Ok(GrpcResponse::new(ExportTraceServiceResponse { partial_success: None }))
+    }
 }
 
 #[derive(Clone)]

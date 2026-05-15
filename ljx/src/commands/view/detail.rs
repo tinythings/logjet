@@ -2,6 +2,7 @@ use chrono::{TimeZone, Utc};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -16,6 +17,8 @@ pub(crate) fn format_summary(detail: &DetailRecord, hex_payload: bool) -> String
         hex_preview(&detail.payload, 32)
     } else if detail.meta.record_type == RecordType::Metrics {
         extract_otlp_metrics_summary(&detail.payload).unwrap_or_else(|| text_preview(&detail.payload, 160))
+    } else if detail.meta.record_type == RecordType::Traces {
+        extract_otlp_traces_summary(&detail.payload).unwrap_or_else(|| text_preview(&detail.payload, 160))
     } else if let Some(message) = extract_otlp_log_message(&detail.payload) {
         trim_single_line(&message, 160)
     } else {
@@ -49,8 +52,50 @@ fn render_otlp_lines(detail: &DetailRecord) -> Vec<Line<'static>> {
     match detail.meta.record_type {
         RecordType::Logs => render_otlp_log_lines(detail),
         RecordType::Metrics => render_otlp_metrics_lines(detail),
+        RecordType::Traces => render_otlp_traces_lines(detail),
         _ => Vec::new(),
     }
+}
+
+fn render_otlp_traces_lines(detail: &DetailRecord) -> Vec<Line<'static>> {
+    let Ok(batch) = ExportTraceServiceRequest::decode(detail.payload.as_slice()) else {
+        return vec![Line::from(vec![
+            Span::styled("OTLP traces: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("payload decode failed; showing raw preview"),
+        ])];
+    };
+
+    let mut span_count = 0usize;
+    let mut services = Vec::new();
+
+    for resource_spans in &batch.resource_spans {
+        if let Some(resource) = &resource_spans.resource {
+            for attr in &resource.attributes {
+                if attr.key == "service.name"
+                    && let Some(value) = &attr.value
+                    && let Some(Value::StringValue(service)) = &value.value
+                    && !services.iter().any(|existing| existing == service)
+                {
+                    services.push(service.clone());
+                }
+            }
+        }
+        for scope_spans in &resource_spans.scope_spans {
+            span_count += scope_spans.spans.len();
+        }
+    }
+
+    let mut lines = vec![
+        key_value_line("OTLP kind:", "traces".to_string(), Style::default().fg(Color::White)),
+        key_value_line("Resources:", batch.resource_spans.len().to_string(), Style::default().fg(Color::White)),
+        key_value_line("Spans:", span_count.to_string(), Style::default().fg(Color::White)),
+    ];
+
+    if !services.is_empty() {
+        lines.push(key_value_line("Services:", services.join(", "), Style::default().fg(Color::White)));
+    }
+
+    lines
 }
 
 fn render_otlp_metrics_lines(detail: &DetailRecord) -> Vec<Line<'static>> {
@@ -206,6 +251,11 @@ pub(crate) fn render_modal_message(detail: &DetailRecord, hex_payload: bool) -> 
     {
         return message;
     }
+    if detail.meta.record_type == RecordType::Traces
+        && let Some(message) = extract_otlp_traces_message(&detail.payload)
+    {
+        return message;
+    }
 
     if hex_payload { hex_dump(&detail.payload) } else { String::from_utf8_lossy(&detail.payload).into_owned() }
 }
@@ -241,6 +291,81 @@ pub(crate) fn extract_otlp_metrics_summary(payload: &[u8]) -> Option<String> {
         None
     } else {
         Some(parts.join(", "))
+    }
+}
+
+pub(crate) fn extract_otlp_traces_summary(payload: &[u8]) -> Option<String> {
+    let batch = ExportTraceServiceRequest::decode(payload).ok()?;
+    let mut parts = Vec::new();
+
+    for resource_spans in &batch.resource_spans {
+        for scope_spans in &resource_spans.scope_spans {
+            for span in &scope_spans.spans {
+                let status = span.status.as_ref().map(|s| s.code.to_string()).unwrap_or_default();
+                let name = &span.name;
+                let kind = format_span_kind(span.kind);
+                if status.is_empty() {
+                    parts.push(format!("{name} ({kind})"));
+                } else {
+                    parts.push(format!("{name} ({kind}, status={status})"));
+                }
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+pub(crate) fn extract_otlp_traces_message(payload: &[u8]) -> Option<String> {
+    let batch = ExportTraceServiceRequest::decode(payload).ok()?;
+    let mut lines = Vec::new();
+
+    for resource_spans in &batch.resource_spans {
+        for scope_spans in &resource_spans.scope_spans {
+            for span in &scope_spans.spans {
+                lines.push(format!("Span: {}", span.name));
+                if !span.trace_id.is_empty() {
+                    lines.push(format!("  Trace ID: {}", hex_encode(&span.trace_id)));
+                }
+                if !span.span_id.is_empty() {
+                    lines.push(format!("  Span ID: {}", hex_encode(&span.span_id)));
+                }
+                if !span.parent_span_id.is_empty() {
+                    lines.push(format!("  Parent Span ID: {}", hex_encode(&span.parent_span_id)));
+                }
+                lines.push(format!("  Kind: {}", format_span_kind(span.kind)));
+                lines.push(format!("  Start: {}", format_timestamp(span.start_time_unix_nano)));
+                lines.push(format!("  End:   {}", format_timestamp(span.end_time_unix_nano)));
+                if let Some(status) = &span.status {
+                    lines.push(format!("  Status: code={} message={}", status.code, status.message));
+                }
+                for attr in &span.attributes {
+                    lines.push(format!("  Attr: {}={}", attr.key, attr.value.as_ref().map(|v| format_any_value(Some(v))).unwrap_or_default()));
+                }
+                lines.push(String::new());
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn format_span_kind(kind: i32) -> String {
+    match kind {
+        1 => "Internal".to_string(),
+        2 => "Server".to_string(),
+        3 => "Client".to_string(),
+        4 => "Producer".to_string(),
+        5 => "Consumer".to_string(),
+        _ => format!("Unknown({kind})"),
     }
 }
 
@@ -353,10 +478,78 @@ pub(crate) fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, S
     match detail.meta.record_type {
         RecordType::Logs => lines.extend(render_modal_log_info_entries(detail)),
         RecordType::Metrics => lines.extend(render_modal_metrics_info_entries(detail)),
+        RecordType::Traces => lines.extend(render_modal_traces_info_entries(detail)),
         _ => {}
     }
 
     lines
+}
+
+fn render_modal_traces_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
+    let Ok(batch) = ExportTraceServiceRequest::decode(detail.payload.as_slice()) else {
+        return vec![("otlp".to_string(), "decode failed".to_string())];
+    };
+
+    let mut entries = vec![("otlp.kind".to_string(), "traces".to_string())];
+    entries.push(("resources".to_string(), batch.resource_spans.len().to_string()));
+
+    let mut service_names = Vec::new();
+    let mut scope_names = Vec::new();
+    let mut span_names = Vec::new();
+    let mut span_count = 0usize;
+    let mut kind_counts = std::collections::HashMap::new();
+    let mut status_counts = std::collections::HashMap::new();
+
+    for resource_spans in &batch.resource_spans {
+        if let Some(resource) = &resource_spans.resource {
+            for attr in &resource.attributes {
+                if attr.key == "service.name"
+                    && let Some(value) = &attr.value
+                    && let Some(Value::StringValue(service)) = &value.value
+                    && !service_names.iter().any(|existing| existing == service)
+                {
+                    service_names.push(service.clone());
+                }
+            }
+        }
+        for scope_spans in &resource_spans.scope_spans {
+            if let Some(scope) = &scope_spans.scope
+                && !scope.name.is_empty()
+                && !scope_names.iter().any(|existing| existing == &scope.name)
+            {
+                scope_names.push(scope.name.clone());
+            }
+            for span in &scope_spans.spans {
+                span_count += 1;
+                if !span.name.is_empty() && !span_names.iter().any(|existing| existing == &span.name) {
+                    span_names.push(span.name.clone());
+                }
+                *kind_counts.entry(format_span_kind(span.kind)).or_insert(0usize) += 1;
+                if let Some(status) = &span.status {
+                    *status_counts.entry(status.code.to_string()).or_insert(0usize) += 1;
+                }
+            }
+        }
+    }
+
+    if !service_names.is_empty() {
+        entries.push(("service.name".to_string(), service_names.join(", ")));
+    }
+    if !scope_names.is_empty() {
+        entries.push(("scope".to_string(), scope_names.join(", ")));
+    }
+    entries.push(("spans".to_string(), span_count.to_string()));
+    if !span_names.is_empty() {
+        entries.push(("span.names".to_string(), span_names.join(", ")));
+    }
+    for (kind, count) in kind_counts {
+        entries.push((format!("span.kind.{kind}"), count.to_string()));
+    }
+    for (code, count) in status_counts {
+        entries.push((format!("span.status.{code}"), count.to_string()));
+    }
+
+    entries
 }
 
 fn render_modal_metrics_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
@@ -853,6 +1046,7 @@ fn is_otlp_attribute_entry(key: &str) -> bool {
     (key.starts_with("resource.") && key != "resource.attrs")
         || (key.starts_with("scope.") && key != "scope.attrs")
         || (key.starts_with("record.") && key != "record.attrs")
+        || (key.starts_with("span.") && key != "span.attrs")
 }
 
 fn is_standard_otlp_attribute_entry(key: &str) -> bool {
