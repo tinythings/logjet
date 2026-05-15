@@ -8,8 +8,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use colored::Colorize;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs, SeverityNumber};
+use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPointValue;
+use opentelemetry_proto::tonic::metrics::v1::{
+    AggregationTemporality, Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, Sum,
+};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
@@ -114,8 +119,78 @@ pub fn post_otlp_http(addr: &str, request: &ExportLogsServiceRequest) -> io::Res
     DemoConnection::open(addr, None, None)?.post(&request.encode_to_vec())
 }
 
-pub fn post_raw_otlp_http(addr: &str, body: &[u8], ca_file: Option<&Path>, server_name: Option<&str>) -> io::Result<()> {
-    DemoConnection::open(addr, ca_file, server_name)?.post(body)
+pub fn post_otlp_http_metrics(addr: &str, request: &ExportMetricsServiceRequest) -> io::Result<()> {
+    DemoConnection::open(addr, None, None)?.post(&request.encode_to_vec())
+}
+
+pub fn build_metrics_request(sequence: u64) -> ExportMetricsServiceRequest {
+    let nanos = unix_time_nanos();
+    let cpu_value = 10.0 + ((sequence % 80) as f64) + (sequence % 7) as f64 * 0.5;
+    let request_count = sequence * 100 + 42;
+
+    let resource = Resource {
+        attributes: vec![
+            string_attr("service.name", "metrics-demo"),
+            string_attr("host.name", "garage-rig"),
+        ],
+        dropped_attributes_count: 0,
+        entity_refs: Vec::new(),
+    };
+
+    let scope = InstrumentationScope {
+        name: "demo-metrics-emitter".to_string(),
+        version: "0.1.0".to_string(),
+        attributes: Vec::new(),
+        dropped_attributes_count: 0,
+    };
+
+    let cpu_metric = Metric {
+        name: "cpu.usage".to_string(),
+        description: "Current CPU usage percentage".to_string(),
+        unit: "%".to_string(),
+        data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![string_attr("cpu", "all")],
+                start_time_unix_nano: 0,
+                time_unix_nano: nanos,
+                value: Some(DataPointValue::AsDouble(cpu_value)),
+                flags: 0,
+                exemplars: Vec::new(),
+            }],
+        })),
+        metadata: Vec::new(),
+    };
+
+    let requests_metric = Metric {
+        name: "requests.total".to_string(),
+        description: "Total number of requests served".to_string(),
+        unit: "1".to_string(),
+        data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Sum(Sum {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![string_attr("method", "GET")],
+                start_time_unix_nano: nanos - 1_000_000_000,
+                time_unix_nano: nanos,
+                value: Some(DataPointValue::AsInt(request_count as i64)),
+                flags: 0,
+                exemplars: Vec::new(),
+            }],
+            aggregation_temporality: AggregationTemporality::Cumulative as i32,
+            is_monotonic: true,
+        })),
+        metadata: Vec::new(),
+    };
+
+    ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(resource),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(scope),
+                metrics: vec![cpu_metric, requests_metric],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    }
 }
 
 enum DemoStream {

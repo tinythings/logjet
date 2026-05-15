@@ -63,7 +63,6 @@ demo: devel
 	cargo build -p lj-syslog-ingest
 	cargo build -p lj-logcat-ingest
 	cargo build -p lj-stress-ingest
-
 man: $(MANPAGE_OUT)
 
 $(MANPAGE_OUT): doc/manpage/%.1: doc/manpage/%.1.md
