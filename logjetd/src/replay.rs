@@ -23,7 +23,7 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
     let mut sent = 0u64;
     let endpoints = parse_collector_endpoints(collector)?;
     let mut conn = MultiCollectorConnection::connect(&endpoints, Duration::from_millis(collector.timeout_ms), collector)?;
-    let mut batcher = OtlpBatcher::new(collector.batch_size, collector.batch_timeout_ms);
+    let mut logs_batcher = OtlpBatcher::new(collector.batch_size, collector.batch_timeout_ms);
 
     for segment in list_named_segments(path, name)? {
         let file = File::open(&segment.path)?;
@@ -31,13 +31,15 @@ pub fn replay_path_to_otlp_http(path: &Path, name: &str, collector: &CollectorCo
 
         while let Some(record) = reader.next_record().map_err(to_io_error)? {
             if record.record_type == RecordType::Logs {
-                batcher.add(&record.payload, &mut conn)?;
-                sent = sent.saturating_add(1);
+                logs_batcher.add(&record.payload, &mut conn)?;
+            } else {
+                conn.post_for(record.record_type, &record.payload)?;
             }
+            sent = sent.saturating_add(1);
         }
     }
 
-    batcher.flush(&mut conn)?;
+    logs_batcher.flush(&mut conn)?;
     Ok(sent)
 }
 
@@ -125,9 +127,7 @@ fn bridge_transport<T: io::Read + io::Write>(
     if !collector_transport.backpressure_enabled {
         let mut conn = collector_transport.open_connection()?;
         while let Some(record) = read_record(transport)? {
-            if record.record_type == RecordType::Logs {
-                conn.post(&record.payload)?;
-            }
+            conn.post_for(record.record_type, &record.payload)?;
             commit_record(transport, state, state_file, consume, record.seq)?;
         }
         return Ok(());
@@ -142,13 +142,8 @@ fn bridge_transport<T: io::Read + io::Write>(
     while let Some(record) = read_record(transport)? {
         flush_ready_results(transport, state, state_file, consume, &mut pending, &result_rx, false)?;
 
-        if record.record_type != RecordType::Logs {
-            commit_record(transport, state, state_file, consume, record.seq)?;
-            continue;
-        }
-
         let seq = record.seq;
-        match enqueue_export_task(&task_tx, collector_transport, ExportTask { seq, payload: record.payload }) {
+        match enqueue_export_task(&task_tx, collector_transport, ExportTask { seq, record_type: record.record_type, payload: record.payload }) {
             Ok(EnqueueOutcome::Queued) => pending.push_back(PendingExport::Queued(seq)),
             Ok(EnqueueOutcome::DroppedNewest) => pending.push_back(PendingExport::Dropped(seq)),
             Err(err) => {
@@ -196,19 +191,24 @@ fn export_worker(
     collector_transport: CollectorTransport, task_rx: mpsc::Receiver<ExportTask>, result_tx: mpsc::Sender<ExportResult>,
 ) -> io::Result<()> {
     let mut conn = collector_transport.open_connection()?;
-    let mut batcher = OtlpBatcher::new(collector_transport.collector.batch_size, collector_transport.collector.batch_timeout_ms);
+    let mut logs_batcher = OtlpBatcher::new(collector_transport.collector.batch_size, collector_transport.collector.batch_timeout_ms);
     let recv_timeout = Duration::from_millis(collector_transport.collector.batch_timeout_ms.max(50));
     loop {
         let task = match task_rx.recv_timeout(recv_timeout) {
             Ok(task) => task,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                batcher.flush_if_expired(&mut conn)?;
+                logs_batcher.flush_if_expired(&mut conn)?;
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
-        let outcome = batcher.add(&task.payload, &mut conn).map(|()| ExportOutcome::Delivered);
-        batcher.flush_if_expired(&mut conn)?;
+        let outcome = if task.record_type == RecordType::Logs {
+            let result = logs_batcher.add(&task.payload, &mut conn).map(|()| ExportOutcome::Delivered);
+            logs_batcher.flush_if_expired(&mut conn)?;
+            result
+        } else {
+            conn.post_for(task.record_type, &task.payload).map(|()| ExportOutcome::Delivered)
+        };
         let failed = outcome.is_err();
         if result_tx.send(ExportResult { seq: task.seq, outcome }).is_err() {
             break;
@@ -217,7 +217,7 @@ fn export_worker(
             break;
         }
     }
-    let _ = batcher.flush(&mut conn);
+    let _ = logs_batcher.flush(&mut conn);
     Ok(())
 }
 
@@ -501,20 +501,20 @@ impl CollectorConnection {
     }
 
     /// POST one OTLP payload, reconnecting once on transport failure.
-    fn post(&mut self, payload: &[u8]) -> io::Result<()> {
-        match self.post_inner(payload) {
+    fn post_for(&mut self, record_type: RecordType, payload: &[u8]) -> io::Result<()> {
+        match self.post_for_inner(record_type, payload) {
             Ok(()) => Ok(()),
             Err(_first) => {
                 self.reconnect()?;
-                self.post_inner(payload)
+                self.post_for_inner(record_type, payload)
             }
         }
     }
 
-    fn post_inner(&mut self, payload: &[u8]) -> io::Result<()> {
+    fn post_for_inner(&mut self, record_type: RecordType, payload: &[u8]) -> io::Result<()> {
         match self {
-            Self::Http(conn) => conn.post_inner(payload),
-            Self::Grpc(conn) => conn.post_inner(payload),
+            Self::Http(conn) => conn.post_for_inner(record_type, payload),
+            Self::Grpc(conn) => conn.post_for_inner(record_type, payload),
         }
     }
 }
@@ -529,9 +529,9 @@ impl MultiCollectorConnection {
         Ok(Self { collectors })
     }
 
-    fn post(&mut self, payload: &[u8]) -> io::Result<()> {
+    fn post_for(&mut self, record_type: RecordType, payload: &[u8]) -> io::Result<()> {
         for collector in &mut self.collectors {
-            collector.post(payload)?;
+            collector.post_for(record_type, payload)?;
         }
         Ok(())
     }
@@ -559,17 +559,31 @@ impl HttpCollectorConnection {
         Ok(())
     }
 
-    fn post_inner(&mut self, payload: &[u8]) -> io::Result<()> {
+    fn post_for_inner(&mut self, record_type: RecordType, payload: &[u8]) -> io::Result<()> {
+        let path = signal_path_for_endpoint(&self.endpoint.path, record_type);
         write!(
             self.stream,
             "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
-            self.endpoint.path,
+            path,
             self.endpoint.authority,
             payload.len()
         )?;
         self.stream.write_all(payload)?;
         self.stream.flush()?;
         read_http_response(&mut self.stream)
+    }
+}
+
+fn signal_path_for_endpoint(base_path: &str, record_type: RecordType) -> String {
+    if base_path == "/v1/logs" || base_path.is_empty() {
+        match record_type {
+            RecordType::Logs => "/v1/logs".to_string(),
+            RecordType::Metrics => "/v1/metrics".to_string(),
+            RecordType::Traces => "/v1/traces".to_string(),
+            RecordType::Events => "/v1/logs".to_string(),
+        }
+    } else {
+        base_path.to_string()
     }
 }
 
@@ -586,13 +600,21 @@ impl GrpcCollectorConnection {
         Ok(())
     }
 
-    fn post_inner(&mut self, payload: &[u8]) -> io::Result<()> {
-        let req = ExportLogsServiceRequest::decode(payload)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("invalid OTLP log batch: {err}")))?;
-        self.runtime
-            .block_on(self.client.export(Request::new(req)))
-            .map(|_| ())
-            .map_err(|err| io::Error::other(format!("collector gRPC export failed: {err}")))
+    fn post_for_inner(&mut self, record_type: RecordType, payload: &[u8]) -> io::Result<()> {
+        match record_type {
+            RecordType::Logs => {
+                let req = ExportLogsServiceRequest::decode(payload)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("invalid OTLP log batch: {err}")))?;
+                self.runtime
+                    .block_on(self.client.export(Request::new(req)))
+                    .map(|_| ())
+                    .map_err(|err| io::Error::other(format!("collector gRPC export failed: {err}")))
+            }
+            RecordType::Metrics => {
+                Err(io::Error::other("gRPC metrics export requires MetricsServiceClient; use HTTP collector.url for metrics"))
+            }
+            _ => Err(io::Error::other(format!("gRPC export not yet implemented for record type: {record_type:?}"))),
+        }
     }
 }
 
@@ -671,11 +693,11 @@ impl OtlpBatcher {
     /// Add a raw OTLP payload to the batch. Flushes to conn if batch is full.
     fn add(&mut self, payload: &[u8], conn: &mut MultiCollectorConnection) -> io::Result<()> {
         if self.batch_size <= 1 {
-            return conn.post(payload);
+            return conn.post_for(RecordType::Logs, payload);
         }
         match ExportLogsServiceRequest::decode(payload) {
             Ok(req) => self.merge(req),
-            Err(_) => return conn.post(payload),
+            Err(_) => return conn.post_for(RecordType::Logs, payload),
         }
         if self.pending_count >= self.batch_size {
             self.flush(conn)?;
@@ -699,7 +721,7 @@ impl OtlpBatcher {
         let merged = std::mem::replace(&mut self.pending, ExportLogsServiceRequest { resource_logs: Vec::new() });
         self.pending_count = 0;
         self.first_added = None;
-        conn.post(&merged.encode_to_vec())
+        conn.post_for(RecordType::Logs, &merged.encode_to_vec())
     }
 
     fn merge(&mut self, req: ExportLogsServiceRequest) {
@@ -738,6 +760,7 @@ impl OtlpBatcher {
 #[derive(Debug)]
 struct ExportTask {
     seq: u64,
+    record_type: RecordType,
     payload: Vec<u8>,
 }
 

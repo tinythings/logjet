@@ -4,6 +4,7 @@ use super::{
 };
 use crate::config::{BackpressureMode, CollectorConfig, UpstreamMode};
 use crate::protocol::ReplayHello;
+use logjet::RecordType;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -102,9 +103,9 @@ fn bridge_state_resets_when_legacy_saved_seq_is_above_upstream_last_seq() {
 fn disconnect_mode_errors_when_export_queue_is_full() {
     let transport = test_collector_transport(BackpressureMode::Disconnect, 1);
     let (task_tx, _task_rx) = mpsc::sync_channel(1);
-    task_tx.send(ExportTask { seq: 1, payload: vec![1] }).unwrap();
+    task_tx.send(ExportTask { seq: 1, record_type: RecordType::Logs, payload: vec![1] }).unwrap();
 
-    let err = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, payload: vec![2] }).unwrap_err();
+    let err = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, record_type: RecordType::Logs, payload: vec![2] }).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
 }
 
@@ -112,9 +113,9 @@ fn disconnect_mode_errors_when_export_queue_is_full() {
 fn drop_newest_mode_reports_drop_when_export_queue_is_full() {
     let transport = test_collector_transport(BackpressureMode::DropNewest, 1);
     let (task_tx, _task_rx) = mpsc::sync_channel(1);
-    task_tx.send(ExportTask { seq: 1, payload: vec![1] }).unwrap();
+    task_tx.send(ExportTask { seq: 1, record_type: RecordType::Logs, payload: vec![1] }).unwrap();
 
-    let outcome = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, payload: vec![2] }).unwrap();
+    let outcome = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, record_type: RecordType::Logs, payload: vec![2] }).unwrap();
     assert_eq!(outcome, EnqueueOutcome::DroppedNewest);
 }
 
