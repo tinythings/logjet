@@ -12,6 +12,10 @@ use opentelemetry_proto::tonic::collector::logs::v1::{
     ExportLogsServiceRequest, ExportLogsServiceResponse,
     logs_service_server::{LogsService, LogsServiceServer},
 };
+use opentelemetry_proto::tonic::collector::metrics::v1::{
+    ExportMetricsServiceRequest, ExportMetricsServiceResponse,
+    metrics_service_server::{MetricsService, MetricsServiceServer},
+};
 use prost::Message;
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use tiny_http::{Method, Response, Server, StatusCode};
@@ -260,14 +264,15 @@ fn ingest_loop(
                 return otlp_http_tls_loop(bind_addr, ingest_tls, ingest_limits, ingest_policy, spool, next_seq, limiter);
             }
             let server = Server::http(&bind_addr).map_err(|err| io::Error::other(err.to_string()))?;
-            eprintln!("ljd ingest listening on http://{bind_addr}/v1/logs using otlp-http max-batch-bytes={}", ingest_limits.max_batch_bytes);
+            eprintln!("ljd ingest listening on http://{bind_addr}/v1/logs /v1/metrics using otlp-http max-batch-bytes={}", ingest_limits.max_batch_bytes);
 
             for mut request in server.incoming_requests() {
-                if request.method() != &Method::Post || request.url() != "/v1/logs" {
+                if request.method() != &Method::Post || !matches!(request.url(), "/v1/logs" | "/v1/metrics") {
                     let response = Response::from_string("not found").with_status_code(StatusCode(404));
                     let _ = request.respond(response);
                     continue;
                 }
+                let is_metrics = request.url() == "/v1/metrics";
 
                 let mut body = Vec::with_capacity(ingest_limits.max_batch_bytes.min(8192));
                 request.as_reader().take((ingest_limits.max_batch_bytes + 1) as u64).read_to_end(&mut body)?;
@@ -277,28 +282,55 @@ fn ingest_loop(
                     request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
                     continue;
                 }
-                match ExportLogsServiceRequest::decode(body.as_slice()) {
-                    Ok(batch) => {
-                        let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
-                        if matches!(decision, IngestDecision::RejectRateLimited) {
-                            let response = Response::from_string("rate limit exceeded").with_status_code(StatusCode(429));
-                            request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
-                            continue;
-                        }
-                        let record = WireRecord {
-                            record_type: logjet::RecordType::Logs,
-                            seq: next_seq.fetch_add(1, Ordering::Relaxed),
-                            ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
-                            payload: body,
-                        };
-                        append_batch_record(&spool, record)?;
+                if is_metrics {
+                    match ExportMetricsServiceRequest::decode(body.as_slice()) {
+                        Ok(batch) => {
+                            let decision = ingest_policy.decide(BatchPriority::Unknown)?;
+                            if matches!(decision, IngestDecision::RejectRateLimited) {
+                                let response = Response::from_string("rate limit exceeded").with_status_code(StatusCode(429));
+                                request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
+                                continue;
+                            }
+                            let record = WireRecord {
+                                record_type: logjet::RecordType::Metrics,
+                                seq: next_seq.fetch_add(1, Ordering::Relaxed),
+                                ts_unix_ns: extract_batch_timestamp_metrics(&batch).unwrap_or_else(unix_time_nanos),
+                                payload: body,
+                            };
+                            append_batch_record(&spool, record)?;
 
-                        let response = Response::empty(200);
-                        request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
+                            let response = Response::empty(200);
+                            request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
+                        }
+                        Err(err) => {
+                            let response = Response::from_string(format!("decode error: {err}")).with_status_code(StatusCode(400));
+                            request.respond(response).map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
+                        }
                     }
-                    Err(err) => {
-                        let response = Response::from_string(format!("decode error: {err}")).with_status_code(StatusCode(400));
-                        request.respond(response).map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
+                } else {
+                    match ExportLogsServiceRequest::decode(body.as_slice()) {
+                        Ok(batch) => {
+                            let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
+                            if matches!(decision, IngestDecision::RejectRateLimited) {
+                                let response = Response::from_string("rate limit exceeded").with_status_code(StatusCode(429));
+                                request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
+                                continue;
+                            }
+                            let record = WireRecord {
+                                record_type: logjet::RecordType::Logs,
+                                seq: next_seq.fetch_add(1, Ordering::Relaxed),
+                                ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
+                                payload: body,
+                            };
+                            append_batch_record(&spool, record)?;
+
+                            let response = Response::empty(200);
+                            request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
+                        }
+                        Err(err) => {
+                            let response = Response::from_string(format!("decode error: {err}")).with_status_code(StatusCode(400));
+                            request.respond(response).map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
+                        }
                     }
                 }
             }
@@ -314,7 +346,8 @@ fn ingest_loop(
             );
 
             let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|err| io::Error::other(err.to_string()))?;
-            let service = OtlpGrpcLogsService { spool, next_seq, ingest_policy };
+            let logs_service = OtlpGrpcLogsService { spool: Arc::clone(&spool), next_seq: Arc::clone(&next_seq), ingest_policy: Arc::clone(&ingest_policy) };
+            let metrics_service = OtlpGrpcMetricsService { spool, next_seq, ingest_policy };
             let grpc_tls = if ingest_tls.enable { Some(build_grpc_server_tls_config(&ingest_tls)?) } else { None };
 
             runtime.block_on(async move {
@@ -324,7 +357,8 @@ fn ingest_loop(
 
                 builder
                     .concurrency_limit_per_connection(ingest_limits.max_clients)
-                    .add_service(LogsServiceServer::new(service).max_decoding_message_size(ingest_limits.max_batch_bytes))
+                    .add_service(LogsServiceServer::new(logs_service).max_decoding_message_size(ingest_limits.max_batch_bytes))
+                    .add_service(MetricsServiceServer::new(metrics_service).max_decoding_message_size(ingest_limits.max_batch_bytes))
                     .serve(addr)
                     .await
                     .map_err(|err| io::Error::other(err.to_string()))
@@ -342,7 +376,7 @@ fn otlp_http_tls_loop(
     let listener = TcpListener::bind(&bind_addr)?;
     let tls_server = load_ingest_server_config(&ingest_tls)?;
     eprintln!(
-        "ljd ingest listening on https://{bind_addr}/v1/logs using otlp-http max-batch-bytes={} max-clients={}",
+        "ljd ingest listening on https://{bind_addr}/v1/logs /v1/metrics using otlp-http max-batch-bytes={} max-clients={}",
         ingest_limits.max_batch_bytes, ingest_limits.max_clients
     );
 
@@ -393,29 +427,53 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
         }
         Err(err) => return Err(err),
     };
-    if request.method != "POST" || request.path != "/v1/logs" {
+    let is_metrics = request.path == "/v1/metrics";
+    if request.method != "POST" || !matches!(request.path.as_str(), "/v1/logs" | "/v1/metrics") {
         write_http_response(transport, 404, "not found")?;
         return Ok(());
     }
 
-    match ExportLogsServiceRequest::decode(request.body.as_slice()) {
-        Ok(batch) => {
-            let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
-            if matches!(decision, IngestDecision::RejectRateLimited) {
-                write_http_response(transport, 429, "rate limit exceeded")?;
-                return Ok(());
+    if is_metrics {
+        match ExportMetricsServiceRequest::decode(request.body.as_slice()) {
+            Ok(batch) => {
+                let decision = ingest_policy.decide(BatchPriority::Unknown)?;
+                if matches!(decision, IngestDecision::RejectRateLimited) {
+                    write_http_response(transport, 429, "rate limit exceeded")?;
+                    return Ok(());
+                }
+                let record = WireRecord {
+                    record_type: logjet::RecordType::Metrics,
+                    seq: next_seq.fetch_add(1, Ordering::Relaxed),
+                    ts_unix_ns: extract_batch_timestamp_metrics(&batch).unwrap_or_else(unix_time_nanos),
+                    payload: request.body,
+                };
+                append_batch_record(&spool, record)?;
+                write_http_response(transport, 200, "")?;
             }
-            let record = WireRecord {
-                record_type: logjet::RecordType::Logs,
-                seq: next_seq.fetch_add(1, Ordering::Relaxed),
-                ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
-                payload: request.body,
-            };
-            append_batch_record(&spool, record)?;
-            write_http_response(transport, 200, "")?;
+            Err(err) => {
+                write_http_response(transport, 400, &format!("decode error: {err}"))?;
+            }
         }
-        Err(err) => {
-            write_http_response(transport, 400, &format!("decode error: {err}"))?;
+    } else {
+        match ExportLogsServiceRequest::decode(request.body.as_slice()) {
+            Ok(batch) => {
+                let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
+                if matches!(decision, IngestDecision::RejectRateLimited) {
+                    write_http_response(transport, 429, "rate limit exceeded")?;
+                    return Ok(());
+                }
+                let record = WireRecord {
+                    record_type: logjet::RecordType::Logs,
+                    seq: next_seq.fetch_add(1, Ordering::Relaxed),
+                    ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
+                    payload: request.body,
+                };
+                append_batch_record(&spool, record)?;
+                write_http_response(transport, 200, "")?;
+            }
+            Err(err) => {
+                write_http_response(transport, 400, &format!("decode error: {err}"))?;
+            }
         }
     }
 
@@ -762,6 +820,60 @@ fn priority_from_severity_number(severity_number: i32) -> BatchPriority {
 
 fn unix_time_nanos() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
+}
+
+fn extract_batch_timestamp_metrics(batch: &ExportMetricsServiceRequest) -> Option<u64> {
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+    for resource_metrics in &batch.resource_metrics {
+        for scope_metrics in &resource_metrics.scope_metrics {
+            for metric in &scope_metrics.metrics {
+                let ts = match metric.data.as_ref()? {
+                    Data::Gauge(g) => g.data_points.iter().find_map(|dp| if dp.time_unix_nano != 0 { Some(dp.time_unix_nano) } else { None }),
+                    Data::Sum(s) => s.data_points.iter().find_map(|dp| if dp.time_unix_nano != 0 { Some(dp.time_unix_nano) } else { None }),
+                    Data::Histogram(h) => h.data_points.iter().find_map(|dp| if dp.time_unix_nano != 0 { Some(dp.time_unix_nano) } else { None }),
+                    Data::ExponentialHistogram(eh) => {
+                        eh.data_points.iter().find_map(|dp| if dp.time_unix_nano != 0 { Some(dp.time_unix_nano) } else { None })
+                    }
+                    Data::Summary(s) => s.data_points.iter().find_map(|dp| if dp.time_unix_nano != 0 { Some(dp.time_unix_nano) } else { None }),
+                };
+                if ts.is_some() {
+                    return ts;
+                }
+            }
+        }
+    }
+    None
+}
+
+#[derive(Clone)]
+struct OtlpGrpcMetricsService {
+    spool: Arc<SharedSpool>,
+    next_seq: Arc<AtomicU64>,
+    ingest_policy: Arc<SharedIngestPolicy>,
+}
+
+#[tonic::async_trait]
+impl MetricsService for OtlpGrpcMetricsService {
+    async fn export(&self, request: Request<ExportMetricsServiceRequest>) -> Result<GrpcResponse<ExportMetricsServiceResponse>, Status> {
+        let batch = request.into_inner();
+        match self.ingest_policy.decide(BatchPriority::Unknown).map_err(|err| Status::internal(err.to_string()))? {
+            IngestDecision::Accept | IngestDecision::AcceptPriorityBypass => {}
+            IngestDecision::RejectRateLimited => {
+                return Err(Status::resource_exhausted("ingest rate limit exceeded"));
+            }
+        }
+        let payload = batch.encode_to_vec();
+        let record = WireRecord {
+            record_type: logjet::RecordType::Metrics,
+            seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
+            ts_unix_ns: extract_batch_timestamp_metrics(&batch).unwrap_or_else(unix_time_nanos),
+            payload,
+        };
+
+        append_batch_record(&self.spool, record).map_err(|err| Status::internal(err.to_string()))?;
+
+        Ok(GrpcResponse::new(ExportMetricsServiceResponse { partial_success: None }))
+    }
 }
 
 #[derive(Clone)]
