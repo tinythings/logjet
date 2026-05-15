@@ -1,6 +1,6 @@
 use super::{
     BridgeState, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask, enqueue_export_task, parse_bridge_state, parse_content_length,
-    read_bridge_state, read_http_response, reconcile_bridge_state, write_bridge_state,
+    read_bridge_state, read_http_response, reconcile_bridge_state, signal_path_for_endpoint, write_bridge_state,
 };
 use crate::config::{BackpressureMode, CollectorConfig, UpstreamMode};
 use crate::protocol::ReplayHello;
@@ -192,4 +192,25 @@ fn parse_content_length_is_case_insensitive() {
 #[test]
 fn parse_content_length_returns_zero_when_absent() {
     assert_eq!(parse_content_length("X-Custom: foo\r\n"), 0);
+}
+
+#[test]
+fn signal_path_for_endpoint_defaults_to_signal_specific_paths() {
+    assert_eq!(signal_path_for_endpoint("/v1/logs", logjet::RecordType::Logs), "/v1/logs");
+    assert_eq!(signal_path_for_endpoint("/v1/logs", logjet::RecordType::Metrics), "/v1/metrics");
+    assert_eq!(signal_path_for_endpoint("/v1/logs", logjet::RecordType::Traces), "/v1/traces");
+    assert_eq!(signal_path_for_endpoint("/v1/logs", logjet::RecordType::Events), "/v1/logs");
+}
+
+#[test]
+fn signal_path_for_endpoint_preserves_custom_path() {
+    assert_eq!(signal_path_for_endpoint("/custom/ingest", logjet::RecordType::Metrics), "/custom/ingest");
+    assert_eq!(signal_path_for_endpoint("/custom/ingest", logjet::RecordType::Traces), "/custom/ingest");
+}
+
+#[test]
+fn signal_path_for_endpoint_defaults_from_empty_path() {
+    assert_eq!(signal_path_for_endpoint("", logjet::RecordType::Logs), "/v1/logs");
+    assert_eq!(signal_path_for_endpoint("", logjet::RecordType::Metrics), "/v1/metrics");
+    assert_eq!(signal_path_for_endpoint("", logjet::RecordType::Traces), "/v1/traces");
 }
