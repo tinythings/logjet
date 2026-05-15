@@ -14,6 +14,8 @@ use logjet::RecordType;
 pub(crate) fn format_summary(detail: &DetailRecord, hex_payload: bool) -> String {
     if hex_payload {
         hex_preview(&detail.payload, 32)
+    } else if detail.meta.record_type == RecordType::Metrics {
+        extract_otlp_metrics_summary(&detail.payload).unwrap_or_else(|| text_preview(&detail.payload, 160))
     } else if let Some(message) = extract_otlp_log_message(&detail.payload) {
         trim_single_line(&message, 160)
     } else {
@@ -44,10 +46,71 @@ pub(super) fn render_detail_lines(detail: &DetailRecord, hex_payload: bool) -> V
 }
 
 fn render_otlp_lines(detail: &DetailRecord) -> Vec<Line<'static>> {
-    if detail.meta.record_type != RecordType::Logs {
-        return Vec::new();
+    match detail.meta.record_type {
+        RecordType::Logs => render_otlp_log_lines(detail),
+        RecordType::Metrics => render_otlp_metrics_lines(detail),
+        _ => Vec::new(),
+    }
+}
+
+fn render_otlp_metrics_lines(detail: &DetailRecord) -> Vec<Line<'static>> {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+
+    let Ok(batch) = ExportMetricsServiceRequest::decode(detail.payload.as_slice()) else {
+        return vec![Line::from(vec![
+            Span::styled("OTLP metrics: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("payload decode failed; showing raw preview"),
+        ])];
+    };
+
+    let mut metric_count = 0usize;
+    let mut datapoint_count = 0usize;
+    let mut services = Vec::new();
+
+    for resource_metrics in &batch.resource_metrics {
+        if let Some(resource) = &resource_metrics.resource {
+            for attr in &resource.attributes {
+                if attr.key == "service.name"
+                    && let Some(value) = &attr.value
+                    && let Some(Value::StringValue(service)) = &value.value
+                    && !services.iter().any(|existing| existing == service)
+                {
+                    services.push(service.clone());
+                }
+            }
+        }
+        for scope_metrics in &resource_metrics.scope_metrics {
+            for metric in &scope_metrics.metrics {
+                metric_count += 1;
+                let dp_len = match metric.data.as_ref() {
+                    Some(Data::Gauge(g)) => g.data_points.len(),
+                    Some(Data::Sum(s)) => s.data_points.len(),
+                    Some(Data::Histogram(h)) => h.data_points.len(),
+                    Some(Data::ExponentialHistogram(eh)) => eh.data_points.len(),
+                    Some(Data::Summary(s)) => s.data_points.len(),
+                    None => 0,
+                };
+                datapoint_count += dp_len;
+            }
+        }
     }
 
+    let mut lines = vec![
+        key_value_line("OTLP kind:", "metrics".to_string(), Style::default().fg(Color::White)),
+        key_value_line("Resources:", batch.resource_metrics.len().to_string(), Style::default().fg(Color::White)),
+        key_value_line("Metrics:", metric_count.to_string(), Style::default().fg(Color::White)),
+        key_value_line("Datapoints:", datapoint_count.to_string(), Style::default().fg(Color::White)),
+    ];
+
+    if !services.is_empty() {
+        lines.push(key_value_line("Services:", services.join(", "), Style::default().fg(Color::White)));
+    }
+
+    lines
+}
+
+fn render_otlp_log_lines(detail: &DetailRecord) -> Vec<Line<'static>> {
     let Ok(batch) = ExportLogsServiceRequest::decode(detail.payload.as_slice()) else {
         return vec![Line::from(vec![
             Span::styled("OTLP logs: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -138,8 +201,117 @@ pub(crate) fn render_modal_message(detail: &DetailRecord, hex_payload: bool) -> 
     if let Some(message) = extract_otlp_log_message(&detail.payload) {
         return message;
     }
+    if detail.meta.record_type == RecordType::Metrics
+        && let Some(message) = extract_otlp_metrics_message(&detail.payload)
+    {
+        return message;
+    }
 
     if hex_payload { hex_dump(&detail.payload) } else { String::from_utf8_lossy(&detail.payload).into_owned() }
+}
+
+pub(crate) fn extract_otlp_metrics_summary(payload: &[u8]) -> Option<String> {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+
+    let batch = ExportMetricsServiceRequest::decode(payload).ok()?;
+    let mut parts = Vec::new();
+
+    for resource_metrics in &batch.resource_metrics {
+        for scope_metrics in &resource_metrics.scope_metrics {
+            for metric in &scope_metrics.metrics {
+                let value = match metric.data.as_ref() {
+                    Some(Data::Gauge(g)) => g.data_points.first().and_then(|dp| dp.value.as_ref()).map(format_data_point_value),
+                    Some(Data::Sum(s)) => s.data_points.first().and_then(|dp| dp.value.as_ref()).map(format_data_point_value),
+                    Some(Data::Histogram(h)) => h.data_points.first().map(|dp| format!("count={}", dp.count)),
+                    Some(Data::ExponentialHistogram(eh)) => eh.data_points.first().map(|dp| format!("count={}", dp.count)),
+                    Some(Data::Summary(s)) => s.data_points.first().map(|dp| format!("count={}", dp.count)),
+                    None => None,
+                };
+                if let Some(v) = value {
+                    parts.push(format!("{}={}{}", metric.name, v, metric.unit));
+                } else {
+                    parts.push(metric.name.clone());
+                }
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+pub(crate) fn extract_otlp_metrics_message(payload: &[u8]) -> Option<String> {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+
+    let batch = ExportMetricsServiceRequest::decode(payload).ok()?;
+    let mut lines = Vec::new();
+
+    for resource_metrics in &batch.resource_metrics {
+        for scope_metrics in &resource_metrics.scope_metrics {
+            for metric in &scope_metrics.metrics {
+                lines.push(format!("Metric: {}", metric.name));
+                if !metric.description.is_empty() {
+                    lines.push(format!("  Description: {}", metric.description));
+                }
+                if !metric.unit.is_empty() {
+                    lines.push(format!("  Unit: {}", metric.unit));
+                }
+
+                match metric.data.as_ref() {
+                    Some(Data::Gauge(g)) => {
+                        lines.push("  Type: Gauge".to_string());
+                        for dp in &g.data_points {
+                            lines.push(format!("  - time={}, value={}", format_timestamp(dp.time_unix_nano), dp.value.as_ref().map(format_data_point_value).unwrap_or_default()));
+                        }
+                    }
+                    Some(Data::Sum(s)) => {
+                        lines.push(format!("  Type: Sum (monotonic={}, temporality={})", s.is_monotonic, s.aggregation_temporality));
+                        for dp in &s.data_points {
+                            lines.push(format!("  - time={}, start_time={}, value={}", format_timestamp(dp.time_unix_nano), format_timestamp(dp.start_time_unix_nano), dp.value.as_ref().map(format_data_point_value).unwrap_or_default()));
+                        }
+                    }
+                    Some(Data::Histogram(h)) => {
+                        lines.push("  Type: Histogram".to_string());
+                        for dp in &h.data_points {
+                            lines.push(format!("  - time={}, count={}, sum={:?}", format_timestamp(dp.time_unix_nano), dp.count, dp.sum));
+                        }
+                    }
+                    Some(Data::ExponentialHistogram(eh)) => {
+                        lines.push("  Type: ExponentialHistogram".to_string());
+                        for dp in &eh.data_points {
+                            lines.push(format!("  - time={}, count={}, scale={}", format_timestamp(dp.time_unix_nano), dp.count, dp.scale));
+                        }
+                    }
+                    Some(Data::Summary(s)) => {
+                        lines.push("  Type: Summary".to_string());
+                        for dp in &s.data_points {
+                            lines.push(format!("  - time={}, count={}, sum={}", format_timestamp(dp.time_unix_nano), dp.count, dp.sum));
+                        }
+                    }
+                    None => {}
+                }
+                lines.push(String::new());
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn format_data_point_value(value: &opentelemetry_proto::tonic::metrics::v1::number_data_point::Value) -> String {
+    match value {
+        opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(v) => format!("{v}"),
+        opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(v) => v.to_string(),
+    }
 }
 
 pub(super) fn render_modal_footer(detail: &DetailRecord) -> Line<'static> {
@@ -178,10 +350,143 @@ pub(crate) fn render_modal_info_entries(detail: &DetailRecord) -> Vec<(String, S
         ("payload_bytes".to_string(), detail.meta.payload_len.to_string()),
     ];
 
-    if detail.meta.record_type != RecordType::Logs {
-        return lines;
+    match detail.meta.record_type {
+        RecordType::Logs => lines.extend(render_modal_log_info_entries(detail)),
+        RecordType::Metrics => lines.extend(render_modal_metrics_info_entries(detail)),
+        _ => {}
     }
 
+    lines
+}
+
+fn render_modal_metrics_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+
+    let Ok(batch) = ExportMetricsServiceRequest::decode(detail.payload.as_slice()) else {
+        return vec![("otlp".to_string(), "decode failed".to_string())];
+    };
+
+    let mut entries = vec![("otlp.kind".to_string(), "metrics".to_string())];
+    entries.push(("resources".to_string(), batch.resource_metrics.len().to_string()));
+
+    let mut metric_names = Vec::new();
+    let mut metric_count = 0usize;
+    let mut datapoint_count = 0usize;
+    let mut service_names = Vec::new();
+    let mut scope_names = Vec::new();
+
+    for resource_metrics in &batch.resource_metrics {
+        if let Some(resource) = &resource_metrics.resource {
+            for attr in &resource.attributes {
+                if attr.key == "service.name"
+                    && let Some(value) = &attr.value
+                    && let Some(Value::StringValue(service)) = &value.value
+                    && !service_names.iter().any(|existing| existing == service)
+                {
+                    service_names.push(service.clone());
+                }
+            }
+        }
+        for scope_metrics in &resource_metrics.scope_metrics {
+            if let Some(scope) = &scope_metrics.scope
+                && !scope.name.is_empty()
+                && !scope_names.iter().any(|existing| existing == &scope.name)
+            {
+                scope_names.push(scope.name.clone());
+            }
+            for metric in &scope_metrics.metrics {
+                metric_count += 1;
+                if !metric.name.is_empty() && !metric_names.iter().any(|existing| existing == &metric.name) {
+                    metric_names.push(metric.name.clone());
+                }
+                let dp_len = match metric.data.as_ref() {
+                    Some(Data::Gauge(g)) => g.data_points.len(),
+                    Some(Data::Sum(s)) => s.data_points.len(),
+                    Some(Data::Histogram(h)) => h.data_points.len(),
+                    Some(Data::ExponentialHistogram(eh)) => eh.data_points.len(),
+                    Some(Data::Summary(s)) => s.data_points.len(),
+                    None => 0,
+                };
+                datapoint_count += dp_len;
+            }
+        }
+    }
+
+    if !service_names.is_empty() {
+        entries.push(("service.name".to_string(), service_names.join(", ")));
+    }
+    if !scope_names.is_empty() {
+        entries.push(("scope".to_string(), scope_names.join(", ")));
+    }
+    entries.push(("metrics".to_string(), metric_count.to_string()));
+    entries.push(("datapoints".to_string(), datapoint_count.to_string()));
+    if !metric_names.is_empty() {
+        entries.push(("metric.names".to_string(), metric_names.join(", ")));
+    }
+
+    // Add per-metric detail entries
+    for resource_metrics in &batch.resource_metrics {
+        for scope_metrics in &resource_metrics.scope_metrics {
+            for metric in &scope_metrics.metrics {
+                let prefix = format!("metric.{}" , metric.name);
+                entries.push((format!("{prefix}.unit"), metric.unit.clone()));
+                if !metric.description.is_empty() {
+                    entries.push((format!("{prefix}.description"), metric.description.clone()));
+                }
+                match metric.data.as_ref() {
+                    Some(Data::Gauge(g)) => {
+                        entries.push((format!("{prefix}.kind"), "Gauge".to_string()));
+                        for (i, dp) in g.data_points.iter().enumerate() {
+                            let val = dp.value.as_ref().map(format_data_point_value).unwrap_or_default();
+                            entries.push((format!("{prefix}.dp{i}.value"), val));
+                            entries.push((format!("{prefix}.dp{i}.time"), format_timestamp(dp.time_unix_nano)));
+                        }
+                    }
+                    Some(Data::Sum(s)) => {
+                        entries.push((format!("{prefix}.kind"), "Sum".to_string()));
+                        entries.push((format!("{prefix}.monotonic"), s.is_monotonic.to_string()));
+                        entries.push((format!("{prefix}.temporality"), s.aggregation_temporality.to_string()));
+                        for (i, dp) in s.data_points.iter().enumerate() {
+                            let val = dp.value.as_ref().map(format_data_point_value).unwrap_or_default();
+                            entries.push((format!("{prefix}.dp{i}.value"), val));
+                            entries.push((format!("{prefix}.dp{i}.time"), format_timestamp(dp.time_unix_nano)));
+                            entries.push((format!("{prefix}.dp{i}.start_time"), format_timestamp(dp.start_time_unix_nano)));
+                        }
+                    }
+                    Some(Data::Histogram(h)) => {
+                        entries.push((format!("{prefix}.kind"), "Histogram".to_string()));
+                        for (i, dp) in h.data_points.iter().enumerate() {
+                            entries.push((format!("{prefix}.dp{i}.count"), dp.count.to_string()));
+                            entries.push((format!("{prefix}.dp{i}.time"), format_timestamp(dp.time_unix_nano)));
+                        }
+                    }
+                    Some(Data::ExponentialHistogram(eh)) => {
+                        entries.push((format!("{prefix}.kind"), "ExpHistogram".to_string()));
+                        for (i, dp) in eh.data_points.iter().enumerate() {
+                            entries.push((format!("{prefix}.dp{i}.count"), dp.count.to_string()));
+                            entries.push((format!("{prefix}.dp{i}.time"), format_timestamp(dp.time_unix_nano)));
+                        }
+                    }
+                    Some(Data::Summary(s)) => {
+                        entries.push((format!("{prefix}.kind"), "Summary".to_string()));
+                        for (i, dp) in s.data_points.iter().enumerate() {
+                            entries.push((format!("{prefix}.dp{i}.count"), dp.count.to_string()));
+                            entries.push((format!("{prefix}.dp{i}.sum"), dp.sum.to_string()));
+                            entries.push((format!("{prefix}.dp{i}.time"), format_timestamp(dp.time_unix_nano)));
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+
+    entries
+}
+
+fn render_modal_log_info_entries(detail: &DetailRecord) -> Vec<(String, String)> {
+    let mut lines = vec![];
     let Ok(batch) = ExportLogsServiceRequest::decode(detail.payload.as_slice()) else {
         lines.push(("otlp".to_string(), "decode failed".to_string()));
         return lines;

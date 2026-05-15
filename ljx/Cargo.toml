@@ -12,7 +12,7 @@ crossterm = "0.28"
 libloading = "0.8"
 liblogjet = { path = "../liblogjet" }
 logjet = { path = ".." }
-opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs"] }
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs", "metrics"] }
 prost = "0.14"
 ratatui = "0.30"
 regex = "1.12"

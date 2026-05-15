@@ -862,3 +862,131 @@ fn export_current_results_can_export_selected_row_only() {
     let _ = std::fs::remove_file(input);
     let _ = std::fs::remove_file(output);
 }
+
+#[test]
+fn summary_decodes_otlp_metrics_payload() {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPointValue;
+    use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics};
+
+    let metric = Metric {
+        name: "cpu.usage".to_string(),
+        description: String::new(),
+        unit: "%".to_string(),
+        data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![],
+                start_time_unix_nano: 0,
+                time_unix_nano: 1_700_000_000_000_000_000,
+                value: Some(DataPointValue::AsDouble(45.5)),
+                flags: 0,
+                exemplars: vec![],
+            }],
+        })),
+        metadata: vec![],
+    };
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                metrics: vec![metric],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let payload = batch.encode_to_vec();
+    let detail = DetailRecord {
+        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        payload,
+    };
+    assert_eq!(format_summary(&detail, false), "cpu.usage=45.5%");
+}
+
+#[test]
+fn modal_message_decodes_otlp_metrics_payload() {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPointValue;
+    use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics};
+
+    let metric = Metric {
+        name: "cpu.usage".to_string(),
+        description: String::new(),
+        unit: String::new(),
+        data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![],
+                start_time_unix_nano: 0,
+                time_unix_nano: 1_700_000_000_000_000_000,
+                value: Some(DataPointValue::AsDouble(45.5)),
+                flags: 0,
+                exemplars: vec![],
+            }],
+        })),
+        metadata: vec![],
+    };
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                metrics: vec![metric],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let payload = batch.encode_to_vec();
+    let detail = DetailRecord {
+        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        payload,
+    };
+    let message = render_modal_message(&detail, false);
+    assert!(message.contains("Metric: cpu.usage"), "modal body should contain metric name: {message}");
+    assert!(message.contains("45.5"), "modal body should contain metric value: {message}");
+}
+
+#[test]
+fn modal_info_entries_decodes_otlp_metrics_payload() {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPointValue;
+    use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics};
+
+    let metric = Metric {
+        name: "cpu.usage".to_string(),
+        description: "Current CPU usage".to_string(),
+        unit: "%".to_string(),
+        data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![],
+                start_time_unix_nano: 0,
+                time_unix_nano: 1_700_000_000_000_000_000,
+                value: Some(DataPointValue::AsDouble(45.5)),
+                flags: 0,
+                exemplars: vec![],
+            }],
+        })),
+        metadata: vec![],
+    };
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                metrics: vec![metric],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let payload = batch.encode_to_vec();
+    let detail = DetailRecord {
+        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        payload,
+    };
+    let entries = render_modal_info_entries(&detail);
+    assert!(entries.iter().any(|(k, _)| k == "otlp.kind"), "should have otlp.kind entry");
+    assert!(entries.iter().any(|(k, v)| k == "metrics" && v == "1"), "should have metrics count");
+    assert!(entries.iter().any(|(k, v)| k == "metric.cpu.usage.unit" && v == "%"), "should have metric unit");
+}
