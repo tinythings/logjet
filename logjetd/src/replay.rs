@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use logjet::{LogjetReader, ReaderConfig, RecordType};
 use opentelemetry_proto::tonic::collector::logs::v1::{ExportLogsServiceRequest, logs_service_client::LogsServiceClient};
+use opentelemetry_proto::tonic::collector::metrics::v1::{ExportMetricsServiceRequest, metrics_service_client::MetricsServiceClient};
 use prost::Message;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use tokio::runtime::{Builder, Runtime};
@@ -477,6 +478,7 @@ struct HttpCollectorConnection {
 
 struct GrpcCollectorConnection {
     client: LogsServiceClient<Channel>,
+    metrics_client: MetricsServiceClient<Channel>,
     endpoint: CollectorEndpoint,
     collector: CollectorConfig,
     timeout: Duration,
@@ -591,12 +593,14 @@ impl GrpcCollectorConnection {
     fn connect(endpoint: &CollectorEndpoint, timeout: Duration, collector: &CollectorConfig) -> io::Result<Self> {
         let runtime =
             Builder::new_current_thread().enable_all().build().map_err(|err| io::Error::other(format!("failed to build gRPC runtime: {err}")))?;
-        let client = runtime.block_on(connect_grpc_with_collector(endpoint, timeout, Some(collector)))?;
-        Ok(Self { client, endpoint: endpoint.clone(), collector: collector.clone(), timeout, runtime })
+        let (client, metrics_client) = runtime.block_on(connect_grpc_with_collector(endpoint, timeout, Some(collector)))?;
+        Ok(Self { client, metrics_client, endpoint: endpoint.clone(), collector: collector.clone(), timeout, runtime })
     }
 
     fn reconnect(&mut self) -> io::Result<()> {
-        self.client = self.runtime.block_on(connect_grpc_with_collector(&self.endpoint, self.timeout, Some(&self.collector)))?;
+        let (client, metrics_client) = self.runtime.block_on(connect_grpc_with_collector(&self.endpoint, self.timeout, Some(&self.collector)))?;
+        self.client = client;
+        self.metrics_client = metrics_client;
         Ok(())
     }
 
@@ -611,7 +615,12 @@ impl GrpcCollectorConnection {
                     .map_err(|err| io::Error::other(format!("collector gRPC export failed: {err}")))
             }
             RecordType::Metrics => {
-                Err(io::Error::other("gRPC metrics export requires MetricsServiceClient; use HTTP collector.url for metrics"))
+                let req = ExportMetricsServiceRequest::decode(payload)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("invalid OTLP metrics batch: {err}")))?;
+                self.runtime
+                    .block_on(self.metrics_client.export(Request::new(req)))
+                    .map(|_| ())
+                    .map_err(|err| io::Error::other(format!("collector gRPC metrics export failed: {err}")))
             }
             _ => Err(io::Error::other(format!("gRPC export not yet implemented for record type: {record_type:?}"))),
         }
@@ -825,7 +834,7 @@ impl CollectorEndpoint {
 
 async fn connect_grpc_with_collector(
     endpoint: &CollectorEndpoint, timeout: Duration, collector: Option<&CollectorConfig>,
-) -> io::Result<LogsServiceClient<Channel>> {
+) -> io::Result<(LogsServiceClient<Channel>, MetricsServiceClient<Channel>)> {
     let mut client = Endpoint::from_shared(format!("{}://{}", if endpoint.tls { "https" } else { "http" }, endpoint.authority))
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?
         .timeout(timeout)
@@ -852,7 +861,8 @@ async fn connect_grpc_with_collector(
         };
         client = client.tls_config(tls).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     }
-    client.connect().await.map(LogsServiceClient::new).map_err(|err| io::Error::other(format!("failed to connect gRPC collector: {err}")))
+    let channel = client.connect().await.map_err(|err| io::Error::other(format!("failed to connect gRPC collector: {err}")))?;
+    Ok((LogsServiceClient::new(channel.clone()), MetricsServiceClient::new(channel)))
 }
 
 fn split_authority_and_path(input: &str) -> (&str, &str) {

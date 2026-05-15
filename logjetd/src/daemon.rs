@@ -274,6 +274,8 @@ fn ingest_loop(
                 }
                 let is_metrics = request.url() == "/v1/metrics";
 
+                let content_encoding = request.headers().iter().find(|h| h.field.equiv("content-encoding")).map(|h| h.value.to_string());
+
                 let mut body = Vec::with_capacity(ingest_limits.max_batch_bytes.min(8192));
                 request.as_reader().take((ingest_limits.max_batch_bytes + 1) as u64).read_to_end(&mut body)?;
                 if body.len() > ingest_limits.max_batch_bytes {
@@ -282,6 +284,14 @@ fn ingest_loop(
                     request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
                     continue;
                 }
+                let body = match maybe_decompress_body(body, content_encoding.as_deref()) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        let response = Response::from_string(format!("decompression error: {err}")).with_status_code(StatusCode(400));
+                        request.respond(response).map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
+                        continue;
+                    }
+                };
                 if is_metrics {
                     match ExportMetricsServiceRequest::decode(body.as_slice()) {
                         Ok(batch) => {
@@ -434,7 +444,8 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
     }
 
     if is_metrics {
-        match ExportMetricsServiceRequest::decode(request.body.as_slice()) {
+        let body = maybe_decompress_body(request.body, request.content_encoding.as_deref())?;
+        match ExportMetricsServiceRequest::decode(body.as_slice()) {
             Ok(batch) => {
                 let decision = ingest_policy.decide(BatchPriority::Unknown)?;
                 if matches!(decision, IngestDecision::RejectRateLimited) {
@@ -445,7 +456,7 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
                     record_type: logjet::RecordType::Metrics,
                     seq: next_seq.fetch_add(1, Ordering::Relaxed),
                     ts_unix_ns: extract_batch_timestamp_metrics(&batch).unwrap_or_else(unix_time_nanos),
-                    payload: request.body,
+                    payload: body,
                 };
                 append_batch_record(&spool, record)?;
                 write_http_response(transport, 200, "")?;
@@ -455,7 +466,8 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
             }
         }
     } else {
-        match ExportLogsServiceRequest::decode(request.body.as_slice()) {
+        let body = maybe_decompress_body(request.body, request.content_encoding.as_deref())?;
+        match ExportLogsServiceRequest::decode(body.as_slice()) {
             Ok(batch) => {
                 let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
                 if matches!(decision, IngestDecision::RejectRateLimited) {
@@ -466,7 +478,7 @@ fn handle_otlp_http_transport<T: Read + io::Write>(
                     record_type: logjet::RecordType::Logs,
                     seq: next_seq.fetch_add(1, Ordering::Relaxed),
                     ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
-                    payload: request.body,
+                    payload: body,
                 };
                 append_batch_record(&spool, record)?;
                 write_http_response(transport, 200, "")?;
@@ -497,6 +509,20 @@ struct ParsedHttpRequest {
     method: String,
     path: String,
     body: Vec<u8>,
+    content_encoding: Option<String>,
+}
+
+fn maybe_decompress_body(body: Vec<u8>, encoding: Option<&str>) -> io::Result<Vec<u8>> {
+    match encoding {
+        Some("gzip") | Some("x-gzip") => {
+            use flate2::read::GzDecoder;
+            let mut decoder = GzDecoder::new(body.as_slice());
+            let mut out = Vec::with_capacity(body.len().saturating_mul(3));
+            decoder.read_to_end(&mut out).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("gzip decompression failed: {err}")))?;
+            Ok(out)
+        }
+        _ => Ok(body),
+    }
 }
 
 fn read_http_request<T: Read>(transport: &mut T, max_batch_bytes: usize) -> io::Result<ParsedHttpRequest> {
@@ -525,11 +551,16 @@ fn read_http_request<T: Read>(transport: &mut T, max_batch_bytes: usize) -> io::
     let path = parts.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing http path"))?.to_string();
 
     let mut content_length = None;
+    let mut content_encoding = None;
     for line in lines {
-        if let Some((name, value)) = line.split_once(':')
-            && name.eq_ignore_ascii_case("content-length")
-        {
-            content_length = Some(value.trim().parse::<usize>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid content-length"))?);
+        if let Some((name, value)) = line.split_once(':') {
+            let name_trimmed = name.trim();
+            let value_trimmed = value.trim();
+            if name_trimmed.eq_ignore_ascii_case("content-length") {
+                content_length = Some(value_trimmed.parse::<usize>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid content-length"))?);
+            } else if name_trimmed.eq_ignore_ascii_case("content-encoding") {
+                content_encoding = Some(value_trimmed.to_string());
+            }
         }
     }
 
@@ -543,7 +574,7 @@ fn read_http_request<T: Read>(transport: &mut T, max_batch_bytes: usize) -> io::
         return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short http body"));
     }
 
-    Ok(ParsedHttpRequest { method, path, body })
+    Ok(ParsedHttpRequest { method, path, body, content_encoding })
 }
 
 fn write_http_response<T: io::Write>(transport: &mut T, status: u16, body: &str) -> io::Result<()> {

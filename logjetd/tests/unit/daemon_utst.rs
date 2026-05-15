@@ -1,12 +1,14 @@
 use super::{
-    BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy, classify_otlp_batch_priority, read_http_request, write_http_response,
+    BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy, classify_otlp_batch_priority, maybe_decompress_body, read_http_request,
+    write_http_response,
 };
 use crate::config::{IngestOverloadConfig, SeverityFloor};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::resource::v1::Resource;
-use std::io::Cursor;
+use prost::Message;
+use std::io::{Cursor, Write};
 use std::sync::Arc;
 
 #[test]
@@ -17,6 +19,47 @@ fn read_http_request_parses_valid_request() {
     assert_eq!(request.method, "POST");
     assert_eq!(request.path, "/v1/logs");
     assert_eq!(request.body, b"abc");
+}
+
+#[test]
+fn read_http_request_parses_content_encoding() {
+    let bytes = b"POST /v1/logs HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\nContent-Encoding: gzip\r\n\r\nabc";
+    let mut cursor = Cursor::new(bytes.as_slice());
+    let request = read_http_request(&mut cursor, 1024).unwrap();
+    assert_eq!(request.content_encoding, Some("gzip".to_string()));
+}
+
+#[test]
+fn maybe_decompress_body_passes_through_uncompressed() {
+    let data = b"hello";
+    let out = maybe_decompress_body(data.to_vec(), None).unwrap();
+    assert_eq!(out, data);
+}
+
+#[test]
+fn maybe_decompress_body_decompresses_gzip() {
+    let data = b"hello world";
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(data).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let out = maybe_decompress_body(compressed, Some("gzip")).unwrap();
+    assert_eq!(out, data);
+}
+
+#[test]
+fn maybe_decompress_body_decompresses_x_gzip() {
+    let data = b"hello world";
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(data).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let out = maybe_decompress_body(compressed, Some("x-gzip")).unwrap();
+    assert_eq!(out, data);
+}
+
+#[test]
+fn maybe_decompress_body_rejects_invalid_gzip() {
+    let err = maybe_decompress_body(b"not-gzip".to_vec(), Some("gzip")).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
 #[test]
