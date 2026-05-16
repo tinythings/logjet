@@ -107,9 +107,10 @@ streams matches across the full selection.
 Use `--nfs` to favour sequential reads on network file systems. When it is set,
 index lookups are skipped so scans avoid random access.
 
-For OTLP log records, NDJSON output includes the core record fields when
-present, including:
+For OTLP records, NDJSON output includes structured fields depending on the
+signal type:
 
+**Logs:**
 - `body`
 - `timestamp`
 - `observed_timestamp`
@@ -122,6 +123,35 @@ present, including:
 - `scope_name`
 - `scope_version`
 - flattened resource, scope, and record attributes such as `service_name`
+
+**Metrics:**
+- `metric_name`
+- `metric_description`
+- `metric_unit`
+- `metric_type` (`Gauge`, `Sum`, `Histogram`, `ExponentialHistogram`, `Summary`)
+- `timestamp`
+- `start_time`
+- `value` (for Gauge/Sum)
+- `is_monotonic` (for Sum)
+- `aggregation_temporality` (for Sum)
+- `count` (for Histogram/ExponentialHistogram/Summary)
+- `sum` (for Histogram/ExponentialHistogram/Summary)
+- flattened resource, scope, and datapoint attributes
+
+**Traces:**
+- `trace_id`
+- `span_id`
+- `parent_span_id`
+- `name`
+- `kind` (`Internal`, `Server`, `Client`, `Producer`, `Consumer`)
+- `start_time`
+- `end_time`
+- `duration_ns`
+- `status_code`
+- `status_message`
+- `scope_name`
+- `scope_version`
+- flattened resource, scope, and span attributes
 
 ## `ljx count`
 
