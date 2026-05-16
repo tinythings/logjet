@@ -497,8 +497,8 @@ fn render_modal_traces_info_entries(detail: &DetailRecord) -> Vec<(String, Strin
     let mut scope_names = Vec::new();
     let mut span_names = Vec::new();
     let mut span_count = 0usize;
-    let mut kind_counts = std::collections::HashMap::new();
-    let mut status_counts = std::collections::HashMap::new();
+    let mut kind_counts = std::collections::BTreeMap::new();
+    let mut status_counts = std::collections::BTreeMap::new();
 
     for resource_spans in &batch.resource_spans {
         if let Some(resource) = &resource_spans.resource {
