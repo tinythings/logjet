@@ -275,7 +275,7 @@ Rules:
 - `ingest.max-batch-bytes` rejects oversized OTLP or wire payloads before they are stored
 - `ingest.max-clients` caps concurrent ingest handling
 - `ingest.max-batches-per-second` caps accepted ingest batches per second
-- `ingest.priority-severity-at-least` lets higher-severity OTLP log batches bypass overload shedding
+- `ingest.priority-severity-at-least` lets higher-severity OTLP log batches bypass overload shedding; metrics and traces do not carry severity and are treated as lowest priority
 - `ingest.overload-report-ms` controls operator-visible overload summaries on stderr
 - `replay.max-clients` caps concurrent replay clients
 - `replay.client-timeout-ms` caps how long one replay client can block on socket I/O
@@ -291,6 +291,7 @@ Rules:
 - `backpressure.enabled` enables bridge backpressure policy handling
 - `backpressure.mode` configures whether bridge export blocks, disconnects, or drops newest records when the collector is too slow
 - `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection
+- bridge emits periodic backlog depth and per-signal drop counters to stderr when records are dropped
 - `upstream.replay` configures the default bridge source
 - `upstream.mode` configures whether bridge keeps or drains upstream retained records
 - `upstream.state-file` stores persisted bridge resume state

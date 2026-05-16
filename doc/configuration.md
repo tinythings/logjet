@@ -360,6 +360,7 @@ Important:
 
 - default is `error`
 - applies to decoded OTLP log batches
+- metrics and traces do not carry severity in OTLP, so they are always treated as lowest priority during overload
 - wire ingest records do not carry OTLP severity, so they are treated as low priority during overload
 
 ### `ingest.overload-report-ms`

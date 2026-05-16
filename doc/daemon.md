@@ -141,6 +141,7 @@ upstream.
 - `backpressure.mode: block` waits for the collector reply instead of timing out
 - `backpressure.mode: drop-newest` keeps the bridge live and drops newest records when the export queue is full
 - `backpressure.max-buffered-records` caps the bridge-side exporter queue per bridge connection
+- emits periodic backlog depth and per-signal drop counters to stderr when `backpressure.mode: drop-newest` triggers
 - can optionally use TLS with `tls.*`
 - collector export can use OTLP/HTTP, HTTPS, and plain OTLP/gRPC
 - `collector.*` TLS settings apply to HTTPS collector export
