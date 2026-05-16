@@ -5,28 +5,31 @@ It is meant to evolve as the daemon grows.
 
 ## Current Features
 
-### 1. OTLP log ingest
+### 1. OTLP ingest
 
-`ljd` can accept real OTLP/HTTP protobuf log export requests on:
+`ljd` can accept real OTLP/HTTP protobuf export requests on:
 
 ```text
 POST /v1/logs
+POST /v1/metrics
+POST /v1/traces
 ```
 
-It can also accept OTLP/gRPC log export requests on the standard
-`LogsService/Export` endpoint when `ingest.protocol: otlp-grpc` is configured.
+It can also accept OTLP/gRPC export requests on the standard
+`LogsService/Export`, `MetricsService/Export`, and `TraceService/Export`
+endpoints when `ingest.protocol: otlp-grpc` is configured.
 
 Current behaviour:
 
-- accepts OTLP log batches over HTTP and gRPC
+- accepts OTLP log, metrics, and trace batches over HTTP and gRPC
 - OTLP/HTTP ingest can also run over HTTPS
 - OTLP/gRPC ingest can also run over TLS
 - rejects oversized batches through `ingest.max-batch-bytes`
 - can cap concurrent ingest handling through `ingest.max-clients`
 - can rate-limit accepted ingest batches through `ingest.max-batches-per-second`
-- can keep higher-severity OTLP log batches during overload through `ingest.priority-severity-at-least`
+- can keep higher-severity OTLP batches during overload through `ingest.priority-severity-at-least`
 - emits overload counters on stderr through `ingest.overload-report-ms`
-- validates that the request decodes as `ExportLogsServiceRequest`
+- validates that the request decodes as `ExportLogsServiceRequest`, `ExportMetricsServiceRequest`, or `ExportTraceServiceRequest`
 - stores the raw OTLP protobuf bytes
 - assigns a local sequence number for internal replay ordering
 
@@ -101,7 +104,7 @@ Current behaviour:
 - connects to another `ljd` replay listener
 - requests replay starting after the last sequence already forwarded
 - can keep upstream records or drain them, depending on `upstream.mode`
-- stays attached and forwards new log records live
+- stays attached and forwards new records live
 - posts raw stored OTLP protobuf payloads to every destination configured in `collector.url`
 - supports OTLP/HTTP export, HTTPS export, plain OTLP/gRPC export, and gRPC export over TLS or mutual TLS
 - `grpcs://...` uses server certificate validation through `collector.ca-file`
@@ -155,7 +158,7 @@ Current behaviour:
 
 - scans for `name.logjet`, `name-1.logjet`, `name-2.logjet`, and so on
 - replays them in that order
-- reads stored `logs` records
+- reads stored logs, metrics, and traces records
 - posts the raw OTLP protobuf payloads to every configured replay destination
 - supports `http://`, `https://`, and `grpc://` collector URLs
 - sends as fast as the destination socket allows, with no artificial delay
@@ -258,7 +261,7 @@ Useful when:
 Use case:
 
 - use the OTLP demo emitter
-- send logs into `ljd`
+- send logs, metrics, and traces into `ljd`
 - store them or inspect them locally
 
 Useful when:
@@ -277,7 +280,7 @@ Use case:
 Useful when:
 
 - you want a fast demo
-- you need bulk backfill of recorded OTLP logs
+- you need bulk backfill of recorded OTLP logs, metrics, and traces
 - you want to validate stored files against a collector pipeline
 
 ### 6. File archive housekeeping outside the daemon
@@ -300,7 +303,7 @@ Use case:
 
 - one `ljd` instance runs next to `OA`
 - a second `ljd` instance connects to the first over the network
-- the second instance forwards retained backlog and live OTLP logs into an OTel Collector
+- the second instance forwards retained backlog and live OTLP records into an OTel Collector
 
 Useful when:
 

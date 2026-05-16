@@ -28,8 +28,8 @@ ljd - OTLP ingest, `.logjet` storage, replay, and file blasting daemon
 
 It can:
 
-- accept OTLP/HTTP log batches on `POST /v1/logs`
-- accept OTLP/gRPC log batches on the standard `LogsService/Export` endpoint
+- accept OTLP/HTTP batches on `POST /v1/logs`, `POST /v1/metrics`, and `POST /v1/traces`
+- accept OTLP/gRPC batches on the standard `LogsService/Export`, `MetricsService/Export`, and `TraceService/Export` endpoints
 - optionally run OTLP/HTTP ingest over HTTPS and OTLP/gRPC ingest over TLS
 - store raw OTLP protobuf payloads either in memory or in append-only `.logjet` files
 - expose a replay listener for downstream consumers over the current internal wire protocol
@@ -67,7 +67,7 @@ Current serve behaviour:
 ## bridge
 
 Connect to another `ljd` replay listener, drain retained backlog, stay
-attached for live records, and forward OTLP log payloads to the configured
+attached for live records, and forward OTLP payloads to the configured
 collector.
 
 Example:
@@ -111,7 +111,7 @@ ljd segments --path /var/lib/logjet --name app.logjet
 
 ## replay
 
-Read ordered `.logjet` files from a directory and blast the stored OTLP log
+Read ordered `.logjet` files from a directory and blast the stored OTLP
 payloads into OTLP collectors.
 
 Example:
@@ -324,8 +324,8 @@ Append-only file behaviour:
 
 # CURRENT FEATURES
 
-- OTLP/HTTP log ingest on `POST /v1/logs`
-- OTLP/gRPC log ingest on the standard logs export service
+- OTLP/HTTP ingest on `POST /v1/logs`, `POST /v1/metrics`, and `POST /v1/traces`
+- OTLP/gRPC ingest on the standard logs, metrics, and traces export services
 - optional TLS on OTLP/HTTP and OTLP/gRPC ingest
 - basic ingest guardrails through `ingest.max-batch-bytes` and `ingest.max-clients`
 - ingest rate limiting with severity-aware overload shedding
