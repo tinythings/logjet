@@ -16,6 +16,8 @@ use opentelemetry_proto::tonic::metrics::v1::{
     AggregationTemporality, Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, Sum,
 };
 use opentelemetry_proto::tonic::resource::v1::Resource;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
 use prost::Message;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, StreamOwned};
@@ -527,4 +529,80 @@ fn any_value_to_string(value: &AnyValue) -> Option<&str> {
 
 fn unix_time_nanos() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
+}
+
+pub fn build_trace_request(sequence: u64) -> ExportTraceServiceRequest {
+    let base_nanos = 1_700_000_000_000_000_000u64;
+
+    ExportTraceServiceRequest {
+        resource_spans: vec![ResourceSpans {
+            resource: Some(Resource {
+                attributes: vec![
+                    string_attr("service.name", "traces-demo"),
+                    string_attr("host.name", "garage-rig"),
+                ],
+                dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
+            }),
+            scope_spans: vec![ScopeSpans {
+                scope: Some(InstrumentationScope {
+                    name: "demo-traces-emitter".to_string(),
+                    version: "0.1.0".to_string(),
+                    attributes: Vec::new(),
+                    dropped_attributes_count: 0,
+                }),
+                spans: vec![
+                    Span {
+                        trace_id: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, (sequence % 256) as u8],
+                        span_id: vec![16, 17, 18, 19, 20, 21, 22, (sequence % 256) as u8],
+                        parent_span_id: vec![],
+                        name: format!("GET /api/items/{}?page={}", sequence, sequence % 5),
+                        kind: 2,
+                        start_time_unix_nano: base_nanos + sequence * 1_000_000,
+                        end_time_unix_nano: base_nanos + sequence * 1_000_000 + ((sequence % 50 + 1) * 1_000_000),
+                        attributes: vec![
+                            string_attr("http.method", "GET"),
+                            string_attr("http.route", "/api/items/:id"),
+                            int_attr("http.status_code", 200),
+                        ],
+                        dropped_attributes_count: 0,
+                        events: vec![],
+                        dropped_events_count: 0,
+                        links: vec![],
+                        dropped_links_count: 0,
+                        status: Some(opentelemetry_proto::tonic::trace::v1::Status { code: 1, message: String::new() }),
+                        flags: 0,
+                        trace_state: String::new(),
+                    },
+                    Span {
+                        trace_id: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, (sequence % 256) as u8],
+                        span_id: vec![23, 24, 25, 26, 27, 28, 29, (sequence % 256) as u8],
+                        parent_span_id: vec![16, 17, 18, 19, 20, 21, 22, (sequence % 256) as u8],
+                        name: "SELECT items".to_string(),
+                        kind: 3,
+                        start_time_unix_nano: base_nanos + sequence * 1_000_000 + 2_000_000,
+                        end_time_unix_nano: base_nanos + sequence * 1_000_000 + ((sequence % 50 + 1) * 1_000_000) - 1_000_000,
+                        attributes: vec![
+                            string_attr("db.system", "postgres"),
+                            string_attr("db.statement", "SELECT * FROM items WHERE id = $1"),
+                        ],
+                        dropped_attributes_count: 0,
+                        events: vec![],
+                        dropped_events_count: 0,
+                        links: vec![],
+                        dropped_links_count: 0,
+                        status: Some(opentelemetry_proto::tonic::trace::v1::Status { code: 0, message: String::new() }),
+                        flags: 0,
+                        trace_state: String::new(),
+                    },
+                ],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    }
+}
+
+pub fn post_otlp_http_traces(addr: &str, request: &ExportTraceServiceRequest) -> io::Result<()> {
+    DemoConnection::open(addr, None, None)?.post(&request.encode_to_vec())
 }
