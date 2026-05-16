@@ -329,8 +329,7 @@ Important:
 
 - default is `32`
 - must be greater than zero
-- applies directly to thread-per-client ingest paths and current gRPC concurrency handling
-- plain non-TLS `otlp-http` ingest is already serial in the current implementation
+- applies to all ingest protocols (wire, otlp-http, otlp-grpc, plugin)
 
 ### `ingest.max-batches-per-second`
 

@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -16,6 +16,13 @@ use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs, S
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 use rcgen::{BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, SanType};
+
+pub fn ensure_rustls_provider() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        rustls::crypto::ring::default_provider().install_default().expect("install rustls ring provider");
+    });
+}
 use tokio::net::TcpListener as TokioTcpListener;
 use tokio::runtime::Builder;
 use tokio_stream::wrappers::TcpListenerStream;
