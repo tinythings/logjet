@@ -43,6 +43,10 @@ It also contains scenario demos under subdirectories:
   - inspect rotated file segments and prune archived files deliberately
 - [`parquet-export`](./parquet-export)
   - generate about 5K BOFH log entries, then export that `.logjet` file to Parquet through the external exporter plugin
+- [`parquet-metrics-export`](./parquet-metrics-export)
+  - generate OTLP metrics batches, ingest them into `ljd`, then export the `.logjet` file to Parquet
+- [`parquet-traces-export`](./parquet-traces-export)
+  - generate OTLP traces batches, ingest them into `ljd`, then export the `.logjet` file to Parquet
 - [`tui-view`](./tui-view)
   - generate 1000 randomized log entries and open `ljx view` on the result
 - [`metrics-view`](./metrics-view)
