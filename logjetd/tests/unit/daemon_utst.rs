@@ -1,8 +1,11 @@
 use super::{
     BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy, classify_otlp_batch_priority, extract_batch_timestamp_metrics,
-    extract_batch_timestamp_traces, maybe_decompress_body, read_http_request, write_http_response,
+    extract_batch_timestamp_traces, handle_otlp_http_request, maybe_decompress_body,
 };
 use crate::config::{IngestOverloadConfig, SeverityFloor};
+use http_body_util::Full;
+use hyper::body::Bytes;
+use hyper::{Method, Request, StatusCode};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
@@ -12,25 +15,327 @@ use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPoi
 use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
-use std::io::{Cursor, Write};
+use prost::Message;
+use std::io::Write;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
-#[test]
-fn read_http_request_parses_valid_request() {
-    let bytes = b"POST /v1/logs HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\n\r\nabc";
-    let mut cursor = Cursor::new(bytes.as_slice());
-    let request = read_http_request(&mut cursor, 1024).unwrap();
-    assert_eq!(request.method, "POST");
-    assert_eq!(request.path, "/v1/logs");
-    assert_eq!(request.body, b"abc");
+#[tokio::test]
+async fn handle_otlp_http_request_logs_accepts_valid_batch() {
+    let spool = crate::spool::Spool::open(crate::config::StorageConfig::Buffer(crate::config::BufferConfig {
+        limit: crate::config::BufferLimit::Bytes(1024 * 1024),
+        keep_messages: 0,
+    }))
+    .unwrap();
+    let shared_spool = Arc::new(super::SharedSpool::new(spool));
+    let policy = Arc::new(SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 0,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    }));
+    let next_seq = Arc::new(AtomicU64::new(1));
+
+    let batch = ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_logs: vec![ScopeLogs {
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
+                log_records: vec![LogRecord {
+                    severity_number: 13,
+                    severity_text: "WARN".to_string(),
+                    body: Some(AnyValue {
+                        value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue("warn".to_string())),
+                    }),
+                    ..Default::default()
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let body = batch.encode_to_vec();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/logs")
+        .header("content-length", body.len().to_string())
+        .body(Full::new(Bytes::from(body)))
+        .unwrap();
+
+    let response = handle_otlp_http_request(req, shared_spool, policy, next_seq, 1024 * 1024).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[test]
-fn read_http_request_parses_content_encoding() {
-    let bytes = b"POST /v1/logs HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\nContent-Encoding: gzip\r\n\r\nabc";
-    let mut cursor = Cursor::new(bytes.as_slice());
-    let request = read_http_request(&mut cursor, 1024).unwrap();
-    assert_eq!(request.content_encoding, Some("gzip".to_string()));
+#[tokio::test]
+async fn handle_otlp_http_request_metrics_accepts_valid_batch() {
+    let spool = crate::spool::Spool::open(crate::config::StorageConfig::Buffer(crate::config::BufferConfig {
+        limit: crate::config::BufferLimit::Bytes(1024 * 1024),
+        keep_messages: 0,
+    }))
+    .unwrap();
+    let shared_spool = Arc::new(super::SharedSpool::new(spool));
+    let policy = Arc::new(SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 0,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    }));
+    let next_seq = Arc::new(AtomicU64::new(1));
+
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
+                metrics: vec![Metric {
+                    name: "cpu".to_string(),
+                    description: String::new(),
+                    unit: "%".to_string(),
+                    data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+                        data_points: vec![NumberDataPoint {
+                            attributes: vec![],
+                            start_time_unix_nano: 0,
+                            time_unix_nano: 1_700_000_000_000_000_000,
+                            value: Some(DataPointValue::AsDouble(42.0)),
+                            flags: 0,
+                            exemplars: vec![],
+                        }],
+                    })),
+                    metadata: vec![],
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let body = batch.encode_to_vec();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/metrics")
+        .header("content-length", body.len().to_string())
+        .body(Full::new(Bytes::from(body)))
+        .unwrap();
+
+    let response = handle_otlp_http_request(req, shared_spool, policy, next_seq, 1024 * 1024).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn handle_otlp_http_request_traces_accepts_valid_batch() {
+    let spool = crate::spool::Spool::open(crate::config::StorageConfig::Buffer(crate::config::BufferConfig {
+        limit: crate::config::BufferLimit::Bytes(1024 * 1024),
+        keep_messages: 0,
+    }))
+    .unwrap();
+    let shared_spool = Arc::new(super::SharedSpool::new(spool));
+    let policy = Arc::new(SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 0,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    }));
+    let next_seq = Arc::new(AtomicU64::new(1));
+
+    let batch = ExportTraceServiceRequest {
+        resource_spans: vec![ResourceSpans {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_spans: vec![ScopeSpans {
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
+                spans: vec![Span {
+                    trace_id: vec![1, 2, 3, 4],
+                    span_id: vec![5, 6, 7, 8],
+                    parent_span_id: vec![],
+                    name: "test-span".to_string(),
+                    kind: 1,
+                    start_time_unix_nano: 1_700_000_000_000_000_000,
+                    end_time_unix_nano: 1_700_000_000_000_000_001,
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                    events: vec![],
+                    dropped_events_count: 0,
+                    links: vec![],
+                    dropped_links_count: 0,
+                    status: None,
+                    flags: 0,
+                    trace_state: String::new(),
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let body = batch.encode_to_vec();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/traces")
+        .header("content-length", body.len().to_string())
+        .body(Full::new(Bytes::from(body)))
+        .unwrap();
+
+    let response = handle_otlp_http_request(req, shared_spool, policy, next_seq, 1024 * 1024).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn handle_otlp_http_request_rejects_non_post() {
+    let spool = crate::spool::Spool::open(crate::config::StorageConfig::Buffer(crate::config::BufferConfig {
+        limit: crate::config::BufferLimit::Bytes(1024),
+        keep_messages: 0,
+    }))
+    .unwrap();
+    let shared_spool = Arc::new(super::SharedSpool::new(spool));
+    let policy = Arc::new(SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 0,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    }));
+    let next_seq = Arc::new(AtomicU64::new(1));
+
+    let req = Request::builder().method(Method::GET).uri("/v1/logs").body(Full::new(Bytes::new())).unwrap();
+    let response = handle_otlp_http_request(req, shared_spool, policy, next_seq, 1024).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn handle_otlp_http_request_unknown_path_returns_404() {
+    let spool = crate::spool::Spool::open(crate::config::StorageConfig::Buffer(crate::config::BufferConfig {
+        limit: crate::config::BufferLimit::Bytes(1024),
+        keep_messages: 0,
+    }))
+    .unwrap();
+    let shared_spool = Arc::new(super::SharedSpool::new(spool));
+    let policy = Arc::new(SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 0,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    }));
+    let next_seq = Arc::new(AtomicU64::new(1));
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/unknown")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let response = handle_otlp_http_request(req, shared_spool, policy, next_seq, 1024).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn handle_otlp_http_request_rejects_body_over_limit() {
+    let spool = crate::spool::Spool::open(crate::config::StorageConfig::Buffer(crate::config::BufferConfig {
+        limit: crate::config::BufferLimit::Bytes(1024),
+        keep_messages: 0,
+    }))
+    .unwrap();
+    let shared_spool = Arc::new(super::SharedSpool::new(spool));
+    let policy = Arc::new(SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 0,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    }));
+    let next_seq = Arc::new(AtomicU64::new(1));
+
+    let body = vec![0u8; 100];
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/logs")
+        .header("content-length", body.len().to_string())
+        .body(Full::new(Bytes::from(body)))
+        .unwrap();
+
+    let response = handle_otlp_http_request(req, shared_spool, policy, next_seq, 50).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn handle_otlp_http_request_rejects_invalid_protobuf() {
+    let spool = crate::spool::Spool::open(crate::config::StorageConfig::Buffer(crate::config::BufferConfig {
+        limit: crate::config::BufferLimit::Bytes(1024),
+        keep_messages: 0,
+    }))
+    .unwrap();
+    let shared_spool = Arc::new(super::SharedSpool::new(spool));
+    let policy = Arc::new(SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 0,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    }));
+    let next_seq = Arc::new(AtomicU64::new(1));
+
+    let body = b"not valid protobuf";
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/logs")
+        .header("content-length", body.len().to_string())
+        .body(Full::new(Bytes::from(body.to_vec())))
+        .unwrap();
+
+    let response = handle_otlp_http_request(req, shared_spool, policy, next_seq, 1024).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn handle_otlp_http_request_rate_limits_when_overloaded() {
+    let spool = crate::spool::Spool::open(crate::config::StorageConfig::Buffer(crate::config::BufferConfig {
+        limit: crate::config::BufferLimit::Bytes(1024 * 1024),
+        keep_messages: 0,
+    }))
+    .unwrap();
+    let shared_spool = Arc::new(super::SharedSpool::new(spool));
+    let policy = Arc::new(SharedIngestPolicy::new(IngestOverloadConfig {
+        max_batches_per_second: 1,
+        priority_severity_floor: SeverityFloor::Error,
+        report_every_ms: 0,
+    }));
+    let next_seq = Arc::new(AtomicU64::new(1));
+
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
+                metrics: vec![],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let body = batch.encode_to_vec();
+
+    let req1 = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/metrics")
+        .header("content-length", body.len().to_string())
+        .body(Full::new(Bytes::from(body.clone())))
+        .unwrap();
+    let response1 = handle_otlp_http_request(req1, Arc::clone(&shared_spool), Arc::clone(&policy), Arc::clone(&next_seq), 1024 * 1024).await.unwrap();
+    assert_eq!(response1.status(), StatusCode::OK);
+
+    let req2 = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/metrics")
+        .header("content-length", body.len().to_string())
+        .body(Full::new(Bytes::from(body)))
+        .unwrap();
+    let response2 = handle_otlp_http_request(req2, shared_spool, policy, next_seq, 1024 * 1024).await.unwrap();
+    assert_eq!(response2.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[test]
@@ -64,75 +369,6 @@ fn maybe_decompress_body_decompresses_x_gzip() {
 fn maybe_decompress_body_rejects_invalid_gzip() {
     let err = maybe_decompress_body(b"not-gzip".to_vec(), Some("gzip")).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-}
-
-#[test]
-fn read_http_request_rejects_missing_content_length() {
-    let bytes = b"POST /v1/logs HTTP/1.1\r\nHost: example\r\n\r\nabc";
-    let mut cursor = Cursor::new(bytes.as_slice());
-    let err = read_http_request(&mut cursor, 1024).err().unwrap();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-}
-
-#[test]
-fn read_http_request_rejects_short_body() {
-    let bytes = b"POST /v1/logs HTTP/1.1\r\nHost: example\r\nContent-Length: 5\r\n\r\nabc";
-    let mut cursor = Cursor::new(bytes.as_slice());
-    let err = read_http_request(&mut cursor, 1024).err().unwrap();
-    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
-}
-
-#[test]
-fn read_http_request_rejects_invalid_request_line() {
-    let bytes = b"POST\r\nHost: example\r\nContent-Length: 0\r\n\r\n";
-    let mut cursor = Cursor::new(bytes.as_slice());
-    let err = read_http_request(&mut cursor, 1024).err().unwrap();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-}
-
-#[test]
-fn read_http_request_rejects_payloads_over_limit() {
-    let bytes = b"POST /v1/logs HTTP/1.1\r\nHost: example\r\nContent-Length: 6\r\n\r\nabcdef";
-    let mut cursor = Cursor::new(bytes.as_slice());
-    let err = read_http_request(&mut cursor, 5).err().unwrap();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-    assert_eq!(err.to_string(), "payload too large");
-}
-
-#[test]
-fn write_http_response_writes_status_line() {
-    let mut bytes = Vec::new();
-    write_http_response(&mut bytes, 404, "not found").unwrap();
-    let response = String::from_utf8(bytes).unwrap();
-    assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"));
-    assert!(response.ends_with("not found"));
-}
-
-#[test]
-fn write_http_response_supports_payload_too_large_status() {
-    let mut bytes = Vec::new();
-    write_http_response(&mut bytes, 413, "payload too large").unwrap();
-    let response = String::from_utf8(bytes).unwrap();
-    assert!(response.starts_with("HTTP/1.1 413 Payload Too Large\r\n"));
-    assert!(response.ends_with("payload too large"));
-}
-
-#[test]
-fn write_http_response_supports_service_unavailable_status() {
-    let mut bytes = Vec::new();
-    write_http_response(&mut bytes, 503, "busy").unwrap();
-    let response = String::from_utf8(bytes).unwrap();
-    assert!(response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
-    assert!(response.ends_with("busy"));
-}
-
-#[test]
-fn write_http_response_supports_too_many_requests_status() {
-    let mut bytes = Vec::new();
-    write_http_response(&mut bytes, 429, "rate limit exceeded").unwrap();
-    let response = String::from_utf8(bytes).unwrap();
-    assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
-    assert!(response.ends_with("rate limit exceeded"));
 }
 
 #[test]
