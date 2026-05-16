@@ -121,6 +121,7 @@ Current behaviour:
 - bridge export can block or disconnect when the collector is too slow, when `backpressure.enabled: true`
 - bridge export can also drop newest records explicitly when `backpressure.mode: drop-newest`
 - bridge export queue depth can be capped through `backpressure.max-buffered-records`
+- emits periodic backlog depth and per-signal drop counters to stderr when records are dropped
 
 This is the current path for:
 

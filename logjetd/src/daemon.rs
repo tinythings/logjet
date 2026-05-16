@@ -300,6 +300,11 @@ fn ingest_loop(
                 if is_metrics {
                     match ExportMetricsServiceRequest::decode(body.as_slice()) {
                         Ok(batch) => {
+                            // Metrics have no severity concept in OTLP, so they always classify as
+                            // BatchPriority::Unknown (lowest priority). This is semantically correct:
+                            // during overload, severity-aware shedding protects high-priority logs
+                            // while metrics are treated as best-effort. If metrics must survive
+                            // overload, increase ingest.max-batches-per-second or use buffer/file mode.
                             let decision = ingest_policy.decide(BatchPriority::Unknown)?;
                             if matches!(decision, IngestDecision::RejectRateLimited) {
                                 let response = Response::from_string("rate limit exceeded").with_status_code(StatusCode(429));
@@ -325,6 +330,11 @@ fn ingest_loop(
                 } else if is_traces {
                     match ExportTraceServiceRequest::decode(body.as_slice()) {
                         Ok(batch) => {
+                            // Traces have no severity concept in OTLP, so they always classify as
+                            // BatchPriority::Unknown (lowest priority). This is semantically correct:
+                            // during overload, severity-aware shedding protects high-priority logs
+                            // while traces are treated as best-effort. If traces must survive
+                            // overload, increase ingest.max-batches-per-second or use buffer/file mode.
                             let decision = ingest_policy.decide(BatchPriority::Unknown)?;
                             if matches!(decision, IngestDecision::RejectRateLimited) {
                                 let response = Response::from_string("rate limit exceeded").with_status_code(StatusCode(429));
@@ -955,6 +965,9 @@ struct OtlpGrpcTracesService {
 impl TraceService for OtlpGrpcTracesService {
     async fn export(&self, request: Request<ExportTraceServiceRequest>) -> Result<GrpcResponse<ExportTraceServiceResponse>, Status> {
         let batch = request.into_inner();
+        // Traces have no severity concept in OTLP, so they always classify as
+        // BatchPriority::Unknown (lowest priority). See HTTP ingest comment above
+        // for the full rationale on metrics/traces rate-limiting policy.
         match self.ingest_policy.decide(BatchPriority::Unknown).map_err(|err| Status::internal(err.to_string()))? {
             IngestDecision::Accept | IngestDecision::AcceptPriorityBypass => {}
             IngestDecision::RejectRateLimited => {
@@ -986,6 +999,9 @@ struct OtlpGrpcMetricsService {
 impl MetricsService for OtlpGrpcMetricsService {
     async fn export(&self, request: Request<ExportMetricsServiceRequest>) -> Result<GrpcResponse<ExportMetricsServiceResponse>, Status> {
         let batch = request.into_inner();
+        // Metrics have no severity concept in OTLP, so they always classify as
+        // BatchPriority::Unknown (lowest priority). See HTTP ingest comment above
+        // for the full rationale on metrics/traces rate-limiting policy.
         match self.ingest_policy.decide(BatchPriority::Unknown).map_err(|err| Status::internal(err.to_string()))? {
             IngestDecision::Accept | IngestDecision::AcceptPriorityBypass => {}
             IngestDecision::RejectRateLimited => {

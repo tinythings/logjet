@@ -31,6 +31,7 @@ The daemon provides:
 - optional persisted bridge resume state
 - basic backpressure policy on bridge export
 - bounded bridge-side exporter queue with `block`, `disconnect`, and `drop-newest` policy
+- periodic backlog depth and per-signal drop counters on bridge export
 - basic ingest guardrails for payload size and concurrent clients
 - ingest rate limiting with severity-aware overload shedding
 - basic replay-client caps

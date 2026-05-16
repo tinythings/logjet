@@ -140,23 +140,34 @@ fn bridge_transport<T: io::Read + io::Write>(
     let worker_transport = collector_transport.clone();
     let exporter = thread::spawn(move || export_worker(worker_transport, task_rx, result_tx));
     let mut pending = std::collections::VecDeque::new();
+    let mut stats = BridgeStats::new();
 
     while let Some(record) = read_record(transport)? {
         flush_ready_results(transport, state, state_file, consume, &mut pending, &result_rx, false)?;
+        stats.note_record(record.record_type);
 
         let seq = record.seq;
         match enqueue_export_task(&task_tx, collector_transport, ExportTask { seq, record_type: record.record_type, payload: record.payload }) {
             Ok(EnqueueOutcome::Queued) => pending.push_back(PendingExport::Queued(seq)),
-            Ok(EnqueueOutcome::DroppedNewest) => pending.push_back(PendingExport::Dropped(seq)),
+            Ok(EnqueueOutcome::DroppedNewest) => {
+                stats.note_drop(record.record_type);
+                pending.push_back(PendingExport::Dropped(seq));
+            }
             Err(err) => {
+                stats.log_summary();
                 drop(task_tx);
                 let _ = exporter.join();
                 return Err(err);
             }
         }
+
+        if stats.should_log() {
+            eprintln!("bridge backlog depth={} records_read={} {}", pending.len(), stats.records_read, stats.drop_summary());
+        }
     }
 
     drop(task_tx);
+    stats.log_summary();
     flush_ready_results(transport, state, state_file, consume, &mut pending, &result_rx, true)?;
     match exporter.join() {
         Ok(Ok(())) => Ok(()),
@@ -181,7 +192,7 @@ fn enqueue_export_task(
         BackpressureMode::DropNewest => match task_tx.try_send(task) {
             Ok(()) => Ok(EnqueueOutcome::Queued),
             Err(mpsc::TrySendError::Full(task)) => {
-                eprintln!("bridge dropping seq={} because collector export buffer is full (mode=drop-newest)", task.seq);
+                eprintln!("bridge dropping seq={} type={:?} because collector export buffer is full (mode=drop-newest)", task.seq, task.record_type);
                 Ok(EnqueueOutcome::DroppedNewest)
             }
             Err(mpsc::TrySendError::Disconnected(_)) => Err(io::Error::new(io::ErrorKind::BrokenPipe, "collector export worker stopped")),
@@ -300,6 +311,50 @@ fn to_io_error(err: logjet::Error) -> io::Error {
 struct BridgeState {
     stream_id: Option<u64>,
     last_seq: u64,
+}
+
+struct BridgeStats {
+    records_read: u64,
+    drops_logs: u64,
+    drops_metrics: u64,
+    drops_traces: u64,
+    drops_events: u64,
+}
+
+impl BridgeStats {
+    fn new() -> Self {
+        Self { records_read: 0, drops_logs: 0, drops_metrics: 0, drops_traces: 0, drops_events: 0 }
+    }
+
+    fn note_record(&mut self, _record_type: logjet::RecordType) {
+        self.records_read += 1;
+    }
+
+    fn note_drop(&mut self, record_type: logjet::RecordType) {
+        match record_type {
+            logjet::RecordType::Logs => self.drops_logs += 1,
+            logjet::RecordType::Metrics => self.drops_metrics += 1,
+            logjet::RecordType::Traces => self.drops_traces += 1,
+            logjet::RecordType::Events => self.drops_events += 1,
+        }
+    }
+
+    fn should_log(&self) -> bool {
+        self.records_read > 0 && self.records_read.is_multiple_of(1_000)
+    }
+
+    fn drop_summary(&self) -> String {
+        let mut parts = Vec::new();
+        if self.drops_logs > 0 { parts.push(format!("logs_drops={}", self.drops_logs)); }
+        if self.drops_metrics > 0 { parts.push(format!("metrics_drops={}", self.drops_metrics)); }
+        if self.drops_traces > 0 { parts.push(format!("traces_drops={}", self.drops_traces)); }
+        if self.drops_events > 0 { parts.push(format!("events_drops={}", self.drops_events)); }
+        if parts.is_empty() { "drops=0".to_string() } else { parts.join(" ") }
+    }
+
+    fn log_summary(&self) {
+        eprintln!("bridge stats: records_read={} {}", self.records_read, self.drop_summary());
+    }
 }
 
 fn read_bridge_state(path: Option<&Path>) -> io::Result<BridgeState> {
