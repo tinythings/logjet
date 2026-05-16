@@ -8,10 +8,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use logjet::OwnedRecord;
 use logjet::{LogjetWriter, RecordType};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::resource::v1::Resource;
+use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
 use prost::Message;
 use serde_json::Value as JsonValue;
 use std::fs::File;
@@ -861,4 +863,310 @@ fn export_current_results_can_export_selected_row_only() {
 
     let _ = std::fs::remove_file(input);
     let _ = std::fs::remove_file(output);
+}
+
+#[test]
+fn summary_decodes_otlp_metrics_payload() {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPointValue;
+    use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics};
+
+    let metric = Metric {
+        name: "cpu.usage".to_string(),
+        description: String::new(),
+        unit: "%".to_string(),
+        data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![],
+                start_time_unix_nano: 0,
+                time_unix_nano: 1_700_000_000_000_000_000,
+                value: Some(DataPointValue::AsDouble(45.5)),
+                flags: 0,
+                exemplars: vec![],
+            }],
+        })),
+        metadata: vec![],
+    };
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                metrics: vec![metric],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let payload = batch.encode_to_vec();
+    let detail = DetailRecord {
+        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        payload,
+    };
+    assert_eq!(format_summary(&detail, false), "cpu.usage=45.5%");
+}
+
+#[test]
+fn modal_message_decodes_otlp_metrics_payload() {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPointValue;
+    use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics};
+
+    let metric = Metric {
+        name: "cpu.usage".to_string(),
+        description: String::new(),
+        unit: String::new(),
+        data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![],
+                start_time_unix_nano: 0,
+                time_unix_nano: 1_700_000_000_000_000_000,
+                value: Some(DataPointValue::AsDouble(45.5)),
+                flags: 0,
+                exemplars: vec![],
+            }],
+        })),
+        metadata: vec![],
+    };
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                metrics: vec![metric],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let payload = batch.encode_to_vec();
+    let detail = DetailRecord {
+        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        payload,
+    };
+    let message = render_modal_message(&detail, false);
+    assert!(message.contains("Metric: cpu.usage"), "modal body should contain metric name: {message}");
+    assert!(message.contains("45.5"), "modal body should contain metric value: {message}");
+}
+
+#[test]
+fn modal_info_entries_decodes_otlp_metrics_payload() {
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPointValue;
+    use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics};
+
+    let metric = Metric {
+        name: "cpu.usage".to_string(),
+        description: "Current CPU usage".to_string(),
+        unit: "%".to_string(),
+        data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![],
+                start_time_unix_nano: 0,
+                time_unix_nano: 1_700_000_000_000_000_000,
+                value: Some(DataPointValue::AsDouble(45.5)),
+                flags: 0,
+                exemplars: vec![],
+            }],
+        })),
+        metadata: vec![],
+    };
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                metrics: vec![metric],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let payload = batch.encode_to_vec();
+    let detail = DetailRecord {
+        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        payload,
+    };
+    let entries = render_modal_info_entries(&detail);
+    assert!(entries.iter().any(|(k, _)| k == "otlp.kind"), "should have otlp.kind entry");
+    assert!(entries.iter().any(|(k, v)| k == "metrics" && v == "1"), "should have metrics count");
+    assert!(entries.iter().any(|(k, v)| k == "metric.cpu.usage.unit" && v == "%"), "should have metric unit");
+}
+
+#[test]
+fn summary_decodes_otlp_traces_payload() {
+    let batch = ExportTraceServiceRequest {
+        resource_spans: vec![ResourceSpans {
+            resource: Some(Resource {
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue { value: Some(Value::StringValue("trace-demo".to_string())) }),
+                }],
+                dropped_attributes_count: 0,
+                entity_refs: vec![],
+            }),
+            scope_spans: vec![ScopeSpans {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                spans: vec![
+                    Span {
+                        trace_id: vec![1, 2, 3, 4],
+                        span_id: vec![5, 6, 7, 8],
+                        parent_span_id: vec![],
+                        name: "GET /api".to_string(),
+                    kind: 2,
+                    start_time_unix_nano: 1_700_000_000_000_000_000,
+                    end_time_unix_nano: 1_700_000_000_000_000_100,
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                    events: vec![],
+                    dropped_events_count: 0,
+                    links: vec![],
+                    dropped_links_count: 0,
+                    status: None,
+                    flags: 0,
+                    trace_state: String::new(),
+                },
+                Span {
+                    trace_id: vec![1, 2, 3, 4],
+                    span_id: vec![9, 10, 11, 12],
+                    parent_span_id: vec![5, 6, 7, 8],
+                    name: "SELECT".to_string(),
+                    kind: 3,
+                    start_time_unix_nano: 1_700_000_000_000_000_050,
+                    end_time_unix_nano: 1_700_000_000_000_000_080,
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                    events: vec![],
+                    dropped_events_count: 0,
+                    links: vec![],
+                    dropped_links_count: 0,
+                    status: None,
+                    flags: 0,
+                    trace_state: String::new(),
+                    },
+                ],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let payload = batch.encode_to_vec();
+    let detail = DetailRecord {
+        meta: EntryMeta { offset: 0, record_type: RecordType::Traces, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        payload,
+    };
+    let summary = format_summary(&detail, false);
+    assert!(summary.contains("GET /api"), "summary should contain span name: {summary}");
+    assert!(summary.contains("Server"), "summary should contain span kind: {summary}");
+}
+
+#[test]
+fn modal_message_decodes_otlp_traces_payload() {
+    let batch = ExportTraceServiceRequest {
+        resource_spans: vec![ResourceSpans {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_spans: vec![ScopeSpans {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                spans: vec![Span {
+                    trace_id: vec![1, 2, 3, 4],
+                    span_id: vec![5, 6, 7, 8],
+                    parent_span_id: vec![],
+                    name: "POST /events".to_string(),
+                    kind: 2,
+                    start_time_unix_nano: 1_700_000_000_000_000_000,
+                    end_time_unix_nano: 1_700_000_000_000_000_200,
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                    events: vec![],
+                    dropped_events_count: 0,
+                    links: vec![],
+                    dropped_links_count: 0,
+                    status: None,
+                    flags: 0,
+                    trace_state: String::new(),
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let payload = batch.encode_to_vec();
+    let detail = DetailRecord {
+        meta: EntryMeta { offset: 0, record_type: RecordType::Traces, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        payload,
+    };
+    let message = render_modal_message(&detail, false);
+    assert!(message.contains("Span: POST /events"), "modal body should contain span name: {message}");
+    assert!(message.contains("Trace ID:"), "modal body should contain trace ID: {message}");
+    assert!(message.contains("Kind: Server"), "modal body should contain kind: {message}");
+}
+
+#[test]
+fn modal_info_entries_decodes_otlp_traces_payload() {
+    let batch = ExportTraceServiceRequest {
+        resource_spans: vec![ResourceSpans {
+            resource: Some(Resource {
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue { value: Some(Value::StringValue("trace-demo".to_string())) }),
+                }],
+                dropped_attributes_count: 0,
+                entity_refs: vec![],
+            }),
+            scope_spans: vec![ScopeSpans {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                spans: vec![
+                    Span {
+                        trace_id: vec![1, 2, 3, 4],
+                        span_id: vec![5, 6, 7, 8],
+                        parent_span_id: vec![],
+                        name: "GET /api".to_string(),
+                        kind: 2,
+                        start_time_unix_nano: 1_700_000_000_000_000_000,
+                        end_time_unix_nano: 1_700_000_000_000_000_100,
+                        attributes: vec![],
+                        dropped_attributes_count: 0,
+                        events: vec![],
+                        dropped_events_count: 0,
+                        links: vec![],
+                        dropped_links_count: 0,
+                        status: Some(opentelemetry_proto::tonic::trace::v1::Status { code: 1, message: String::new() }),
+                        flags: 0,
+                        trace_state: String::new(),
+                    },
+                    Span {
+                        trace_id: vec![1, 2, 3, 4],
+                        span_id: vec![9, 10, 11, 12],
+                        parent_span_id: vec![5, 6, 7, 8],
+                        name: "SELECT".to_string(),
+                        kind: 3,
+                        start_time_unix_nano: 1_700_000_000_000_000_050,
+                        end_time_unix_nano: 1_700_000_000_000_000_080,
+                        attributes: vec![],
+                        dropped_attributes_count: 0,
+                        events: vec![],
+                        dropped_events_count: 0,
+                        links: vec![],
+                        dropped_links_count: 0,
+                        status: Some(opentelemetry_proto::tonic::trace::v1::Status { code: 0, message: String::new() }),
+                        flags: 0,
+                        trace_state: String::new(),
+                    },
+                ],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    let payload = batch.encode_to_vec();
+    let detail = DetailRecord {
+        meta: EntryMeta { offset: 0, record_type: RecordType::Traces, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        payload,
+    };
+    let entries = render_modal_info_entries(&detail);
+    assert!(entries.iter().any(|(k, v)| k == "otlp.kind" && v == "traces"), "should have otlp.kind entry");
+    assert!(entries.iter().any(|(k, v)| k == "service.name" && v == "trace-demo"), "should have service name");
+    assert!(entries.iter().any(|(k, v)| k == "spans" && v == "2"), "should have span count");
+    assert!(entries.iter().any(|(k, v)| k == "span.kind.Server" && v == "1"), "should have Server kind count");
+    assert!(entries.iter().any(|(k, v)| k == "span.kind.Client" && v == "1"), "should have Client kind count");
 }

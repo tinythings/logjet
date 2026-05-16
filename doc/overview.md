@@ -3,7 +3,7 @@
 `logjet` is split into two parts:
 
 - `logjet`: a Rust library and `.logjet` block format for storing raw OTLP protobuf batches
-- `ljd`: a daemon that accepts OTLP logs, keeps a backlog, and replays or blasts stored data later
+- `ljd`: a daemon that accepts OTLP logs, metrics, and traces, keeps a backlog, and replays or blasts stored data later
 
 ## Components
 
@@ -20,8 +20,8 @@ The library provides:
 
 The daemon provides:
 
-- OTLP/HTTP ingest listener
-- OTLP/gRPC ingest listener
+- OTLP/HTTP ingest listener for logs, metrics, and traces
+- OTLP/gRPC ingest listener for logs, metrics, and traces
 - optional TLS for OTLP ingest
 - internal wire-protocol ingest listener
 - replay listener

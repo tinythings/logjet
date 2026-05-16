@@ -1,12 +1,18 @@
 use super::{
-    BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy, classify_otlp_batch_priority, read_http_request, write_http_response,
+    BatchPriority, ConnectionLimiter, IngestDecision, SharedIngestPolicy, classify_otlp_batch_priority, extract_batch_timestamp_metrics,
+    extract_batch_timestamp_traces, maybe_decompress_body, read_http_request, write_http_response,
 };
 use crate::config::{IngestOverloadConfig, SeverityFloor};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
+use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPointValue;
+use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics};
 use opentelemetry_proto::tonic::resource::v1::Resource;
-use std::io::Cursor;
+use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
+use std::io::{Cursor, Write};
 use std::sync::Arc;
 
 #[test]
@@ -17,6 +23,47 @@ fn read_http_request_parses_valid_request() {
     assert_eq!(request.method, "POST");
     assert_eq!(request.path, "/v1/logs");
     assert_eq!(request.body, b"abc");
+}
+
+#[test]
+fn read_http_request_parses_content_encoding() {
+    let bytes = b"POST /v1/logs HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\nContent-Encoding: gzip\r\n\r\nabc";
+    let mut cursor = Cursor::new(bytes.as_slice());
+    let request = read_http_request(&mut cursor, 1024).unwrap();
+    assert_eq!(request.content_encoding, Some("gzip".to_string()));
+}
+
+#[test]
+fn maybe_decompress_body_passes_through_uncompressed() {
+    let data = b"hello";
+    let out = maybe_decompress_body(data.to_vec(), None).unwrap();
+    assert_eq!(out, data);
+}
+
+#[test]
+fn maybe_decompress_body_decompresses_gzip() {
+    let data = b"hello world";
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(data).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let out = maybe_decompress_body(compressed, Some("gzip")).unwrap();
+    assert_eq!(out, data);
+}
+
+#[test]
+fn maybe_decompress_body_decompresses_x_gzip() {
+    let data = b"hello world";
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(data).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let out = maybe_decompress_body(compressed, Some("x-gzip")).unwrap();
+    assert_eq!(out, data);
+}
+
+#[test]
+fn maybe_decompress_body_rejects_invalid_gzip() {
+    let err = maybe_decompress_body(b"not-gzip".to_vec(), Some("gzip")).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
 #[test]
@@ -168,4 +215,81 @@ fn classify_otlp_batch_priority_uses_highest_log_severity() {
     };
 
     assert_eq!(classify_otlp_batch_priority(&batch), BatchPriority::Error);
+}
+
+#[test]
+fn extract_batch_timestamp_metrics_finds_first_datapoint_time() {
+    let metric = Metric {
+        name: "cpu".to_string(),
+        description: String::new(),
+        unit: "%".to_string(),
+        data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+            data_points: vec![NumberDataPoint {
+                attributes: vec![],
+                start_time_unix_nano: 0,
+                time_unix_nano: 1_700_000_000_000_000_000,
+                value: Some(DataPointValue::AsDouble(42.0)),
+                flags: 0,
+                exemplars: vec![],
+            }],
+        })),
+        metadata: vec![],
+    };
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                metrics: vec![metric],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    assert_eq!(extract_batch_timestamp_metrics(&batch), Some(1_700_000_000_000_000_000));
+}
+
+#[test]
+fn extract_batch_timestamp_metrics_returns_none_when_empty() {
+    let batch = ExportMetricsServiceRequest { resource_metrics: vec![] };
+    assert_eq!(extract_batch_timestamp_metrics(&batch), None);
+}
+
+#[test]
+fn extract_batch_timestamp_traces_finds_first_span_start_time() {
+    let batch = ExportTraceServiceRequest {
+        resource_spans: vec![ResourceSpans {
+            resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
+            scope_spans: vec![ScopeSpans {
+                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                spans: vec![Span {
+                    trace_id: vec![1, 2, 3, 4],
+                    span_id: vec![5, 6, 7, 8],
+                    parent_span_id: vec![],
+                    name: "test-span".to_string(),
+                    kind: 1,
+                    start_time_unix_nano: 1_700_000_000_000_000_000,
+                    end_time_unix_nano: 1_700_000_000_000_000_001,
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                    events: vec![],
+                    dropped_events_count: 0,
+                    links: vec![],
+                    dropped_links_count: 0,
+                    status: None,
+                    flags: 0,
+                    trace_state: String::new(),
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    assert_eq!(extract_batch_timestamp_traces(&batch), Some(1_700_000_000_000_000_000));
+}
+
+#[test]
+fn extract_batch_timestamp_traces_returns_none_when_empty() {
+    let batch = ExportTraceServiceRequest { resource_spans: vec![] };
+    assert_eq!(extract_batch_timestamp_traces(&batch), None);
 }

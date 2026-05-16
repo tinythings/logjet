@@ -45,6 +45,16 @@ It also contains scenario demos under subdirectories:
   - generate about 5K BOFH log entries, then export that `.logjet` file to Parquet through the external exporter plugin
 - [`tui-view`](./tui-view)
   - generate 1000 randomized log entries and open `ljx view` on the result
+- [`metrics-view`](./metrics-view)
+  - generate OTLP metrics batches, ingest them into `ljd`, and open `ljx view` on the result
+- [`metrics-grpc-view`](./metrics-grpc-view)
+  - generate OTLP/gRPC metrics batches, ingest them into `ljd`, and open `ljx view` on the result
+- [`traces-view`](./traces-view)
+  - generate OTLP traces batches, ingest them into `ljd`, and open `ljx view` on the result
+- [`traces-grpc-view`](./traces-grpc-view)
+  - generate OTLP/gRPC traces batches, ingest them into `ljd`, and open `ljx view` on the result
+- [`multi-signal-view`](./multi-signal-view)
+  - interleave logs, metrics, and traces into a single `ljd` file, then open `ljx view`
 - [`multiscan-view`](./multiscan-view)
   - generate a tree of `.logjet` files and open `ljx view` across the whole dataset
 - [`multiscan-discover`](./multiscan-discover)

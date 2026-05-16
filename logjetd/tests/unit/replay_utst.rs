@@ -1,9 +1,10 @@
 use super::{
     BridgeState, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask, enqueue_export_task, parse_bridge_state, parse_content_length,
-    read_bridge_state, read_http_response, reconcile_bridge_state, write_bridge_state,
+    read_bridge_state, read_http_response, reconcile_bridge_state, signal_path_for_endpoint, write_bridge_state,
 };
 use crate::config::{BackpressureMode, CollectorConfig, UpstreamMode};
 use crate::protocol::ReplayHello;
+use logjet::RecordType;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -102,9 +103,9 @@ fn bridge_state_resets_when_legacy_saved_seq_is_above_upstream_last_seq() {
 fn disconnect_mode_errors_when_export_queue_is_full() {
     let transport = test_collector_transport(BackpressureMode::Disconnect, 1);
     let (task_tx, _task_rx) = mpsc::sync_channel(1);
-    task_tx.send(ExportTask { seq: 1, payload: vec![1] }).unwrap();
+    task_tx.send(ExportTask { seq: 1, record_type: RecordType::Logs, payload: vec![1] }).unwrap();
 
-    let err = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, payload: vec![2] }).unwrap_err();
+    let err = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, record_type: RecordType::Logs, payload: vec![2] }).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
 }
 
@@ -112,9 +113,9 @@ fn disconnect_mode_errors_when_export_queue_is_full() {
 fn drop_newest_mode_reports_drop_when_export_queue_is_full() {
     let transport = test_collector_transport(BackpressureMode::DropNewest, 1);
     let (task_tx, _task_rx) = mpsc::sync_channel(1);
-    task_tx.send(ExportTask { seq: 1, payload: vec![1] }).unwrap();
+    task_tx.send(ExportTask { seq: 1, record_type: RecordType::Logs, payload: vec![1] }).unwrap();
 
-    let outcome = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, payload: vec![2] }).unwrap();
+    let outcome = enqueue_export_task(&task_tx, &transport, ExportTask { seq: 2, record_type: RecordType::Logs, payload: vec![2] }).unwrap();
     assert_eq!(outcome, EnqueueOutcome::DroppedNewest);
 }
 
@@ -191,4 +192,25 @@ fn parse_content_length_is_case_insensitive() {
 #[test]
 fn parse_content_length_returns_zero_when_absent() {
     assert_eq!(parse_content_length("X-Custom: foo\r\n"), 0);
+}
+
+#[test]
+fn signal_path_for_endpoint_defaults_to_signal_specific_paths() {
+    assert_eq!(signal_path_for_endpoint("/v1/logs", logjet::RecordType::Logs), "/v1/logs");
+    assert_eq!(signal_path_for_endpoint("/v1/logs", logjet::RecordType::Metrics), "/v1/metrics");
+    assert_eq!(signal_path_for_endpoint("/v1/logs", logjet::RecordType::Traces), "/v1/traces");
+    assert_eq!(signal_path_for_endpoint("/v1/logs", logjet::RecordType::Events), "/v1/logs");
+}
+
+#[test]
+fn signal_path_for_endpoint_preserves_custom_path() {
+    assert_eq!(signal_path_for_endpoint("/custom/ingest", logjet::RecordType::Metrics), "/custom/ingest");
+    assert_eq!(signal_path_for_endpoint("/custom/ingest", logjet::RecordType::Traces), "/custom/ingest");
+}
+
+#[test]
+fn signal_path_for_endpoint_defaults_from_empty_path() {
+    assert_eq!(signal_path_for_endpoint("", logjet::RecordType::Logs), "/v1/logs");
+    assert_eq!(signal_path_for_endpoint("", logjet::RecordType::Metrics), "/v1/metrics");
+    assert_eq!(signal_path_for_endpoint("", logjet::RecordType::Traces), "/v1/traces");
 }

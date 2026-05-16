@@ -86,8 +86,7 @@ ljd --config /path/to/logjet.conf bridge --source 10.0.0.15:7002
 - supports `ingest.protocol: plugin` with `ingest.plugin-path`
 - supports TLS on OTLP/HTTP and OTLP/gRPC ingest with `ingest.*`
 - can rate-limit accepted ingest batches through `ingest.max-batches-per-second`
-- can keep higher-severity OTLP log batches during overload through `ingest.priority-severity-at-least`
-- can emit overload counters on stderr through `ingest.overload-report-ms`
+- can keep higher-severity OTLP batches during overload through `ingest.priority-severity-at-least`
 - stores raw OTLP protobuf bytes in configured storage
 
 For plugin ingest, explicit `.so` values in `ingest.plugin-path` are loaded
@@ -131,7 +130,7 @@ upstream.
 - `ljd bridge` connects to another `ljd` replay listener
 - requests either `keep` or `drain` mode from the upstream side
 - continues forwarding newly replayed records
-- forwards OTLP log payloads to every destination configured in `collector.url`
+- forwards OTLP payloads to every destination configured in `collector.url`
 - reconnects after disconnect using the last in-process forwarded sequence
 - can also load and save the last forwarded sequence through `upstream.state-file`
 - resets saved bridge sequence state automatically when upstream stream identity changes
@@ -150,7 +149,7 @@ upstream.
 
 - `ljd replay --path ... --name ...`
 - reads ordered rotated `.logjet` files
-- sends stored OTLP log batches to the configured destination set
+- sends stored OTLP batches to the configured destination set
 - uses `collector.url` by default
 - `--dest` can override the collector destination
 - if `collector.url` is a list, replay fans out to every configured destination

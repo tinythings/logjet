@@ -562,7 +562,7 @@ impl ViewApp {
             frame.render_widget(Clear, area);
 
             let block = Block::default()
-                .title(Span::styled(" Log record ", Style::default().fg(Color::Black).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)))
+                .title(Span::styled(" Record ", Style::default().fg(Color::Black).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Double)
                 .border_style(Style::default().fg(Color::Black).bg(Color::Gray))
@@ -604,7 +604,7 @@ impl ViewApp {
         frame.render_widget(Clear, area);
 
         let block = Block::default()
-            .title(Span::styled(" Log record ", Style::default().fg(Color::Black).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)))
+            .title(Span::styled(" Record ", Style::default().fg(Color::Black).bg(Color::Indexed(30)).add_modifier(Modifier::BOLD)))
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::Gray))

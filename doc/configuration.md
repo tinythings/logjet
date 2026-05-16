@@ -575,10 +575,10 @@ Values:
   - this is not OTLP
 - `otlp-http`
   - OTLP over HTTP protobuf
-  - accepts `POST /v1/logs`
+  - accepts `POST /v1/logs`, `POST /v1/metrics`, and `POST /v1/traces`
 - `otlp-grpc`
   - OTLP over gRPC
-  - accepts the standard logs `Export` RPC
+  - accepts the standard `LogsService/Export`, `MetricsService/Export`, and `TraceService/Export` RPCs
 - `plugin`
   - loads an ingest plugin shared library
   - passive plugins receive bytes from the `ingest.listen` TCP listener
@@ -641,7 +641,7 @@ Enable TLS for OTLP ingest listeners.
 
 Behaviour:
 
-- with `ingest.protocol: otlp-http`, `ljd` accepts HTTPS on `/v1/logs`
+- with `ingest.protocol: otlp-http`, `ljd` accepts HTTPS on `/v1/logs`, `/v1/metrics`, and `/v1/traces`
 - with `ingest.protocol: otlp-grpc`, `ljd` accepts gRPC over TLS
 
 ### `ingest.ca-file`
