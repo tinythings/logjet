@@ -63,6 +63,7 @@ demo: devel
 	cargo build -p otlp-demo --bin traces-emitter
 	cargo build -p otlp-demo --bin traces-grpc-emitter
 	cargo build -p otlp-demo --bin multi-signal-emitter
+	cargo build -p otlp-demo --bin metrics-grpc-emitter
 	cargo build -p lj-syslog-ingest
 	cargo build -p lj-logcat-ingest
 	cargo build -p lj-stress-ingest

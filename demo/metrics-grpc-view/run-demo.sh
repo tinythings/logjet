@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET_DIR="$SCRIPT_DIR/../../target/debug"
 LJD="$TARGET_DIR/ljd"
-EMITTER="$TARGET_DIR/metrics-emitter"
+EMITTER="$TARGET_DIR/metrics-grpc-emitter"
 LJX="$TARGET_DIR/ljx"
 CONFIG="$SCRIPT_DIR/logjetd.conf"
 OUTPUT_DIR="$SCRIPT_DIR/logs"
