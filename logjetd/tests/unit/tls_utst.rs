@@ -1,6 +1,14 @@
 use super::{authority_host, load_client_config, load_ingest_server_config, load_server_config, parse_server_name};
 use crate::config::{IngestTlsConfig, TlsConfig};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+fn ensure_rustls_provider() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        rustls::crypto::ring::default_provider().install_default().expect("install rustls ring provider");
+    });
+}
 
 fn demo_cert_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("demo").join("remote-drain-tls").join("certs").join(name)
@@ -56,6 +64,7 @@ fn load_server_config_requires_cert_and_key() {
 
 #[test]
 fn load_server_config_requires_ca_when_client_certs_required() {
+    ensure_rustls_provider();
     let tls = TlsConfig {
         enable: true,
         ca_file: None,
