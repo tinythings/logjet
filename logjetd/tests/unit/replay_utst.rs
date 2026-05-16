@@ -1,6 +1,6 @@
 use super::{
-    BridgeState, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask, enqueue_export_task, parse_bridge_state, parse_content_length,
-    read_bridge_state, read_http_response, reconcile_bridge_state, signal_path_for_endpoint, write_bridge_state,
+    BridgeState, BridgeStats, CollectorEndpoint, CollectorTransport, EnqueueOutcome, ExportTask, enqueue_export_task, parse_bridge_state,
+    parse_content_length, read_bridge_state, read_http_response, reconcile_bridge_state, signal_path_for_endpoint, write_bridge_state,
 };
 use crate::config::{BackpressureMode, CollectorConfig, UpstreamMode};
 use crate::protocol::ReplayHello;
@@ -213,4 +213,55 @@ fn signal_path_for_endpoint_defaults_from_empty_path() {
     assert_eq!(signal_path_for_endpoint("", logjet::RecordType::Logs), "/v1/logs");
     assert_eq!(signal_path_for_endpoint("", logjet::RecordType::Metrics), "/v1/metrics");
     assert_eq!(signal_path_for_endpoint("", logjet::RecordType::Traces), "/v1/traces");
+}
+
+#[test]
+fn bridge_stats_tracks_records_and_drops_by_signal() {
+    let mut stats = BridgeStats::new();
+    assert_eq!(stats.records_read, 0);
+    assert_eq!(stats.drop_summary(), "drops=0");
+
+    stats.note_record(RecordType::Logs);
+    stats.note_record(RecordType::Metrics);
+    stats.note_record(RecordType::Traces);
+    assert_eq!(stats.records_read, 3);
+
+    stats.note_drop(RecordType::Logs);
+    stats.note_drop(RecordType::Metrics);
+    stats.note_drop(RecordType::Traces);
+    stats.note_drop(RecordType::Logs);
+    assert_eq!(stats.drops_logs, 2);
+    assert_eq!(stats.drops_metrics, 1);
+    assert_eq!(stats.drops_traces, 1);
+    assert_eq!(stats.drops_events, 0);
+}
+
+#[test]
+fn bridge_stats_should_log_every_1000_records() {
+    let mut stats = BridgeStats::new();
+    assert!(!stats.should_log());
+    for _ in 0..999 {
+        stats.note_record(RecordType::Logs);
+    }
+    assert!(!stats.should_log());
+    stats.note_record(RecordType::Logs);
+    assert!(stats.should_log());
+}
+
+#[test]
+fn bridge_stats_drop_summary_includes_only_nonzero_signals() {
+    let mut stats = BridgeStats::new();
+    stats.note_drop(RecordType::Metrics);
+    stats.note_drop(RecordType::Traces);
+    let summary = stats.drop_summary();
+    assert!(summary.contains("metrics_drops=1"));
+    assert!(summary.contains("traces_drops=1"));
+    assert!(!summary.contains("logs_drops"));
+    assert!(!summary.contains("events_drops"));
+}
+
+#[test]
+fn bridge_stats_drop_summary_reports_zero_when_no_drops() {
+    let stats = BridgeStats::new();
+    assert_eq!(stats.drop_summary(), "drops=0");
 }
