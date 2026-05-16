@@ -9,9 +9,12 @@ use std::path::{Path, PathBuf};
 use chrono::{TimeZone, Utc};
 use logjet::{LogjetReader, OwnedRecord, RecordType};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::AnyValue;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::logs::v1::LogRecord;
+use opentelemetry_proto::tonic::metrics::v1::metric::Data as MetricData;
 use prost::Message;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
@@ -88,45 +91,18 @@ pub(crate) fn export_ndjson_objects(record: &OwnedRecord, fields: &[String]) -> 
 }
 
 pub(crate) fn export_ndjson_objects_with_preview(record: &OwnedRecord, fields: &[String], preview_bytes: Option<usize>) -> Vec<JsonValue> {
-    if record.record_type != RecordType::Logs {
-        let mut obj = JsonMap::new();
-        obj.insert("record_type".to_string(), JsonValue::String(record_kind_label(record.record_type).to_string()));
-        obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.ts_unix_ns)));
-        obj.insert("payload".to_string(), JsonValue::String(truncate_preview(&String::from_utf8_lossy(&record.payload), preview_bytes)));
-        return vec![select_json_fields(obj, fields)];
-    }
-
-    let Ok(batch) = ExportLogsServiceRequest::decode(record.payload.as_slice()) else {
-        let mut obj = JsonMap::new();
-        obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.ts_unix_ns)));
-        obj.insert("payload".to_string(), JsonValue::String(truncate_preview(&String::from_utf8_lossy(&record.payload), preview_bytes)));
-        return vec![select_json_fields(obj, fields)];
-    };
-
-    let mut out = Vec::new();
-    for resource_logs in &batch.resource_logs {
-        let resource_attrs = resource_logs.resource.as_ref().map(|r| &r.attributes).map(Vec::as_slice).unwrap_or(&[]);
-        for scope_logs in &resource_logs.scope_logs {
-            let scope_attrs = scope_logs.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]);
-            for log_record in &scope_logs.log_records {
-                let mut obj = JsonMap::new();
-                if let Some(scope) = &scope_logs.scope {
-                    if !scope.name.is_empty() {
-                        obj.insert("scope_name".to_string(), JsonValue::String(scope.name.clone()));
-                    }
-                    if !scope.version.is_empty() {
-                        obj.insert("scope_version".to_string(), JsonValue::String(scope.version.clone()));
-                    }
-                }
-                insert_otlp_log_fields_with_preview(&mut obj, log_record, record.ts_unix_ns, preview_bytes);
-                flatten_otlp_attrs_into_json(&mut obj, resource_attrs, preview_bytes);
-                flatten_otlp_attrs_into_json(&mut obj, scope_attrs, preview_bytes);
-                flatten_otlp_attrs_into_json(&mut obj, &log_record.attributes, preview_bytes);
-                out.push(select_json_fields(obj, fields));
-            }
+    match record.record_type {
+        RecordType::Logs => export_logs_ndjson(record, fields, preview_bytes),
+        RecordType::Metrics => export_metrics_ndjson(record, fields, preview_bytes),
+        RecordType::Traces => export_traces_ndjson(record, fields, preview_bytes),
+        _ => {
+            let mut obj = JsonMap::new();
+            obj.insert("record_type".to_string(), JsonValue::String(record_kind_label(record.record_type).to_string()));
+            obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.ts_unix_ns)));
+            obj.insert("payload".to_string(), JsonValue::String(truncate_preview(&String::from_utf8_lossy(&record.payload), preview_bytes)));
+            vec![select_json_fields(obj, fields)]
         }
     }
-    out
 }
 
 fn insert_otlp_log_fields_with_preview(
@@ -208,8 +184,296 @@ fn select_json_fields(mut obj: JsonMap<String, JsonValue>, fields: &[String]) ->
     JsonValue::Object(selected)
 }
 
-fn flatten_otlp_attrs_into_json(
-    target: &mut JsonMap<String, JsonValue>, attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue], preview_bytes: Option<usize>,
+fn export_logs_ndjson(record: &OwnedRecord, fields: &[String], preview_bytes: Option<usize>) -> Vec<JsonValue> {
+    let Ok(batch) = ExportLogsServiceRequest::decode(record.payload.as_slice()) else {
+        let mut obj = JsonMap::new();
+        obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.ts_unix_ns)));
+        obj.insert("payload".to_string(), JsonValue::String(truncate_preview(&String::from_utf8_lossy(&record.payload), preview_bytes)));
+        return vec![select_json_fields(obj, fields)];
+    };
+
+    let mut out = Vec::new();
+    for resource_logs in &batch.resource_logs {
+        let resource_attrs = resource_logs.resource.as_ref().map(|r| &r.attributes).map(Vec::as_slice).unwrap_or(&[]);
+        for scope_logs in &resource_logs.scope_logs {
+            let scope_attrs = scope_logs.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]);
+            for log_record in &scope_logs.log_records {
+                let mut obj = JsonMap::new();
+                if let Some(scope) = &scope_logs.scope {
+                    if !scope.name.is_empty() {
+                        obj.insert("scope_name".to_string(), JsonValue::String(scope.name.clone()));
+                    }
+                    if !scope.version.is_empty() {
+                        obj.insert("scope_version".to_string(), JsonValue::String(scope.version.clone()));
+                    }
+                }
+                insert_otlp_log_fields_with_preview(&mut obj, log_record, record.ts_unix_ns, preview_bytes);
+                flatten_otlp_attrs_into_json(&mut obj, resource_attrs, preview_bytes);
+                flatten_otlp_attrs_into_json(&mut obj, scope_attrs, preview_bytes);
+                flatten_otlp_attrs_into_json(&mut obj, &log_record.attributes, preview_bytes);
+                out.push(select_json_fields(obj, fields));
+            }
+        }
+    }
+    out
+}
+
+fn export_metrics_ndjson(record: &OwnedRecord, fields: &[String], preview_bytes: Option<usize>) -> Vec<JsonValue> {
+    let Ok(batch) = ExportMetricsServiceRequest::decode(record.payload.as_slice()) else {
+        let mut obj = JsonMap::new();
+        obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.ts_unix_ns)));
+        obj.insert("payload".to_string(), JsonValue::String(truncate_preview(&String::from_utf8_lossy(&record.payload), preview_bytes)));
+        return vec![select_json_fields(obj, fields)];
+    };
+
+    let mut out = Vec::new();
+    for resource_metrics in &batch.resource_metrics {
+        let resource_attrs = resource_metrics.resource.as_ref().map(|r| &r.attributes).map(Vec::as_slice).unwrap_or(&[]);
+        for scope_metrics in &resource_metrics.scope_metrics {
+            let scope_attrs = scope_metrics.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]);
+            let scope_name = scope_metrics.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+            let scope_version = scope_metrics.scope.as_ref().map(|s| s.version.clone()).unwrap_or_default();
+            for metric in &scope_metrics.metrics {
+                let metric_name = metric.name.clone();
+                let metric_description = metric.description.clone();
+                let metric_unit = metric.unit.clone();
+
+                match &metric.data {
+                    Some(MetricData::Gauge(gauge)) => {
+                        for dp in &gauge.data_points {
+                            let mut obj = JsonMap::new();
+                            obj.insert("metric_name".to_string(), JsonValue::String(metric_name.clone()));
+                            obj.insert("metric_description".to_string(), JsonValue::String(metric_description.clone()));
+                            obj.insert("metric_unit".to_string(), JsonValue::String(metric_unit.clone()));
+                            obj.insert("metric_type".to_string(), JsonValue::String("Gauge".to_string()));
+                            if dp.time_unix_nano > 0 {
+                                obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(dp.time_unix_nano)));
+                            }
+                            if dp.start_time_unix_nano > 0 {
+                                obj.insert("start_time".to_string(), JsonValue::String(format_timestamp(dp.start_time_unix_nano)));
+                            }
+                            if let Some(ref value) = dp.value {
+                                obj.insert("value".to_string(), data_point_value_to_json(value));
+                            }
+                            flatten_otlp_attrs_into_json(&mut obj, resource_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, scope_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, &dp.attributes, preview_bytes);
+                            if !scope_name.is_empty() {
+                                obj.insert("scope_name".to_string(), JsonValue::String(scope_name.clone()));
+                            }
+                            if !scope_version.is_empty() {
+                                obj.insert("scope_version".to_string(), JsonValue::String(scope_version.clone()));
+                            }
+                            out.push(select_json_fields(obj, fields));
+                        }
+                    }
+                    Some(MetricData::Sum(sum)) => {
+                        for dp in &sum.data_points {
+                            let mut obj = JsonMap::new();
+                            obj.insert("metric_name".to_string(), JsonValue::String(metric_name.clone()));
+                            obj.insert("metric_description".to_string(), JsonValue::String(metric_description.clone()));
+                            obj.insert("metric_unit".to_string(), JsonValue::String(metric_unit.clone()));
+                            obj.insert("metric_type".to_string(), JsonValue::String("Sum".to_string()));
+                            if dp.time_unix_nano > 0 {
+                                obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(dp.time_unix_nano)));
+                            }
+                            if dp.start_time_unix_nano > 0 {
+                                obj.insert("start_time".to_string(), JsonValue::String(format_timestamp(dp.start_time_unix_nano)));
+                            }
+                            if let Some(ref value) = dp.value {
+                                obj.insert("value".to_string(), data_point_value_to_json(value));
+                            }
+                            obj.insert("is_monotonic".to_string(), JsonValue::Bool(sum.is_monotonic));
+                            obj.insert("aggregation_temporality".to_string(), JsonValue::Number(sum.aggregation_temporality.into()));
+                            flatten_otlp_attrs_into_json(&mut obj, resource_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, scope_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, &dp.attributes, preview_bytes);
+                            if !scope_name.is_empty() {
+                                obj.insert("scope_name".to_string(), JsonValue::String(scope_name.clone()));
+                            }
+                            if !scope_version.is_empty() {
+                                obj.insert("scope_version".to_string(), JsonValue::String(scope_version.clone()));
+                            }
+                            out.push(select_json_fields(obj, fields));
+                        }
+                    }
+                    Some(MetricData::Histogram(hist)) => {
+                        for dp in &hist.data_points {
+                            let mut obj = JsonMap::new();
+                            obj.insert("metric_name".to_string(), JsonValue::String(metric_name.clone()));
+                            obj.insert("metric_description".to_string(), JsonValue::String(metric_description.clone()));
+                            obj.insert("metric_unit".to_string(), JsonValue::String(metric_unit.clone()));
+                            obj.insert("metric_type".to_string(), JsonValue::String("Histogram".to_string()));
+                            if dp.time_unix_nano > 0 {
+                                obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(dp.time_unix_nano)));
+                            }
+                            if dp.start_time_unix_nano > 0 {
+                                obj.insert("start_time".to_string(), JsonValue::String(format_timestamp(dp.start_time_unix_nano)));
+                            }
+                            obj.insert("count".to_string(), JsonValue::Number(dp.count.into()));
+                            if let Some(sum) = dp.sum
+                                && let Some(num) = serde_json::Number::from_f64(sum)
+                            {
+                                obj.insert("sum".to_string(), JsonValue::Number(num));
+                            }
+                            obj.insert("aggregation_temporality".to_string(), JsonValue::Number(hist.aggregation_temporality.into()));
+                            flatten_otlp_attrs_into_json(&mut obj, resource_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, scope_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, &dp.attributes, preview_bytes);
+                            if !scope_name.is_empty() {
+                                obj.insert("scope_name".to_string(), JsonValue::String(scope_name.clone()));
+                            }
+                            if !scope_version.is_empty() {
+                                obj.insert("scope_version".to_string(), JsonValue::String(scope_version.clone()));
+                            }
+                            out.push(select_json_fields(obj, fields));
+                        }
+                    }
+                    Some(MetricData::ExponentialHistogram(ehist)) => {
+                        for dp in &ehist.data_points {
+                            let mut obj = JsonMap::new();
+                            obj.insert("metric_name".to_string(), JsonValue::String(metric_name.clone()));
+                            obj.insert("metric_description".to_string(), JsonValue::String(metric_description.clone()));
+                            obj.insert("metric_unit".to_string(), JsonValue::String(metric_unit.clone()));
+                            obj.insert("metric_type".to_string(), JsonValue::String("ExponentialHistogram".to_string()));
+                            if dp.time_unix_nano > 0 {
+                                obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(dp.time_unix_nano)));
+                            }
+                            if dp.start_time_unix_nano > 0 {
+                                obj.insert("start_time".to_string(), JsonValue::String(format_timestamp(dp.start_time_unix_nano)));
+                            }
+                            obj.insert("count".to_string(), JsonValue::Number(dp.count.into()));
+                            if let Some(sum) = dp.sum
+                                && let Some(num) = serde_json::Number::from_f64(sum)
+                            {
+                                obj.insert("sum".to_string(), JsonValue::Number(num));
+                            }
+                            obj.insert("aggregation_temporality".to_string(), JsonValue::Number(ehist.aggregation_temporality.into()));
+                            flatten_otlp_attrs_into_json(&mut obj, resource_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, scope_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, &dp.attributes, preview_bytes);
+                            if !scope_name.is_empty() {
+                                obj.insert("scope_name".to_string(), JsonValue::String(scope_name.clone()));
+                            }
+                            if !scope_version.is_empty() {
+                                obj.insert("scope_version".to_string(), JsonValue::String(scope_version.clone()));
+                            }
+                            out.push(select_json_fields(obj, fields));
+                        }
+                    }
+                    Some(MetricData::Summary(summary)) => {
+                        for dp in &summary.data_points {
+                            let mut obj = JsonMap::new();
+                            obj.insert("metric_name".to_string(), JsonValue::String(metric_name.clone()));
+                            obj.insert("metric_description".to_string(), JsonValue::String(metric_description.clone()));
+                            obj.insert("metric_unit".to_string(), JsonValue::String(metric_unit.clone()));
+                            obj.insert("metric_type".to_string(), JsonValue::String("Summary".to_string()));
+                            if dp.time_unix_nano > 0 {
+                                obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(dp.time_unix_nano)));
+                            }
+                            if dp.start_time_unix_nano > 0 {
+                                obj.insert("start_time".to_string(), JsonValue::String(format_timestamp(dp.start_time_unix_nano)));
+                            }
+                            obj.insert("count".to_string(), JsonValue::Number(dp.count.into()));
+                            if let Some(num) = serde_json::Number::from_f64(dp.sum) {
+                                obj.insert("sum".to_string(), JsonValue::Number(num));
+                            }
+                            flatten_otlp_attrs_into_json(&mut obj, resource_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, scope_attrs, preview_bytes);
+                            flatten_otlp_attrs_into_json(&mut obj, &dp.attributes, preview_bytes);
+                            if !scope_name.is_empty() {
+                                obj.insert("scope_name".to_string(), JsonValue::String(scope_name.clone()));
+                            }
+                            if !scope_version.is_empty() {
+                                obj.insert("scope_version".to_string(), JsonValue::String(scope_version.clone()));
+                            }
+                            out.push(select_json_fields(obj, fields));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
+}
+
+fn export_traces_ndjson(record: &OwnedRecord, fields: &[String], preview_bytes: Option<usize>) -> Vec<JsonValue> {
+    let Ok(batch) = ExportTraceServiceRequest::decode(record.payload.as_slice()) else {
+        let mut obj = JsonMap::new();
+        obj.insert("timestamp".to_string(), JsonValue::String(format_timestamp(record.ts_unix_ns)));
+        obj.insert("payload".to_string(), JsonValue::String(truncate_preview(&String::from_utf8_lossy(&record.payload), preview_bytes)));
+        return vec![select_json_fields(obj, fields)];
+    };
+
+    let mut out = Vec::new();
+    for resource_spans in &batch.resource_spans {
+        let resource_attrs = resource_spans.resource.as_ref().map(|r| &r.attributes).map(Vec::as_slice).unwrap_or(&[]);
+        for scope_spans in &resource_spans.scope_spans {
+            let scope_attrs = scope_spans.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]);
+            let scope_name = scope_spans.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+            let scope_version = scope_spans.scope.as_ref().map(|s| s.version.clone()).unwrap_or_default();
+            for span in &scope_spans.spans {
+                let mut obj = JsonMap::new();
+                obj.insert("trace_id".to_string(), JsonValue::String(hex_encode(&span.trace_id)));
+                obj.insert("span_id".to_string(), JsonValue::String(hex_encode(&span.span_id)));
+                if !span.parent_span_id.is_empty() {
+                    obj.insert("parent_span_id".to_string(), JsonValue::String(hex_encode(&span.parent_span_id)));
+                }
+                obj.insert("name".to_string(), JsonValue::String(span.name.clone()));
+                obj.insert("kind".to_string(), JsonValue::String(format_span_kind(span.kind)));
+                if span.start_time_unix_nano > 0 {
+                    obj.insert("start_time".to_string(), JsonValue::String(format_timestamp(span.start_time_unix_nano)));
+                }
+                if span.end_time_unix_nano > 0 {
+                    obj.insert("end_time".to_string(), JsonValue::String(format_timestamp(span.end_time_unix_nano)));
+                }
+                if span.end_time_unix_nano > span.start_time_unix_nano {
+                    obj.insert("duration_ns".to_string(), JsonValue::Number((span.end_time_unix_nano - span.start_time_unix_nano).into()));
+                }
+                if let Some(status) = &span.status {
+                    obj.insert("status_code".to_string(), JsonValue::Number(status.code.into()));
+                    if !status.message.is_empty() {
+                        obj.insert("status_message".to_string(), JsonValue::String(status.message.clone()));
+                    }
+                }
+                if !scope_name.is_empty() {
+                    obj.insert("scope_name".to_string(), JsonValue::String(scope_name.clone()));
+                }
+                if !scope_version.is_empty() {
+                    obj.insert("scope_version".to_string(), JsonValue::String(scope_version.clone()));
+                }
+                flatten_otlp_attrs_into_json(&mut obj, resource_attrs, preview_bytes);
+                flatten_otlp_attrs_into_json(&mut obj, scope_attrs, preview_bytes);
+                flatten_otlp_attrs_into_json(&mut obj, &span.attributes, preview_bytes);
+                out.push(select_json_fields(obj, fields));
+            }
+        }
+    }
+    out
+}
+
+fn format_span_kind(kind: i32) -> String {
+    match kind {
+        1 => "Internal".to_string(),
+        2 => "Server".to_string(),
+        3 => "Client".to_string(),
+        4 => "Producer".to_string(),
+        5 => "Consumer".to_string(),
+        _ => format!("Unknown({kind})"),
+    }
+}
+
+fn data_point_value_to_json(value: &opentelemetry_proto::tonic::metrics::v1::number_data_point::Value) -> JsonValue {
+    match value {
+        opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(v) => {
+            serde_json::Number::from_f64(*v).map(JsonValue::Number).unwrap_or(JsonValue::Null)
+        }
+        opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(v) => JsonValue::Number((*v).into()),
+    }
+}
+
+fn flatten_otlp_attrs_into_json(    target: &mut JsonMap<String, JsonValue>, attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue], preview_bytes: Option<usize>,
 ) {
     for attr in attrs {
         let key = attr.key.replace('.', "_");
@@ -283,6 +547,10 @@ fn format_timestamp(ts_unix_ns: u64) -> String {
         None => ts_unix_ns.to_string(),
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/commands/export_ut.rs"]
+mod export_ut;
 
 #[cfg(test)]
 #[path = "../../tests/unit/commands/top_level_query_ut.rs"]
