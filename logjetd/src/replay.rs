@@ -340,7 +340,7 @@ impl BridgeStats {
     }
 
     fn should_log(&self) -> bool {
-        self.records_read.is_multiple_of(1_000)
+        self.records_read > 0 && self.records_read.is_multiple_of(1_000)
     }
 
     fn drop_summary(&self) -> String {
