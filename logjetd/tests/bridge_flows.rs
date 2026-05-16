@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    ChildGuard, MockCollector, MockGrpcCollector, ReservedPort, TestDir, connect_replay_client, free_port, ljd_command, post_otlp_http,
+    ChildGuard, MockCollector, MockGrpcCollector, ReservedPort, TestDir, connect_replay_client, ensure_rustls_provider, free_port, ljd_command, post_otlp_http,
     read_replay_message, replay_messages, reserve_port, wait_for_tcp, wait_until, write_fake_grpc_tls_files,
 };
 
@@ -209,6 +209,7 @@ fn bridge_keep_fans_out_to_http_and_grpc() -> io::Result<()> {
 
 #[test]
 fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
+    ensure_rustls_provider();
     let dir = TestDir::new("bridge-keep-grpcs")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
@@ -256,6 +257,7 @@ fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
 
 #[test]
 fn bridge_keep_forwards_backlog_over_grpcs_mtls() -> io::Result<()> {
+    ensure_rustls_provider();
     let dir = TestDir::new("bridge-keep-grpcs-mtls")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;

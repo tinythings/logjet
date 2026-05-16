@@ -27,6 +27,8 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    rustls::crypto::ring::default_provider().install_default().map_err(|_| "failed to install default Rustls crypto provider")?;
+
     let mut command = cli::build_cli();
     let mut matches = command.get_matches_mut();
     let cli = Cli::from_arg_matches_mut(&mut matches)?;
