@@ -15,7 +15,6 @@ use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, Key
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs, SeverityNumber};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
-use rustls;
 use rcgen::{BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, SanType};
 
 pub fn ensure_rustls_provider() {
