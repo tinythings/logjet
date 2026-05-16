@@ -31,6 +31,10 @@ pub const LJX_EXPORT_CAP_RECORD_METRICS: u64 = 1 << 2;
 pub const LJX_EXPORT_CAP_RECORD_TRACES: u64 = 1 << 3;
 /// Plugin understands OTLP `ExportLogsServiceRequest` payloads.
 pub const LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_LOGS_REQUEST: u64 = 1 << 4;
+/// Plugin understands OTLP `ExportMetricsServiceRequest` payloads.
+pub const LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_METRICS_REQUEST: u64 = 1 << 5;
+/// Plugin understands OTLP `ExportTraceServiceRequest` payloads.
+pub const LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_TRACE_REQUEST: u64 = 1 << 6;
 
 /// Record contains logs.
 pub const LJX_RECORD_TYPE_LOGS: u32 = 1;
@@ -45,6 +49,10 @@ pub const LJX_RECORD_TYPE_EVENTS: u32 = 4;
 pub const LJX_PAYLOAD_KIND_OPAQUE: u32 = 0;
 /// Payload is an OTLP `ExportLogsServiceRequest` protobuf.
 pub const LJX_PAYLOAD_KIND_OTLP_EXPORT_LOGS_REQUEST: u32 = 1;
+/// Payload is an OTLP `ExportMetricsServiceRequest` protobuf.
+pub const LJX_PAYLOAD_KIND_OTLP_EXPORT_METRICS_REQUEST: u32 = 2;
+/// Payload is an OTLP `ExportTraceServiceRequest` protobuf.
+pub const LJX_PAYLOAD_KIND_OTLP_EXPORT_TRACE_REQUEST: u32 = 3;
 
 /// Pointer/length string view used by the exporter ABI.
 #[repr(C)]

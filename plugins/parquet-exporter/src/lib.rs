@@ -3,6 +3,10 @@
 //! This crate implements the stable `liblogjet::export` C ABI directly.
 //! The host streams raw logjet records into `write_record`, and the plugin
 //! emits a Parquet file through the host-provided write/flush callbacks.
+//!
+//! Supports all three OTLP signal types: logs, metrics, traces.
+//! Uses a single fixed-column Arrow schema that covers every field from every
+//! signal; when a signal does not use a column it is simply null everywhere.
 
 use std::ffi::{c_char, c_void};
 use std::io::{self, Write};
@@ -12,14 +16,19 @@ use arrow_array::builder::{Int32Builder, StringBuilder, UInt32Builder, UInt64Bui
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use liblogjet::export::{
-    LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_LOGS_REQUEST, LJX_EXPORT_CAP_RECORD_LOGS, LJX_EXPORT_CAP_STREAMING, LJX_EXPORT_STATUS_BAD_ARG,
-    LJX_EXPORT_STATUS_ERROR, LJX_EXPORT_STATUS_IO, LJX_EXPORT_STATUS_OK, LJX_EXPORT_STATUS_UNSUPPORTED, LJX_EXPORTER_ABI_MAJOR,
-    LJX_EXPORTER_ABI_MINOR, LJX_PAYLOAD_KIND_OTLP_EXPORT_LOGS_REQUEST, LJX_RECORD_TYPE_LOGS, LjxAbiBytes, LjxAbiString, LjxExportHostV1,
-    LjxExportInitV1, LjxExportRecordV1, LjxExporterCtx, LjxExporterDescriptorV1,
+    LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_LOGS_REQUEST, LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_METRICS_REQUEST,
+    LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_TRACE_REQUEST, LJX_EXPORT_CAP_RECORD_LOGS, LJX_EXPORT_CAP_RECORD_METRICS, LJX_EXPORT_CAP_RECORD_TRACES,
+    LJX_EXPORT_CAP_STREAMING, LJX_EXPORT_STATUS_BAD_ARG, LJX_EXPORT_STATUS_ERROR, LJX_EXPORT_STATUS_IO, LJX_EXPORT_STATUS_OK,
+    LJX_EXPORT_STATUS_UNSUPPORTED, LJX_EXPORTER_ABI_MAJOR, LJX_EXPORTER_ABI_MINOR, LJX_PAYLOAD_KIND_OTLP_EXPORT_LOGS_REQUEST,
+    LJX_PAYLOAD_KIND_OTLP_EXPORT_METRICS_REQUEST, LJX_PAYLOAD_KIND_OTLP_EXPORT_TRACE_REQUEST, LJX_RECORD_TYPE_LOGS, LJX_RECORD_TYPE_METRICS,
+    LJX_RECORD_TYPE_TRACES, LjxAbiBytes, LjxAbiString, LjxExportHostV1, LjxExportInitV1, LjxExportRecordV1, LjxExporterCtx, LjxExporterDescriptorV1,
 };
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
+use opentelemetry_proto::tonic::metrics::v1::metric::Data as MetricData;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -39,7 +48,13 @@ static PARQUET_EXPORTER_DESCRIPTOR: ExporterDescriptor = ExporterDescriptor(LjxE
     abi_major: LJX_EXPORTER_ABI_MAJOR,
     abi_minor: LJX_EXPORTER_ABI_MINOR,
     plugin_api_version: PLUGIN_API_VERSION,
-    capabilities: LJX_EXPORT_CAP_STREAMING | LJX_EXPORT_CAP_RECORD_LOGS | LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_LOGS_REQUEST,
+    capabilities: LJX_EXPORT_CAP_STREAMING
+        | LJX_EXPORT_CAP_RECORD_LOGS
+        | LJX_EXPORT_CAP_RECORD_METRICS
+        | LJX_EXPORT_CAP_RECORD_TRACES
+        | LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_LOGS_REQUEST
+        | LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_METRICS_REQUEST
+        | LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_TRACE_REQUEST,
     format_name: LjxAbiString::from_static("parquet"),
     display_name: LjxAbiString::from_static("Parquet"),
     default_extension: LjxAbiString::from_static("parquet"),
@@ -120,29 +135,41 @@ impl ParquetExporter {
         if record.struct_size < std::mem::size_of::<LjxExportRecordV1>() as u32 {
             return self.fail_status(
                 LJX_EXPORT_STATUS_BAD_ARG,
-                format!("record struct_size {} is smaller than host ABI expects {}", record.struct_size, std::mem::size_of::<LjxExportRecordV1>()),
+                format!(
+                    "record struct_size {} is smaller than host ABI expects {}",
+                    record.struct_size,
+                    std::mem::size_of::<LjxExportRecordV1>()
+                ),
             );
         }
         if record.payload.ptr.is_null() && record.payload.len != 0 {
             return self.fail_status(LJX_EXPORT_STATUS_BAD_ARG, "record payload pointer is null but len is non-zero");
-        }
-        if record.record_type != LJX_RECORD_TYPE_LOGS {
-            return self.fail_status(
-                LJX_EXPORT_STATUS_UNSUPPORTED,
-                format!("unsupported record type {}; parquet exporter currently supports logs only", record.record_type),
-            );
-        }
-        if record.payload_kind != LJX_PAYLOAD_KIND_OTLP_EXPORT_LOGS_REQUEST {
-            return self.fail_status(
-                LJX_EXPORT_STATUS_UNSUPPORTED,
-                format!("unsupported payload kind {}; parquet exporter currently supports OTLP ExportLogsServiceRequest only", record.payload_kind),
-            );
         }
 
         let payload = match abi_bytes(record.payload) {
             Ok(payload) => payload,
             Err(err) => return self.fail_status(LJX_EXPORT_STATUS_BAD_ARG, err),
         };
+
+        match record.record_type {
+            LJX_RECORD_TYPE_LOGS => self.write_logs_record(record, payload),
+            LJX_RECORD_TYPE_METRICS => self.write_metrics_record(record, payload),
+            LJX_RECORD_TYPE_TRACES => self.write_traces_record(record, payload),
+            other => self.fail_status(LJX_EXPORT_STATUS_UNSUPPORTED, format!("unsupported record type {other}")),
+        }
+    }
+
+    fn write_logs_record(&mut self, record: &LjxExportRecordV1, payload: &[u8]) -> i32 {
+        if record.payload_kind != LJX_PAYLOAD_KIND_OTLP_EXPORT_LOGS_REQUEST {
+            return self.fail_status(
+                LJX_EXPORT_STATUS_UNSUPPORTED,
+                format!(
+                    "unsupported payload kind {}; parquet exporter currently supports OTLP ExportLogsServiceRequest only for logs",
+                    record.payload_kind
+                ),
+            );
+        }
+
         let request = match ExportLogsServiceRequest::decode(payload) {
             Ok(request) => request,
             Err(err) => return self.fail_status(LJX_EXPORT_STATUS_ERROR, format!("failed to decode OTLP logs payload at seq {}: {err}", record.seq)),
@@ -160,22 +187,41 @@ impl ParquetExporter {
                 for log_record in &scope_logs.log_records {
                     let row = ParquetRow {
                         sequence: record.seq,
-                        timestamp_unix_ns: record.timestamp_unix_ns,
+                        timestamp_unix_ns: Some(record.timestamp_unix_ns),
+                        signal_type: "logs".to_string(),
                         observed_timestamp_unix_ns: zero_is_none(log_record.observed_time_unix_nano),
                         trace_id: bytes_to_lower_hex(&log_record.trace_id),
                         span_id: bytes_to_lower_hex(&log_record.span_id),
                         trace_flags: zero_is_none_u32(log_record.flags),
                         severity_number: (log_record.severity_number != 0).then_some(log_record.severity_number),
                         severity_text: non_empty_owned(&log_record.severity_text),
-                        body_kind: body_kind(log_record.body.as_ref()),
+                        body_kind: Some(body_kind(log_record.body.as_ref())),
                         body_string: body_string(log_record.body.as_ref()),
                         body_json: body_json(log_record.body.as_ref()),
+                        metric_name: None,
+                        metric_description: None,
+                        metric_unit: None,
+                        metric_type: None,
+                        metric_value_number: None,
+                        metric_value_count: None,
+                        metric_value_sum: None,
+                        is_monotonic: None,
+                        aggregation_temporality: None,
+                        span_name: None,
+                        span_kind: None,
+                        parent_span_id: None,
+                        start_time_unix_ns: None,
+                        end_time_unix_ns: None,
+                        duration_ns: None,
+                        status_code: None,
+                        status_message: None,
                         service_name: service_name.clone(),
                         scope_name: scope_name.map(str::to_owned),
                         scope_version: scope_version.map(str::to_owned),
                         resource_attributes_json: resource_attributes_json.clone(),
                         scope_attributes_json: scope_attributes_json.clone(),
                         log_attributes_json: attrs_to_json(&log_record.attributes),
+                        span_attributes_json: None,
                         event_name: non_empty_owned(&log_record.event_name),
                     };
                     self.rows.push(row);
@@ -183,6 +229,239 @@ impl ParquetExporter {
             }
         }
 
+        self.maybe_flush()
+    }
+
+    fn write_metrics_record(&mut self, record: &LjxExportRecordV1, payload: &[u8]) -> i32 {
+        if record.payload_kind != LJX_PAYLOAD_KIND_OTLP_EXPORT_METRICS_REQUEST {
+            return self.fail_status(
+                LJX_EXPORT_STATUS_UNSUPPORTED,
+                format!(
+                    "unsupported payload kind {}; parquet exporter currently supports OTLP ExportMetricsServiceRequest only for metrics",
+                    record.payload_kind
+                ),
+            );
+        }
+
+        let request = match ExportMetricsServiceRequest::decode(payload) {
+            Ok(request) => request,
+            Err(err) => {
+                return self.fail_status(LJX_EXPORT_STATUS_ERROR, format!("failed to decode OTLP metrics payload at seq {}: {err}", record.seq))
+            }
+        };
+
+        for resource_metrics in &request.resource_metrics {
+            let resource_attrs = resource_metrics.resource.as_ref().map(|resource| resource.attributes.as_slice()).unwrap_or(&[]);
+            let service_name = find_attr_string(resource_attrs, "service.name");
+            let resource_attributes_json = attrs_to_json(resource_attrs);
+            for scope_metrics in &resource_metrics.scope_metrics {
+                let scope = scope_metrics.scope.as_ref();
+                let scope_name = scope.and_then(|scope| non_empty(scope.name.as_str()));
+                let scope_version = scope.and_then(|scope| non_empty(scope.version.as_str()));
+                let scope_attributes_json = scope.and_then(|scope| attrs_to_json(scope.attributes.as_slice()));
+
+                for metric in &scope_metrics.metrics {
+                    let metric_name = non_empty_owned(metric.name.as_str());
+                    let metric_description = non_empty_owned(metric.description.as_str());
+                    let metric_unit = non_empty_owned(metric.unit.as_str());
+
+                    if let Some(ref data) = metric.data {
+                        match data {
+                            MetricData::Gauge(gauge) => {
+                                for dp in &gauge.data_points {
+                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Gauge");
+                                    row.metric_value_number = dp.value.as_ref().and_then(number_data_point_value_f64);
+                                    row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
+                                    row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
+                                    row.scope_attributes_json = attrs_to_json(&dp.attributes);
+                                    self.rows.push(row);
+                                }
+                            }
+                            MetricData::Sum(sum) => {
+                                for dp in &sum.data_points {
+                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Sum");
+                                    row.metric_value_number = dp.value.as_ref().and_then(number_data_point_value_f64);
+                                    row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
+                                    row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
+                                    row.is_monotonic = Some(sum.is_monotonic);
+                                    row.aggregation_temporality = Some(sum.aggregation_temporality);
+                                    row.scope_attributes_json = attrs_to_json(&dp.attributes);
+                                    self.rows.push(row);
+                                }
+                            }
+                            MetricData::Histogram(hist) => {
+                                for dp in &hist.data_points {
+                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Histogram");
+                                    row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
+                                    row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
+                                    row.metric_value_count = Some(dp.count);
+                                    row.metric_value_sum = dp.sum;
+                                    row.aggregation_temporality = Some(hist.aggregation_temporality);
+                                    row.scope_attributes_json = attrs_to_json(&dp.attributes);
+                                    self.rows.push(row);
+                                }
+                            }
+                            MetricData::ExponentialHistogram(ehist) => {
+                                for dp in &ehist.data_points {
+                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "ExponentialHistogram");
+                                    row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
+                                    row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
+                                    row.metric_value_count = Some(dp.count);
+                                    row.metric_value_sum = dp.sum;
+                                    row.aggregation_temporality = Some(ehist.aggregation_temporality);
+                                    row.scope_attributes_json = attrs_to_json(&dp.attributes);
+                                    self.rows.push(row);
+                                }
+                            }
+                            MetricData::Summary(summary) => {
+                                for dp in &summary.data_points {
+                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Summary");
+                                    row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
+                                    row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
+                                    row.metric_value_count = Some(dp.count);
+                                    row.metric_value_sum = Some(dp.sum);
+                                    row.scope_attributes_json = attrs_to_json(&dp.attributes);
+                                    self.rows.push(row);
+                                }
+                            }
+                        }
+                    } else {
+                        // Metric with no data: emit one row with metadata only
+                        let row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Unknown");
+                        self.rows.push(row);
+                    }
+                }
+            }
+        }
+
+        self.maybe_flush()
+    }
+
+    fn write_traces_record(&mut self, record: &LjxExportRecordV1, payload: &[u8]) -> i32 {
+        if record.payload_kind != LJX_PAYLOAD_KIND_OTLP_EXPORT_TRACE_REQUEST {
+            return self.fail_status(
+                LJX_EXPORT_STATUS_UNSUPPORTED,
+                format!(
+                    "unsupported payload kind {}; parquet exporter currently supports OTLP ExportTraceServiceRequest only for traces",
+                    record.payload_kind
+                ),
+            );
+        }
+
+        let request = match ExportTraceServiceRequest::decode(payload) {
+            Ok(request) => request,
+            Err(err) => {
+                return self.fail_status(LJX_EXPORT_STATUS_ERROR, format!("failed to decode OTLP traces payload at seq {}: {err}", record.seq))
+            }
+        };
+
+        for resource_spans in &request.resource_spans {
+            let resource_attrs = resource_spans.resource.as_ref().map(|resource| resource.attributes.as_slice()).unwrap_or(&[]);
+            let service_name = find_attr_string(resource_attrs, "service.name");
+            let resource_attributes_json = attrs_to_json(resource_attrs);
+            for scope_spans in &resource_spans.scope_spans {
+                let scope = scope_spans.scope.as_ref();
+                let scope_name = scope.and_then(|scope| non_empty(scope.name.as_str()));
+                let scope_version = scope.and_then(|scope| non_empty(scope.version.as_str()));
+                let scope_attributes_json = scope.and_then(|scope| attrs_to_json(scope.attributes.as_slice()));
+
+                for span in &scope_spans.spans {
+                    let duration_ns = span.end_time_unix_nano.saturating_sub(span.start_time_unix_nano);
+                    let row = ParquetRow {
+                        sequence: record.seq,
+                        timestamp_unix_ns: Some(record.timestamp_unix_ns),
+                        signal_type: "traces".to_string(),
+                        observed_timestamp_unix_ns: None,
+                        trace_id: bytes_to_lower_hex(&span.trace_id),
+                        span_id: bytes_to_lower_hex(&span.span_id),
+                        trace_flags: zero_is_none_u32(span.flags),
+                        severity_number: None,
+                        severity_text: None,
+                        body_kind: None,
+                        body_string: None,
+                        body_json: None,
+                        metric_name: None,
+                        metric_description: None,
+                        metric_unit: None,
+                        metric_type: None,
+                        metric_value_number: None,
+                        metric_value_count: None,
+                        metric_value_sum: None,
+                        is_monotonic: None,
+                        aggregation_temporality: None,
+                        span_name: non_empty_owned(span.name.as_str()),
+                        span_kind: Some(format_span_kind(span.kind)),
+                        parent_span_id: bytes_to_lower_hex(&span.parent_span_id),
+                        start_time_unix_ns: zero_is_none(span.start_time_unix_nano),
+                        end_time_unix_ns: zero_is_none(span.end_time_unix_nano),
+                        duration_ns: (duration_ns > 0).then_some(duration_ns),
+                        status_code: span.status.as_ref().and_then(|s| (s.code != 0).then_some(s.code)),
+                        status_message: span.status.as_ref().and_then(|s| non_empty_owned(&s.message)),
+                        service_name: service_name.clone(),
+                        scope_name: scope_name.map(str::to_owned),
+                        scope_version: scope_version.map(str::to_owned),
+                        resource_attributes_json: resource_attributes_json.clone(),
+                        scope_attributes_json: scope_attributes_json.clone(),
+                        log_attributes_json: None,
+                        span_attributes_json: attrs_to_json(&span.attributes),
+                        event_name: None,
+                    };
+                    self.rows.push(row);
+                }
+            }
+        }
+
+        self.maybe_flush()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn base_metrics_row(
+        &self, record: &LjxExportRecordV1, service_name: &Option<String>, resource_attributes_json: &Option<String>, scope_name: Option<&str>,
+        scope_version: Option<&str>, scope_attributes_json: &Option<String>, metric_name: &Option<String>, metric_description: &Option<String>,
+        metric_unit: &Option<String>, metric_type: &str,
+    ) -> ParquetRow {
+        ParquetRow {
+            sequence: record.seq,
+            timestamp_unix_ns: Some(record.timestamp_unix_ns),
+            signal_type: "metrics".to_string(),
+            observed_timestamp_unix_ns: None,
+            trace_id: None,
+            span_id: None,
+            trace_flags: None,
+            severity_number: None,
+            severity_text: None,
+            body_kind: None,
+            body_string: None,
+            body_json: None,
+            metric_name: metric_name.clone(),
+            metric_description: metric_description.clone(),
+            metric_unit: metric_unit.clone(),
+            metric_type: Some(metric_type.to_string()),
+            metric_value_number: None,
+            metric_value_count: None,
+            metric_value_sum: None,
+            is_monotonic: None,
+            aggregation_temporality: None,
+            span_name: None,
+            span_kind: None,
+            parent_span_id: None,
+            start_time_unix_ns: None,
+            end_time_unix_ns: None,
+            duration_ns: None,
+            status_code: None,
+            status_message: None,
+            service_name: service_name.clone(),
+            scope_name: scope_name.map(str::to_owned),
+            scope_version: scope_version.map(str::to_owned),
+            resource_attributes_json: resource_attributes_json.clone(),
+            scope_attributes_json: scope_attributes_json.clone(),
+            log_attributes_json: None,
+            span_attributes_json: None,
+            event_name: None,
+        }
+    }
+
+    fn maybe_flush(&mut self) -> i32 {
         if self.rows.len() >= self.cfg.row_group_rows
             && let Err(err) = self.flush_rows()
         {
@@ -201,7 +480,7 @@ impl ParquetExporter {
         if let Err(err) = self.writer.finish() {
             return self.fail_status(status_for_message(&err.to_string()), format!("failed to finish parquet writer: {err}"));
         }
-        if let Err(err) = self.writer.sync() {
+        if let Err(err) = self.writer.flush() {
             return self.fail_status(LJX_EXPORT_STATUS_IO, format!("failed to flush host output after parquet finish: {err}"));
         }
         self.finished = true;
@@ -217,7 +496,7 @@ impl ParquetExporter {
         self.writer.write(&batch).map_err(|err| format!("failed to write parquet batch: {err}"))?;
         if self.writer.in_progress_rows() >= self.cfg.row_group_rows {
             self.writer.flush().map_err(|err| format!("failed to flush parquet row group: {err}"))?;
-            self.writer.sync().map_err(|err| format!("failed to flush host output: {err}"))?;
+            self.writer.flush().map_err(|err| format!("failed to flush host output: {err}"))?;
         }
         Ok(())
     }
@@ -277,53 +556,92 @@ impl ParquetConfig {
     }
 }
 
-#[derive(Default)]
-struct RowBuffer {
-    sequence: Vec<u64>,
-    timestamp_unix_ns: Vec<u64>,
-    observed_timestamp_unix_ns: Vec<Option<u64>>,
-    trace_id: Vec<Option<String>>,
-    span_id: Vec<Option<String>>,
-    trace_flags: Vec<Option<u32>>,
-    severity_number: Vec<Option<i32>>,
-    severity_text: Vec<Option<String>>,
-    body_kind: Vec<String>,
-    body_string: Vec<Option<String>>,
-    body_json: Vec<Option<String>>,
-    service_name: Vec<Option<String>>,
-    scope_name: Vec<Option<String>>,
-    scope_version: Vec<Option<String>>,
-    resource_attributes_json: Vec<Option<String>>,
-    scope_attributes_json: Vec<Option<String>>,
-    log_attributes_json: Vec<Option<String>>,
-    event_name: Vec<Option<String>>,
-}
-
 struct ParquetRow {
     sequence: u64,
-    timestamp_unix_ns: u64,
+    timestamp_unix_ns: Option<u64>,
+    signal_type: String,
     observed_timestamp_unix_ns: Option<u64>,
     trace_id: Option<String>,
     span_id: Option<String>,
     trace_flags: Option<u32>,
     severity_number: Option<i32>,
     severity_text: Option<String>,
-    body_kind: String,
+    body_kind: Option<String>,
     body_string: Option<String>,
     body_json: Option<String>,
+    metric_name: Option<String>,
+    metric_description: Option<String>,
+    metric_unit: Option<String>,
+    metric_type: Option<String>,
+    metric_value_number: Option<f64>,
+    metric_value_count: Option<u64>,
+    metric_value_sum: Option<f64>,
+    is_monotonic: Option<bool>,
+    aggregation_temporality: Option<i32>,
+    span_name: Option<String>,
+    span_kind: Option<String>,
+    parent_span_id: Option<String>,
+    start_time_unix_ns: Option<u64>,
+    end_time_unix_ns: Option<u64>,
+    duration_ns: Option<u64>,
+    status_code: Option<i32>,
+    status_message: Option<String>,
     service_name: Option<String>,
     scope_name: Option<String>,
     scope_version: Option<String>,
     resource_attributes_json: Option<String>,
     scope_attributes_json: Option<String>,
     log_attributes_json: Option<String>,
+    span_attributes_json: Option<String>,
     event_name: Option<String>,
+}
+
+#[derive(Default)]
+struct RowBuffer {
+    sequence: Vec<u64>,
+    timestamp_unix_ns: Vec<Option<u64>>,
+    signal_type: Vec<String>,
+    observed_timestamp_unix_ns: Vec<Option<u64>>,
+    trace_id: Vec<Option<String>>,
+    span_id: Vec<Option<String>>,
+    trace_flags: Vec<Option<u32>>,
+    severity_number: Vec<Option<i32>>,
+    severity_text: Vec<Option<String>>,
+    body_kind: Vec<Option<String>>,
+    body_string: Vec<Option<String>>,
+    body_json: Vec<Option<String>>,
+    metric_name: Vec<Option<String>>,
+    metric_description: Vec<Option<String>>,
+    metric_unit: Vec<Option<String>>,
+    metric_type: Vec<Option<String>>,
+    metric_value_number: Vec<Option<f64>>,
+    metric_value_count: Vec<Option<u64>>,
+    metric_value_sum: Vec<Option<f64>>,
+    is_monotonic: Vec<Option<bool>>,
+    aggregation_temporality: Vec<Option<i32>>,
+    span_name: Vec<Option<String>>,
+    span_kind: Vec<Option<String>>,
+    parent_span_id: Vec<Option<String>>,
+    start_time_unix_ns: Vec<Option<u64>>,
+    end_time_unix_ns: Vec<Option<u64>>,
+    duration_ns: Vec<Option<u64>>,
+    status_code: Vec<Option<i32>>,
+    status_message: Vec<Option<String>>,
+    service_name: Vec<Option<String>>,
+    scope_name: Vec<Option<String>>,
+    scope_version: Vec<Option<String>>,
+    resource_attributes_json: Vec<Option<String>>,
+    scope_attributes_json: Vec<Option<String>>,
+    log_attributes_json: Vec<Option<String>>,
+    span_attributes_json: Vec<Option<String>>,
+    event_name: Vec<Option<String>>,
 }
 
 impl RowBuffer {
     fn push(&mut self, row: ParquetRow) {
         self.sequence.push(row.sequence);
         self.timestamp_unix_ns.push(row.timestamp_unix_ns);
+        self.signal_type.push(row.signal_type);
         self.observed_timestamp_unix_ns.push(row.observed_timestamp_unix_ns);
         self.trace_id.push(row.trace_id);
         self.span_id.push(row.span_id);
@@ -333,12 +651,30 @@ impl RowBuffer {
         self.body_kind.push(row.body_kind);
         self.body_string.push(row.body_string);
         self.body_json.push(row.body_json);
+        self.metric_name.push(row.metric_name);
+        self.metric_description.push(row.metric_description);
+        self.metric_unit.push(row.metric_unit);
+        self.metric_type.push(row.metric_type);
+        self.metric_value_number.push(row.metric_value_number);
+        self.metric_value_count.push(row.metric_value_count);
+        self.metric_value_sum.push(row.metric_value_sum);
+        self.is_monotonic.push(row.is_monotonic);
+        self.aggregation_temporality.push(row.aggregation_temporality);
+        self.span_name.push(row.span_name);
+        self.span_kind.push(row.span_kind);
+        self.parent_span_id.push(row.parent_span_id);
+        self.start_time_unix_ns.push(row.start_time_unix_ns);
+        self.end_time_unix_ns.push(row.end_time_unix_ns);
+        self.duration_ns.push(row.duration_ns);
+        self.status_code.push(row.status_code);
+        self.status_message.push(row.status_message);
         self.service_name.push(row.service_name);
         self.scope_name.push(row.scope_name);
         self.scope_version.push(row.scope_version);
         self.resource_attributes_json.push(row.resource_attributes_json);
         self.scope_attributes_json.push(row.scope_attributes_json);
         self.log_attributes_json.push(row.log_attributes_json);
+        self.span_attributes_json.push(row.span_attributes_json);
         self.event_name.push(row.event_name);
     }
 
@@ -353,22 +689,41 @@ impl RowBuffer {
     fn drain_into_batch(&mut self, schema: SchemaRef) -> Result<RecordBatch, String> {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(u64_array(std::mem::take(&mut self.sequence))),
-            Arc::new(u64_array(std::mem::take(&mut self.timestamp_unix_ns))),
+            Arc::new(opt_u64_array(std::mem::take(&mut self.timestamp_unix_ns))),
+            Arc::new(string_array(std::mem::take(&mut self.signal_type))),
             Arc::new(opt_u64_array(std::mem::take(&mut self.observed_timestamp_unix_ns))),
             Arc::new(opt_string_array(std::mem::take(&mut self.trace_id))),
             Arc::new(opt_string_array(std::mem::take(&mut self.span_id))),
             Arc::new(opt_u32_array(std::mem::take(&mut self.trace_flags))),
             Arc::new(opt_i32_array(std::mem::take(&mut self.severity_number))),
             Arc::new(opt_string_array(std::mem::take(&mut self.severity_text))),
-            Arc::new(string_array(std::mem::take(&mut self.body_kind))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.body_kind))),
             Arc::new(opt_string_array(std::mem::take(&mut self.body_string))),
             Arc::new(opt_string_array(std::mem::take(&mut self.body_json))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.metric_name))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.metric_description))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.metric_unit))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.metric_type))),
+            Arc::new(opt_f64_array(std::mem::take(&mut self.metric_value_number))),
+            Arc::new(opt_u64_array(std::mem::take(&mut self.metric_value_count))),
+            Arc::new(opt_f64_array(std::mem::take(&mut self.metric_value_sum))),
+            Arc::new(opt_bool_array(std::mem::take(&mut self.is_monotonic))),
+            Arc::new(opt_i32_array(std::mem::take(&mut self.aggregation_temporality))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.span_name))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.span_kind))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.parent_span_id))),
+            Arc::new(opt_u64_array(std::mem::take(&mut self.start_time_unix_ns))),
+            Arc::new(opt_u64_array(std::mem::take(&mut self.end_time_unix_ns))),
+            Arc::new(opt_u64_array(std::mem::take(&mut self.duration_ns))),
+            Arc::new(opt_i32_array(std::mem::take(&mut self.status_code))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.status_message))),
             Arc::new(opt_string_array(std::mem::take(&mut self.service_name))),
             Arc::new(opt_string_array(std::mem::take(&mut self.scope_name))),
             Arc::new(opt_string_array(std::mem::take(&mut self.scope_version))),
             Arc::new(opt_string_array(std::mem::take(&mut self.resource_attributes_json))),
             Arc::new(opt_string_array(std::mem::take(&mut self.scope_attributes_json))),
             Arc::new(opt_string_array(std::mem::take(&mut self.log_attributes_json))),
+            Arc::new(opt_string_array(std::mem::take(&mut self.span_attributes_json))),
             Arc::new(opt_string_array(std::mem::take(&mut self.event_name))),
         ];
         RecordBatch::try_new(schema, arrays).map_err(|err| format!("failed to build parquet batch: {err}"))
@@ -378,33 +733,52 @@ impl RowBuffer {
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("sequence", DataType::UInt64, false),
-        Field::new("timestamp_unix_ns", DataType::UInt64, false),
+        Field::new("timestamp_unix_ns", DataType::UInt64, true),
+        Field::new("signal_type", DataType::Utf8, false),
         Field::new("observed_timestamp_unix_ns", DataType::UInt64, true),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
         Field::new("trace_flags", DataType::UInt32, true),
         Field::new("severity_number", DataType::Int32, true),
         Field::new("severity_text", DataType::Utf8, true),
-        Field::new("body_kind", DataType::Utf8, false),
-        // `body_string` preserves the common string fast-path while `body_json`
-        // keeps non-string AnyValue bodies in a stable bounded representation.
+        Field::new("body_kind", DataType::Utf8, true),
         Field::new("body_string", DataType::Utf8, true),
         Field::new("body_json", DataType::Utf8, true),
+        Field::new("metric_name", DataType::Utf8, true),
+        Field::new("metric_description", DataType::Utf8, true),
+        Field::new("metric_unit", DataType::Utf8, true),
+        Field::new("metric_type", DataType::Utf8, true),
+        Field::new("metric_value_number", DataType::Float64, true),
+        Field::new("metric_value_count", DataType::UInt64, true),
+        Field::new("metric_value_sum", DataType::Float64, true),
+        Field::new("is_monotonic", DataType::Boolean, true),
+        Field::new("aggregation_temporality", DataType::Int32, true),
+        Field::new("span_name", DataType::Utf8, true),
+        Field::new("span_kind", DataType::Utf8, true),
+        Field::new("parent_span_id", DataType::Utf8, true),
+        Field::new("start_time_unix_ns", DataType::UInt64, true),
+        Field::new("end_time_unix_ns", DataType::UInt64, true),
+        Field::new("duration_ns", DataType::UInt64, true),
+        Field::new("status_code", DataType::Int32, true),
+        Field::new("status_message", DataType::Utf8, true),
         Field::new("service_name", DataType::Utf8, true),
         Field::new("scope_name", DataType::Utf8, true),
         Field::new("scope_version", DataType::Utf8, true),
-        // Resource, scope, and log attributes stay separate JSON text columns to
-        // avoid unbounded top-level column growth while preserving OTel meaning.
         Field::new("resource_attributes_json", DataType::Utf8, true),
         Field::new("scope_attributes_json", DataType::Utf8, true),
         Field::new("log_attributes_json", DataType::Utf8, true),
+        Field::new("span_attributes_json", DataType::Utf8, true),
         Field::new("event_name", DataType::Utf8, true),
     ]))
 }
 
 fn validate_host(host: &LjxExportHostV1) -> Result<(), String> {
     if host.struct_size < std::mem::size_of::<LjxExportHostV1>() as u32 {
-        return Err(format!("host struct_size {} is smaller than plugin ABI expects {}", host.struct_size, std::mem::size_of::<LjxExportHostV1>()));
+        return Err(format!(
+            "host struct_size {} is smaller than plugin ABI expects {}",
+            host.struct_size,
+            std::mem::size_of::<LjxExportHostV1>()
+        ));
     }
     Ok(())
 }
@@ -434,7 +808,11 @@ fn abi_bytes<'a>(value: LjxAbiBytes) -> Result<&'a [u8], String> {
 }
 
 fn status_for_message(message: &str) -> i32 {
-    if message.contains("host callback") || message.contains("flush host output") { LJX_EXPORT_STATUS_IO } else { LJX_EXPORT_STATUS_ERROR }
+    if message.contains("host callback") || message.contains("flush host output") {
+        LJX_EXPORT_STATUS_IO
+    } else {
+        LJX_EXPORT_STATUS_ERROR
+    }
 }
 
 fn zero_is_none(value: u64) -> Option<u64> {
@@ -469,6 +847,25 @@ fn nibble_to_hex(value: u8) -> char {
     match value {
         0..=9 => (b'0' + value) as char,
         _ => (b'a' + (value - 10)) as char,
+    }
+}
+
+fn format_span_kind(kind: i32) -> String {
+    match kind {
+        1 => "Internal",
+        2 => "Server",
+        3 => "Client",
+        4 => "Producer",
+        5 => "Consumer",
+        _ => return format!("Unknown({kind})"),
+    }
+    .to_string()
+}
+
+fn number_data_point_value_f64(value: &opentelemetry_proto::tonic::metrics::v1::number_data_point::Value) -> Option<f64> {
+    match value {
+        opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(v) => Some(*v),
+        opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(v) => Some(*v as f64),
     }
 }
 
@@ -526,8 +923,10 @@ fn attrs_to_json(attrs: &[KeyValue]) -> Option<String> {
     if attrs.is_empty() {
         return None;
     }
-    let mut pairs =
-        attrs.iter().filter_map(|attr| attr.value.as_ref().and_then(any_value_to_json).map(|value| (attr.key.clone(), value))).collect::<Vec<_>>();
+    let mut pairs = attrs
+        .iter()
+        .filter_map(|attr| attr.value.as_ref().and_then(any_value_to_json).map(|value| (attr.key.clone(), value)))
+        .collect::<Vec<_>>();
     if pairs.is_empty() {
         return None;
     }
@@ -597,6 +996,30 @@ fn string_array(values: Vec<String>) -> arrow_array::StringArray {
 
 fn opt_string_array(values: Vec<Option<String>>) -> arrow_array::StringArray {
     let mut builder = StringBuilder::new();
+    for value in values {
+        match value {
+            Some(value) => builder.append_value(value),
+            None => builder.append_null(),
+        }
+    }
+    builder.finish()
+}
+
+fn opt_f64_array(values: Vec<Option<f64>>) -> arrow_array::Float64Array {
+    use arrow_array::builder::Float64Builder;
+    let mut builder = Float64Builder::new();
+    for value in values {
+        match value {
+            Some(value) => builder.append_value(value),
+            None => builder.append_null(),
+        }
+    }
+    builder.finish()
+}
+
+fn opt_bool_array(values: Vec<Option<bool>>) -> arrow_array::BooleanArray {
+    use arrow_array::builder::BooleanBuilder;
+    let mut builder = BooleanBuilder::new();
     for value in values {
         match value {
             Some(value) => builder.append_value(value),

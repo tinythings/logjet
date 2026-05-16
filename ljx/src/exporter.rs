@@ -13,13 +13,16 @@ use std::path::{Path, PathBuf};
 
 use libloading::Library;
 use liblogjet::export::{
-    LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_LOGS_REQUEST, LJX_EXPORT_CAP_RECORD_LOGS, LJX_EXPORT_CAP_RECORD_METRICS, LJX_EXPORT_CAP_RECORD_TRACES,
+    LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_LOGS_REQUEST, LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_METRICS_REQUEST,
+    LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_TRACE_REQUEST, LJX_EXPORT_CAP_RECORD_LOGS, LJX_EXPORT_CAP_RECORD_METRICS, LJX_EXPORT_CAP_RECORD_TRACES,
     LJX_EXPORT_CAP_STREAMING, LJX_EXPORT_STATUS_IO, LJX_EXPORT_STATUS_OK, LJX_EXPORTER_ABI_MAJOR, LJX_EXPORTER_ABI_MINOR,
     LJX_EXPORTER_DESCRIPTOR_V1_SYMBOL, LjxAbiBytes, LjxAbiString, LjxExportHostV1, LjxExportInitV1, LjxExportRecordV1, LjxExporterCtx,
     LjxExporterDescriptorV1,
 };
 use logjet::{LogjetReader, OwnedRecord, RecordType};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
 
 use crate::error::{Error, Result};
@@ -298,6 +301,28 @@ impl LoadedExporter {
                 record.seq
             )));
         }
+        if payload_kind == liblogjet::export::LJX_PAYLOAD_KIND_OTLP_EXPORT_METRICS_REQUEST
+            && self.capabilities & LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_METRICS_REQUEST == 0
+        {
+            return Err(Error::Usage(format!(
+                "exporter `{}` from {} does not accept OTLP metrics payloads in {} at seq {}",
+                self.display_name,
+                self.path.display(),
+                input.display(),
+                record.seq
+            )));
+        }
+        if payload_kind == liblogjet::export::LJX_PAYLOAD_KIND_OTLP_EXPORT_TRACE_REQUEST
+            && self.capabilities & LJX_EXPORT_CAP_PAYLOAD_OTLP_EXPORT_TRACE_REQUEST == 0
+        {
+            return Err(Error::Usage(format!(
+                "exporter `{}` from {} does not accept OTLP traces payloads in {} at seq {}",
+                self.display_name,
+                self.path.display(),
+                input.display(),
+                record.seq
+            )));
+        }
         Ok(())
     }
 
@@ -566,10 +591,29 @@ fn abi_record_type(value: RecordType) -> u32 {
 }
 
 fn payload_kind(record: &OwnedRecord) -> u32 {
-    if record.record_type == RecordType::Logs && ExportLogsServiceRequest::decode(record.payload.as_slice()).is_ok() {
-        liblogjet::export::LJX_PAYLOAD_KIND_OTLP_EXPORT_LOGS_REQUEST
-    } else {
-        liblogjet::export::LJX_PAYLOAD_KIND_OPAQUE
+    match record.record_type {
+        RecordType::Logs => {
+            if ExportLogsServiceRequest::decode(record.payload.as_slice()).is_ok() {
+                liblogjet::export::LJX_PAYLOAD_KIND_OTLP_EXPORT_LOGS_REQUEST
+            } else {
+                liblogjet::export::LJX_PAYLOAD_KIND_OPAQUE
+            }
+        }
+        RecordType::Metrics => {
+            if ExportMetricsServiceRequest::decode(record.payload.as_slice()).is_ok() {
+                liblogjet::export::LJX_PAYLOAD_KIND_OTLP_EXPORT_METRICS_REQUEST
+            } else {
+                liblogjet::export::LJX_PAYLOAD_KIND_OPAQUE
+            }
+        }
+        RecordType::Traces => {
+            if ExportTraceServiceRequest::decode(record.payload.as_slice()).is_ok() {
+                liblogjet::export::LJX_PAYLOAD_KIND_OTLP_EXPORT_TRACE_REQUEST
+            } else {
+                liblogjet::export::LJX_PAYLOAD_KIND_OPAQUE
+            }
+        }
+        RecordType::Events => liblogjet::export::LJX_PAYLOAD_KIND_OPAQUE,
     }
 }
 
