@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Read};
 use std::net::SocketAddr;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -8,6 +8,12 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use http_body_util::{BodyExt, Full};
+use hyper::body::Bytes;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response as HyperResponse, StatusCode};
+use hyper_util::rt::TokioIo;
 use opentelemetry_proto::tonic::collector::logs::v1::{
     ExportLogsServiceRequest, ExportLogsServiceResponse,
     logs_service_server::{LogsService, LogsServiceServer},
@@ -22,9 +28,10 @@ use opentelemetry_proto::tonic::collector::trace::v1::{
 };
 use prost::Message;
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
-use tiny_http::{Method, Response, Server, StatusCode};
+use tokio::net::TcpListener as TokioTcpListener;
+use tokio_rustls::TlsAcceptor;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
-use tonic::{Request, Response as GrpcResponse, Status};
+use tonic::{Request as TonicRequest, Response as GrpcResponse, Status};
 
 use crate::config::{Config, IngestLimits, IngestOverloadConfig, IngestProtocol, IngestTlsConfig, SeverityFloor};
 use crate::protocol::WireRecord;
@@ -264,126 +271,7 @@ fn ingest_loop(
             }
         }
         IngestProtocol::OtlpHttp => {
-            if ingest_tls.enable {
-                return otlp_http_tls_loop(bind_addr, ingest_tls, ingest_limits, ingest_policy, spool, next_seq, limiter);
-            }
-            let server = Server::http(&bind_addr).map_err(|err| io::Error::other(err.to_string()))?;
-            eprintln!("ljd ingest listening on http://{bind_addr}/v1/logs /v1/metrics /v1/traces using otlp-http max-batch-bytes={}", ingest_limits.max_batch_bytes);
-
-            for mut request in server.incoming_requests() {
-                if request.method() != &Method::Post || !matches!(request.url(), "/v1/logs" | "/v1/metrics" | "/v1/traces") {
-                    let response = Response::from_string("not found").with_status_code(StatusCode(404));
-                    let _ = request.respond(response);
-                    continue;
-                }
-                let is_metrics = request.url() == "/v1/metrics";
-                let is_traces = request.url() == "/v1/traces";
-
-                let content_encoding = request.headers().iter().find(|h| h.field.equiv("content-encoding")).map(|h| h.value.to_string());
-
-                let mut body = Vec::with_capacity(ingest_limits.max_batch_bytes.min(8192));
-                request.as_reader().take((ingest_limits.max_batch_bytes + 1) as u64).read_to_end(&mut body)?;
-                if body.len() > ingest_limits.max_batch_bytes {
-                    ingest_policy.note_oversize()?;
-                    let response = Response::from_string("payload too large").with_status_code(StatusCode(413));
-                    request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
-                    continue;
-                }
-                let body = match maybe_decompress_body(body, content_encoding.as_deref()) {
-                    Ok(b) => b,
-                    Err(err) => {
-                        let response = Response::from_string(format!("decompression error: {err}")).with_status_code(StatusCode(400));
-                        request.respond(response).map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
-                        continue;
-                    }
-                };
-                if is_metrics {
-                    match ExportMetricsServiceRequest::decode(body.as_slice()) {
-                        Ok(batch) => {
-                            // Metrics have no severity concept in OTLP, so they always classify as
-                            // BatchPriority::Unknown (lowest priority). This is semantically correct:
-                            // during overload, severity-aware shedding protects high-priority logs
-                            // while metrics are treated as best-effort. If metrics must survive
-                            // overload, increase ingest.max-batches-per-second or use buffer/file mode.
-                            let decision = ingest_policy.decide(BatchPriority::Unknown)?;
-                            if matches!(decision, IngestDecision::RejectRateLimited) {
-                                let response = Response::from_string("rate limit exceeded").with_status_code(StatusCode(429));
-                                request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
-                                continue;
-                            }
-                            let record = WireRecord {
-                                record_type: logjet::RecordType::Metrics,
-                                seq: next_seq.fetch_add(1, Ordering::Relaxed),
-                                ts_unix_ns: extract_batch_timestamp_metrics(&batch).unwrap_or_else(unix_time_nanos),
-                                payload: body,
-                            };
-                            append_batch_record(&spool, record)?;
-
-                            let response = Response::empty(200);
-                            request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
-                        }
-                        Err(err) => {
-                            let response = Response::from_string(format!("decode error: {err}")).with_status_code(StatusCode(400));
-                            request.respond(response).map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
-                        }
-                    }
-                } else if is_traces {
-                    match ExportTraceServiceRequest::decode(body.as_slice()) {
-                        Ok(batch) => {
-                            // Traces have no severity concept in OTLP, so they always classify as
-                            // BatchPriority::Unknown (lowest priority). This is semantically correct:
-                            // during overload, severity-aware shedding protects high-priority logs
-                            // while traces are treated as best-effort. If traces must survive
-                            // overload, increase ingest.max-batches-per-second or use buffer/file mode.
-                            let decision = ingest_policy.decide(BatchPriority::Unknown)?;
-                            if matches!(decision, IngestDecision::RejectRateLimited) {
-                                let response = Response::from_string("rate limit exceeded").with_status_code(StatusCode(429));
-                                request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
-                                continue;
-                            }
-                            let record = WireRecord {
-                                record_type: logjet::RecordType::Traces,
-                                seq: next_seq.fetch_add(1, Ordering::Relaxed),
-                                ts_unix_ns: extract_batch_timestamp_traces(&batch).unwrap_or_else(unix_time_nanos),
-                                payload: body,
-                            };
-                            append_batch_record(&spool, record)?;
-
-                            let response = Response::empty(200);
-                            request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
-                        }
-                        Err(err) => {
-                            let response = Response::from_string(format!("decode error: {err}")).with_status_code(StatusCode(400));
-                            request.respond(response).map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
-                        }
-                    }
-                } else {
-                    match ExportLogsServiceRequest::decode(body.as_slice()) {
-                        Ok(batch) => {
-                            let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
-                            if matches!(decision, IngestDecision::RejectRateLimited) {
-                                let response = Response::from_string("rate limit exceeded").with_status_code(StatusCode(429));
-                                request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
-                                continue;
-                            }
-                            let record = WireRecord {
-                                record_type: logjet::RecordType::Logs,
-                                seq: next_seq.fetch_add(1, Ordering::Relaxed),
-                                ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
-                                payload: body,
-                            };
-                            append_batch_record(&spool, record)?;
-
-                            let response = Response::empty(200);
-                            request.respond(response).map_err(|err| io::Error::other(err.to_string()))?;
-                        }
-                        Err(err) => {
-                            let response = Response::from_string(format!("decode error: {err}")).with_status_code(StatusCode(400));
-                            request.respond(response).map_err(|resp_err| io::Error::other(resp_err.to_string()))?;
-                        }
-                    }
-                }
-            }
+            return otlp_http_async_loop(bind_addr, ingest_tls, ingest_limits, ingest_policy, spool, next_seq, limiter);
         }
         IngestProtocol::OtlpGrpc => {
             let addr: SocketAddr =
@@ -421,140 +309,199 @@ fn ingest_loop(
     Ok(())
 }
 
-fn otlp_http_tls_loop(
+fn otlp_http_async_loop(
     bind_addr: String, ingest_tls: IngestTlsConfig, ingest_limits: IngestLimits, ingest_policy: Arc<SharedIngestPolicy>, spool: Arc<SharedSpool>,
     next_seq: Arc<AtomicU64>, limiter: Arc<ConnectionLimiter>,
 ) -> io::Result<()> {
-    let listener = TcpListener::bind(&bind_addr)?;
-    let tls_server = load_ingest_server_config(&ingest_tls)?;
+    let max_batch_bytes = ingest_limits.max_batch_bytes;
+    let max_clients = ingest_limits.max_clients;
+    let tls_acceptor = if ingest_tls.enable {
+        let server_config = load_ingest_server_config(&ingest_tls)?;
+        Some(TlsAcceptor::from(server_config))
+    } else {
+        None
+    };
+
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|err| io::Error::other(err.to_string()))?;
+    let scheme = if ingest_tls.enable { "https" } else { "http" };
     eprintln!(
-        "ljd ingest listening on https://{bind_addr}/v1/logs /v1/metrics /v1/traces using otlp-http max-batch-bytes={} max-clients={}",
-        ingest_limits.max_batch_bytes, ingest_limits.max_clients
+        "ljd ingest listening on {scheme}://{bind_addr}/v1/logs /v1/metrics /v1/traces using otlp-http max-batch-bytes={max_batch_bytes} max-clients={max_clients}"
     );
 
-    for stream in listener.incoming() {
-        let stream = stream?;
-        let spool = Arc::clone(&spool);
-        let ingest_policy = Arc::clone(&ingest_policy);
-        let next_seq = Arc::clone(&next_seq);
-        let tls_server = tls_server.clone();
-        let limiter = Arc::clone(&limiter);
-        let max_batch_bytes = ingest_limits.max_batch_bytes;
-        thread::Builder::new().name("ljd-otlp-http-tls-client".to_string()).spawn(move || {
-            if let Err(err) = handle_otlp_http_tls_client(stream, tls_server, spool, ingest_policy, next_seq, limiter, max_batch_bytes) {
-                eprintln!("ljd otlp-http tls client error: {err}");
-            }
-        })?;
+    runtime.block_on(async move {
+        let listener = TokioTcpListener::bind(&bind_addr).await.map_err(|err| io::Error::other(err.to_string()))?;
+
+        loop {
+            let (stream, _peer) = match listener.accept().await {
+                Ok(accepted) => accepted,
+                Err(err) => {
+                    eprintln!("ljd ingest accept error: {err}");
+                    continue;
+                }
+            };
+
+            let spool = Arc::clone(&spool);
+            let ingest_policy = Arc::clone(&ingest_policy);
+            let next_seq = Arc::clone(&next_seq);
+            let limiter = Arc::clone(&limiter);
+            let tls_acceptor = tls_acceptor.clone();
+
+            tokio::spawn(async move {
+                if let Err(err) = serve_otlp_http_connection(stream, tls_acceptor, spool, ingest_policy, next_seq, limiter, max_batch_bytes).await {
+                    eprintln!("ljd ingest client error: {err}");
+                }
+            });
+        }
+    })
+}
+
+async fn serve_otlp_http_connection(
+    stream: tokio::net::TcpStream, tls_acceptor: Option<TlsAcceptor>, spool: Arc<SharedSpool>, ingest_policy: Arc<SharedIngestPolicy>,
+    next_seq: Arc<AtomicU64>, limiter: Arc<ConnectionLimiter>, max_batch_bytes: usize,
+) -> io::Result<()> {
+    let Some(_permit) = limiter.try_acquire() else {
+        eprintln!("ljd ingest refused client: ingest.max-clients reached");
+        ingest_policy.note_client_cap()?;
+        return Ok(());
+    };
+
+    let svc = service_fn(move |req| {
+        handle_otlp_http_request(
+            req,
+            Arc::clone(&spool),
+            Arc::clone(&ingest_policy),
+            Arc::clone(&next_seq),
+            max_batch_bytes,
+        )
+    });
+
+    if let Some(acceptor) = tls_acceptor {
+        let tls_stream = acceptor.accept(stream).await.map_err(|err| io::Error::other(err.to_string()))?;
+        let _ = http1::Builder::new().serve_connection(TokioIo::new(tls_stream), svc).await;
+    } else {
+        let _ = http1::Builder::new().serve_connection(TokioIo::new(stream), svc).await;
     }
 
     Ok(())
 }
 
-fn handle_otlp_http_tls_client(
-    stream: TcpStream, tls_server: Arc<ServerConfig>, spool: Arc<SharedSpool>, ingest_policy: Arc<SharedIngestPolicy>, next_seq: Arc<AtomicU64>,
-    limiter: Arc<ConnectionLimiter>, max_batch_bytes: usize,
-) -> io::Result<()> {
-    let Some(_permit) = limiter.try_acquire() else {
-        eprintln!("ljd ingest refused TLS client: ingest.max-clients reached");
-        ingest_policy.note_client_cap()?;
-        return Ok(());
-    };
-    let conn = ServerConnection::new(tls_server).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
-    let mut transport = StreamOwned::new(conn, stream);
-    let result = handle_otlp_http_transport(&mut transport, spool, ingest_policy, next_seq, max_batch_bytes);
-    transport.conn.send_close_notify();
-    let _ = transport.flush();
-    result
-}
+async fn handle_otlp_http_request<B>(
+    req: Request<B>, spool: Arc<SharedSpool>, ingest_policy: Arc<SharedIngestPolicy>, next_seq: Arc<AtomicU64>, max_batch_bytes: usize,
+) -> Result<HyperResponse<Full<Bytes>>, io::Error>
+where
+    B: hyper::body::Body<Data = Bytes>,
+    B::Error: std::fmt::Display,
+{
+    if req.method() != Method::POST || !matches!(req.uri().path(), "/v1/logs" | "/v1/metrics" | "/v1/traces") {
+        return Ok(HyperResponse::builder().status(StatusCode::NOT_FOUND).body(Full::new(Bytes::from("not found"))).unwrap());
+    }
+    let is_metrics = req.uri().path() == "/v1/metrics";
+    let is_traces = req.uri().path() == "/v1/traces";
 
-fn handle_otlp_http_transport<T: Read + io::Write>(
-    transport: &mut T, spool: Arc<SharedSpool>, ingest_policy: Arc<SharedIngestPolicy>, next_seq: Arc<AtomicU64>, max_batch_bytes: usize,
-) -> io::Result<()> {
-    let request = match read_http_request(transport, max_batch_bytes) {
-        Ok(request) => request,
-        Err(err) if err.kind() == io::ErrorKind::InvalidData && err.to_string() == "payload too large" => {
+    let content_encoding =
+        req.headers().get("content-encoding").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+
+    let (parts, body) = req.into_parts();
+
+    // Check content-length header first for early rejection.
+    if let Some(len) = parts.headers.get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<usize>().ok())
+        && len > max_batch_bytes
+    {
             ingest_policy.note_oversize()?;
-            write_http_response(transport, 413, "payload too large")?;
-            return Ok(());
-        }
-        Err(err) => return Err(err),
-    };
-    let is_metrics = request.path == "/v1/metrics";
-    let is_traces = request.path == "/v1/traces";
-    if request.method != "POST" || !matches!(request.path.as_str(), "/v1/logs" | "/v1/metrics" | "/v1/traces") {
-        write_http_response(transport, 404, "not found")?;
-        return Ok(());
+            return Ok(HyperResponse::builder().status(StatusCode::PAYLOAD_TOO_LARGE).body(Full::new(Bytes::from("payload too large"))).unwrap());
     }
 
+    let collected = body.collect().await.map_err(|err| io::Error::other(format!("failed to read request body: {err}")))?;
+    let body_bytes = collected.to_bytes();
+
+    if body_bytes.len() > max_batch_bytes {
+        ingest_policy.note_oversize()?;
+        return Ok(HyperResponse::builder().status(StatusCode::PAYLOAD_TOO_LARGE).body(Full::new(Bytes::from("payload too large"))).unwrap());
+    }
+
+    let body_vec = match maybe_decompress_body(body_bytes.to_vec(), content_encoding.as_deref()) {
+        Ok(b) => b,
+        Err(err) => {
+            return Ok(HyperResponse::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from(format!("decompression error: {err}"))))
+                .unwrap());
+        }
+    };
+
     if is_metrics {
-        let body = maybe_decompress_body(request.body, request.content_encoding.as_deref())?;
-        match ExportMetricsServiceRequest::decode(body.as_slice()) {
+        match ExportMetricsServiceRequest::decode(body_vec.as_slice()) {
             Ok(batch) => {
                 let decision = ingest_policy.decide(BatchPriority::Unknown)?;
                 if matches!(decision, IngestDecision::RejectRateLimited) {
-                    write_http_response(transport, 429, "rate limit exceeded")?;
-                    return Ok(());
+                    return Ok(HyperResponse::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .body(Full::new(Bytes::from("rate limit exceeded")))
+                        .unwrap());
                 }
                 let record = WireRecord {
                     record_type: logjet::RecordType::Metrics,
                     seq: next_seq.fetch_add(1, Ordering::Relaxed),
                     ts_unix_ns: extract_batch_timestamp_metrics(&batch).unwrap_or_else(unix_time_nanos),
-                    payload: body,
+                    payload: body_vec,
                 };
                 append_batch_record(&spool, record)?;
-                write_http_response(transport, 200, "")?;
+                Ok(HyperResponse::builder().status(StatusCode::OK).body(Full::new(Bytes::new())).unwrap())
             }
-            Err(err) => {
-                write_http_response(transport, 400, &format!("decode error: {err}"))?;
-            }
+            Err(err) => Ok(HyperResponse::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from(format!("decode error: {err}"))))
+                .unwrap()),
         }
     } else if is_traces {
-        let body = maybe_decompress_body(request.body, request.content_encoding.as_deref())?;
-        match ExportTraceServiceRequest::decode(body.as_slice()) {
+        match ExportTraceServiceRequest::decode(body_vec.as_slice()) {
             Ok(batch) => {
                 let decision = ingest_policy.decide(BatchPriority::Unknown)?;
                 if matches!(decision, IngestDecision::RejectRateLimited) {
-                    write_http_response(transport, 429, "rate limit exceeded")?;
-                    return Ok(());
+                    return Ok(HyperResponse::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .body(Full::new(Bytes::from("rate limit exceeded")))
+                        .unwrap());
                 }
                 let record = WireRecord {
                     record_type: logjet::RecordType::Traces,
                     seq: next_seq.fetch_add(1, Ordering::Relaxed),
                     ts_unix_ns: extract_batch_timestamp_traces(&batch).unwrap_or_else(unix_time_nanos),
-                    payload: body,
+                    payload: body_vec,
                 };
                 append_batch_record(&spool, record)?;
-                write_http_response(transport, 200, "")?;
+                Ok(HyperResponse::builder().status(StatusCode::OK).body(Full::new(Bytes::new())).unwrap())
             }
-            Err(err) => {
-                write_http_response(transport, 400, &format!("decode error: {err}"))?;
-            }
+            Err(err) => Ok(HyperResponse::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from(format!("decode error: {err}"))))
+                .unwrap()),
         }
     } else {
-        let body = maybe_decompress_body(request.body, request.content_encoding.as_deref())?;
-        match ExportLogsServiceRequest::decode(body.as_slice()) {
+        match ExportLogsServiceRequest::decode(body_vec.as_slice()) {
             Ok(batch) => {
                 let decision = ingest_policy.decide(classify_otlp_batch_priority(&batch))?;
                 if matches!(decision, IngestDecision::RejectRateLimited) {
-                    write_http_response(transport, 429, "rate limit exceeded")?;
-                    return Ok(());
+                    return Ok(HyperResponse::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .body(Full::new(Bytes::from("rate limit exceeded")))
+                        .unwrap());
                 }
                 let record = WireRecord {
                     record_type: logjet::RecordType::Logs,
                     seq: next_seq.fetch_add(1, Ordering::Relaxed),
                     ts_unix_ns: extract_batch_timestamp(&batch).unwrap_or_else(unix_time_nanos),
-                    payload: body,
+                    payload: body_vec,
                 };
                 append_batch_record(&spool, record)?;
-                write_http_response(transport, 200, "")?;
+                Ok(HyperResponse::builder().status(StatusCode::OK).body(Full::new(Bytes::new())).unwrap())
             }
-            Err(err) => {
-                write_http_response(transport, 400, &format!("decode error: {err}"))?;
-            }
+            Err(err) => Ok(HyperResponse::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from(format!("decode error: {err}"))))
+                .unwrap()),
         }
     }
-
-    Ok(())
 }
 
 fn append_batch_record(spool: &Arc<SharedSpool>, record: WireRecord) -> io::Result<()> {
@@ -565,16 +512,8 @@ fn append_batch_record(spool: &Arc<SharedSpool>, record: WireRecord) -> io::Resu
     spool.notify_change()
 }
 
-/// Appends a record to the spool. Exposed for the plugin ingest path.
 pub(crate) fn append_to_spool(spool: &Arc<SharedSpool>, record: WireRecord) -> io::Result<()> {
     append_batch_record(spool, record)
-}
-
-struct ParsedHttpRequest {
-    method: String,
-    path: String,
-    body: Vec<u8>,
-    content_encoding: Option<String>,
 }
 
 fn maybe_decompress_body(body: Vec<u8>, encoding: Option<&str>) -> io::Result<Vec<u8>> {
@@ -588,72 +527,6 @@ fn maybe_decompress_body(body: Vec<u8>, encoding: Option<&str>) -> io::Result<Ve
         }
         _ => Ok(body),
     }
-}
-
-fn read_http_request<T: Read>(transport: &mut T, max_batch_bytes: usize) -> io::Result<ParsedHttpRequest> {
-    const MAX_HEADER_BYTES: usize = 16 * 1024;
-    let mut buffer = Vec::new();
-    let mut byte = [0u8; 1];
-
-    loop {
-        transport.read_exact(&mut byte)?;
-        buffer.push(byte[0]);
-        if buffer.len() > MAX_HEADER_BYTES {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "http header too large"));
-        }
-        if buffer.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-
-    let header_end = buffer.len();
-    let header_text =
-        std::str::from_utf8(&buffer[..header_end - 4]).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "http header is not valid utf-8"))?;
-    let mut lines = header_text.lines();
-    let request_line = lines.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing http request line"))?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing http method"))?.to_string();
-    let path = parts.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing http path"))?.to_string();
-
-    let mut content_length = None;
-    let mut content_encoding = None;
-    for line in lines {
-        if let Some((name, value)) = line.split_once(':') {
-            let name_trimmed = name.trim();
-            let value_trimmed = value.trim();
-            if name_trimmed.eq_ignore_ascii_case("content-length") {
-                content_length = Some(value_trimmed.parse::<usize>().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid content-length"))?);
-            } else if name_trimmed.eq_ignore_ascii_case("content-encoding") {
-                content_encoding = Some(value_trimmed.to_string());
-            }
-        }
-    }
-
-    let content_length = content_length.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content-length"))?;
-    if content_length > max_batch_bytes {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "payload too large"));
-    }
-    let mut body = Vec::with_capacity(content_length);
-    transport.take(content_length as u64).read_to_end(&mut body)?;
-    if body.len() != content_length {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "short http body"));
-    }
-
-    Ok(ParsedHttpRequest { method, path, body, content_encoding })
-}
-
-fn write_http_response<T: io::Write>(transport: &mut T, status: u16, body: &str) -> io::Result<()> {
-    let status_text = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        413 => "Payload Too Large",
-        429 => "Too Many Requests",
-        404 => "Not Found",
-        503 => "Service Unavailable",
-        _ => "Error",
-    };
-    write!(transport, "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", status, status_text, body.len(), body)?;
-    transport.flush()
 }
 
 fn build_grpc_server_tls_config(ingest_tls: &IngestTlsConfig) -> io::Result<ServerTlsConfig> {
@@ -963,7 +836,7 @@ struct OtlpGrpcTracesService {
 
 #[tonic::async_trait]
 impl TraceService for OtlpGrpcTracesService {
-    async fn export(&self, request: Request<ExportTraceServiceRequest>) -> Result<GrpcResponse<ExportTraceServiceResponse>, Status> {
+    async fn export(&self, request: TonicRequest<ExportTraceServiceRequest>) -> Result<GrpcResponse<ExportTraceServiceResponse>, Status> {
         let batch = request.into_inner();
         // Traces have no severity concept in OTLP, so they always classify as
         // BatchPriority::Unknown (lowest priority). See HTTP ingest comment above
@@ -997,7 +870,7 @@ struct OtlpGrpcMetricsService {
 
 #[tonic::async_trait]
 impl MetricsService for OtlpGrpcMetricsService {
-    async fn export(&self, request: Request<ExportMetricsServiceRequest>) -> Result<GrpcResponse<ExportMetricsServiceResponse>, Status> {
+    async fn export(&self, request: TonicRequest<ExportMetricsServiceRequest>) -> Result<GrpcResponse<ExportMetricsServiceResponse>, Status> {
         let batch = request.into_inner();
         // Metrics have no severity concept in OTLP, so they always classify as
         // BatchPriority::Unknown (lowest priority). See HTTP ingest comment above
@@ -1031,7 +904,7 @@ struct OtlpGrpcLogsService {
 
 #[tonic::async_trait]
 impl LogsService for OtlpGrpcLogsService {
-    async fn export(&self, request: Request<ExportLogsServiceRequest>) -> Result<GrpcResponse<ExportLogsServiceResponse>, Status> {
+    async fn export(&self, request: TonicRequest<ExportLogsServiceRequest>) -> Result<GrpcResponse<ExportLogsServiceResponse>, Status> {
         let batch = request.into_inner();
         match self.ingest_policy.decide(classify_otlp_batch_priority(&batch)).map_err(|err| Status::internal(err.to_string()))? {
             IngestDecision::Accept | IngestDecision::AcceptPriorityBypass => {}
