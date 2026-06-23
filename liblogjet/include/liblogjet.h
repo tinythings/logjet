@@ -20,6 +20,11 @@ extern "C" {
 #define LJ_ATTR_INT 1
 #define LJ_ATTR_ARRAY 2
 
+// Async backpressure models (lj_logger_set_backpressure).
+#define LJ_BACKPRESSURE_UNBOUNDED 0
+#define LJ_BACKPRESSURE_DROP 1
+#define LJ_BACKPRESSURE_BLOCK 2
+
 // Ingest plugin signal bitmask (in descriptor reserved[0], ABI >= 1.1).
 #define LJ_INGEST_SIGNAL_LOGS    (1u << 0)
 #define LJ_INGEST_SIGNAL_METRICS (1u << 1)
@@ -158,6 +163,13 @@ lj_logger *lj_logger_new_grpc(const char *endpoint, const char *service_name, ui
 bool lj_logger_log(lj_logger *logger, const lj_log_record *record);
 bool lj_logger_log_reuse(lj_logger *logger, const lj_log_record *record);
 bool lj_logger_log_batch(lj_logger *logger, const lj_log_record *records, size_t len);
+bool lj_logger_log_async(lj_logger *logger, const lj_log_record *record);
+bool lj_logger_log_batch_async(lj_logger *logger, const lj_log_record *records, size_t len);
+bool lj_logger_set_backpressure(lj_logger *logger, int32_t model, size_t capacity);
+bool lj_logger_flush(lj_logger *logger, uint64_t timeout_ms);
+uint64_t lj_logger_async_errors(lj_logger *logger);
+uint64_t lj_logger_async_dropped(lj_logger *logger);
+uint64_t lj_logger_async_inflight(lj_logger *logger);
 void lj_logger_free(lj_logger *logger);
 
 lj_ingest_plugin *lj_ingest_create(void);

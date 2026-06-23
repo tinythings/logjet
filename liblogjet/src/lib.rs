@@ -6,7 +6,8 @@ use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use opentelemetry_proto::tonic::collector::logs::v1::{ExportLogsServiceRequest, logs_service_client::LogsServiceClient};
@@ -16,12 +17,17 @@ use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 use tokio::runtime::{Builder, Runtime};
+use tokio::sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit, Semaphore};
 use tonic::Request;
 use tonic::transport::{Channel, Endpoint};
 
 const LJ_ATTR_STRING: i32 = 0;
 const LJ_ATTR_INT: i32 = 1;
 const LJ_ATTR_ARRAY: i32 = 2;
+const LJ_BACKPRESSURE_UNBOUNDED: i32 = 0;
+const LJ_BACKPRESSURE_DROP: i32 = 1;
+const LJ_BACKPRESSURE_BLOCK: i32 = 2;
+const DEFAULT_BACKPRESSURE_CAPACITY: usize = 1024;
 const DEFAULT_SCOPE_NAME: &str = "liblogjet";
 const VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
 
@@ -96,9 +102,23 @@ struct HttpEndpoint {
 }
 
 struct GrpcClient {
+    runtime: Runtime,
+    shared: Arc<GrpcShared>,
+}
+
+struct GrpcShared {
     endpoint: String,
-    runtime: Mutex<Runtime>,
-    channel: Mutex<Option<Channel>>,
+    channel: TokioMutex<Option<Channel>>,
+    backpressure: Mutex<Backpressure>,
+    inflight: AtomicU64,
+    async_errors: AtomicU64,
+    async_dropped: AtomicU64,
+    idle: Notify,
+}
+
+struct Backpressure {
+    model: i32,
+    semaphore: Arc<Semaphore>,
 }
 
 /// Returns the library version string.
@@ -149,7 +169,7 @@ pub unsafe extern "C" fn lj_logger_new_grpc(endpoint: *const c_char, service_nam
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_logger_log(logger: *mut lj_logger, record: *const LjLogRecord) -> bool {
     clear_last_error();
-    let logger = match unsafe { logger.as_mut() } {
+    let logger = match unsafe { logger.as_ref() } {
         Some(logger) => logger,
         None => {
             set_last_error("logger is null");
@@ -186,7 +206,7 @@ pub unsafe extern "C" fn lj_logger_log(logger: *mut lj_logger, record: *const Lj
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_logger_log_reuse(logger: *mut lj_logger, record: *const LjLogRecord) -> bool {
     clear_last_error();
-    let logger = match unsafe { logger.as_mut() } {
+    let logger = match unsafe { logger.as_ref() } {
         Some(logger) => logger,
         None => {
             set_last_error("logger is null");
@@ -226,7 +246,7 @@ pub unsafe extern "C" fn lj_logger_log_reuse(logger: *mut lj_logger, record: *co
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_logger_log_batch(logger: *mut lj_logger, records: *const LjLogRecord, len: usize) -> bool {
     clear_last_error();
-    let logger = match unsafe { logger.as_mut() } {
+    let logger = match unsafe { logger.as_ref() } {
         Some(logger) => logger,
         None => {
             set_last_error("logger is null");
@@ -246,6 +266,196 @@ pub unsafe extern "C" fn lj_logger_log_batch(logger: *mut lj_logger, records: *c
     }
 }
 
+/// Sends one log record without blocking, handing the send to a background
+/// runtime and returning immediately.
+///
+/// gRPC only. Returns `true` if the record was validated and enqueued; `false`
+/// (with `lj_error_message` set) only on immediate validation errors. Network
+/// failures occur later and are counted by `lj_logger_async_errors`; records
+/// dropped by backpressure are counted by `lj_logger_async_dropped`.
+///
+/// # Safety
+///
+/// `logger` must be a valid pointer returned by `lj_logger_new_grpc`. `record`
+/// must point to a valid `LjLogRecord` for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_logger_log_async(logger: *mut lj_logger, record: *const LjLogRecord) -> bool {
+    clear_last_error();
+    let logger = match unsafe { logger.as_ref() } {
+        Some(logger) => logger,
+        None => {
+            set_last_error("logger is null");
+            return false;
+        }
+    };
+    let record = match unsafe { record.as_ref() } {
+        Some(record) => record,
+        None => {
+            set_last_error("record is null");
+            return false;
+        }
+    };
+    match build_request(&logger.inner, record).and_then(|request| send_request_async(&logger.inner, request)) {
+        Ok(()) => true,
+        Err(err) => {
+            set_last_error(err);
+            false
+        }
+    }
+}
+
+/// Sends a batch of records without blocking (gRPC only). A `len` of `0` (or a
+/// null `records` pointer) is a successful no-op.
+///
+/// # Safety
+///
+/// `logger` must be a valid pointer returned by `lj_logger_new_grpc`. When
+/// `len > 0`, `records` must point to `len` valid `LjLogRecord` values for the
+/// duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_logger_log_batch_async(logger: *mut lj_logger, records: *const LjLogRecord, len: usize) -> bool {
+    clear_last_error();
+    let logger = match unsafe { logger.as_ref() } {
+        Some(logger) => logger,
+        None => {
+            set_last_error("logger is null");
+            return false;
+        }
+    };
+    if len == 0 || records.is_null() {
+        return true;
+    }
+    let records = unsafe { std::slice::from_raw_parts(records, len) };
+    match build_batch_request(&logger.inner, records).and_then(|request| send_request_async(&logger.inner, request)) {
+        Ok(()) => true,
+        Err(err) => {
+            set_last_error(err);
+            false
+        }
+    }
+}
+
+/// Configures the async backpressure policy for a gRPC logger.
+///
+/// `model` is one of `LJ_BACKPRESSURE_UNBOUNDED`, `LJ_BACKPRESSURE_DROP`, or
+/// `LJ_BACKPRESSURE_BLOCK`. `capacity` is the maximum number of in-flight async
+/// sends for the bounded models (ignored for unbounded). Should be called
+/// before the first async send. Returns `false` (with `lj_error_message`) on
+/// invalid input or for non-gRPC loggers.
+///
+/// # Safety
+///
+/// `logger` must be a valid pointer returned by `lj_logger_new_grpc`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_logger_set_backpressure(logger: *mut lj_logger, model: i32, capacity: usize) -> bool {
+    clear_last_error();
+    let logger = match unsafe { logger.as_ref() } {
+        Some(logger) => logger,
+        None => {
+            set_last_error("logger is null");
+            return false;
+        }
+    };
+    let client = match &logger.inner.backend {
+        Backend::Grpc(client) => client,
+        Backend::Http(_) => {
+            set_last_error("backpressure applies to gRPC loggers only");
+            return false;
+        }
+    };
+    if model != LJ_BACKPRESSURE_UNBOUNDED && model != LJ_BACKPRESSURE_DROP && model != LJ_BACKPRESSURE_BLOCK {
+        set_last_error("invalid backpressure model");
+        return false;
+    }
+    let capacity = if model == LJ_BACKPRESSURE_UNBOUNDED {
+        1
+    } else if capacity == 0 {
+        set_last_error("capacity must be >= 1 for bounded backpressure");
+        return false;
+    } else {
+        capacity
+    };
+    match client.shared.backpressure.lock() {
+        Ok(mut cfg) => {
+            cfg.model = model;
+            cfg.semaphore = Arc::new(Semaphore::new(capacity));
+            true
+        }
+        Err(_) => {
+            set_last_error("backpressure lock poisoned");
+            false
+        }
+    }
+}
+
+/// Blocks until all in-flight async sends complete or `timeout_ms` elapses.
+///
+/// Returns `true` if fully drained, `false` on timeout. HTTP loggers (which have
+/// no async queue) always return `true`.
+///
+/// # Safety
+///
+/// `logger` must be a valid pointer returned by this library.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_logger_flush(logger: *mut lj_logger, timeout_ms: u64) -> bool {
+    let logger = match unsafe { logger.as_ref() } {
+        Some(logger) => logger,
+        None => return false,
+    };
+    match &logger.inner.backend {
+        Backend::Grpc(client) => flush_grpc(client, Duration::from_millis(timeout_ms)),
+        Backend::Http(_) => true,
+    }
+}
+
+/// Returns the number of async sends that failed on the network.
+///
+/// # Safety
+///
+/// `logger` must be null or a valid pointer returned by this library.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_logger_async_errors(logger: *mut lj_logger) -> u64 {
+    match unsafe { logger.as_ref() } {
+        Some(logger) => match &logger.inner.backend {
+            Backend::Grpc(client) => client.shared.async_errors.load(Ordering::Relaxed),
+            Backend::Http(_) => 0,
+        },
+        None => 0,
+    }
+}
+
+/// Returns the number of records dropped by bounded backpressure.
+///
+/// # Safety
+///
+/// `logger` must be null or a valid pointer returned by this library.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_logger_async_dropped(logger: *mut lj_logger) -> u64 {
+    match unsafe { logger.as_ref() } {
+        Some(logger) => match &logger.inner.backend {
+            Backend::Grpc(client) => client.shared.async_dropped.load(Ordering::Relaxed),
+            Backend::Http(_) => 0,
+        },
+        None => 0,
+    }
+}
+
+/// Returns the number of async sends currently in flight.
+///
+/// # Safety
+///
+/// `logger` must be null or a valid pointer returned by this library.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_logger_async_inflight(logger: *mut lj_logger) -> u64 {
+    match unsafe { logger.as_ref() } {
+        Some(logger) => match &logger.inner.backend {
+            Backend::Grpc(client) => client.shared.inflight.load(Ordering::SeqCst),
+            Backend::Http(_) => 0,
+        },
+        None => 0,
+    }
+}
+
 /// Frees a logger created by one of the constructors. Accepts null.
 ///
 /// # Safety
@@ -257,7 +467,10 @@ pub unsafe extern "C" fn lj_logger_free(logger: *mut lj_logger) {
     if logger.is_null() {
         return;
     }
-    let _ = unsafe { Box::from_raw(logger) };
+    let boxed = unsafe { Box::from_raw(logger) };
+    if let Backend::Grpc(client) = &boxed.inner.backend {
+        let _ = flush_grpc(client, boxed.inner.timeout);
+    }
 }
 
 enum BackendKind {
@@ -283,7 +496,19 @@ unsafe fn new_logger_impl(endpoint: *const c_char, service_name: *const c_char, 
     let backend = match kind {
         BackendKind::Http => Backend::Http(parse_http_endpoint(&endpoint)?),
         BackendKind::Grpc => {
-            Backend::Grpc(GrpcClient { endpoint: normalise_grpc_endpoint(&endpoint), runtime: Mutex::new(grpc_runtime()?), channel: Mutex::new(None) })
+            let shared = Arc::new(GrpcShared {
+                endpoint: normalise_grpc_endpoint(&endpoint),
+                channel: TokioMutex::new(None),
+                backpressure: Mutex::new(Backpressure {
+                    model: LJ_BACKPRESSURE_DROP,
+                    semaphore: Arc::new(Semaphore::new(DEFAULT_BACKPRESSURE_CAPACITY)),
+                }),
+                inflight: AtomicU64::new(0),
+                async_errors: AtomicU64::new(0),
+                async_dropped: AtomicU64::new(0),
+                idle: Notify::new(),
+            });
+            Backend::Grpc(GrpcClient { runtime: grpc_runtime()?, shared })
         }
     };
     Ok(Logger { backend, service_name, timeout })
@@ -468,44 +693,103 @@ fn key_value(key: impl Into<String>, value: AnyValue) -> KeyValue {
 fn send_request(logger: &Logger, request: ExportLogsServiceRequest) -> Result<(), String> {
     match &logger.backend {
         Backend::Http(endpoint) => post_otlp_http(endpoint, logger.timeout, &request).map_err(|err| err.to_string()),
-        Backend::Grpc(client) => client
-            .runtime
-            .lock()
-            .map_err(|_| "gRPC runtime lock poisoned".to_string())?
-            .block_on(send_otlp_grpc(client.endpoint.clone(), logger.timeout, request))
-            .map_err(|err| err.to_string()),
+        Backend::Grpc(client) => client.runtime.block_on(send_otlp_grpc(client.shared.endpoint.clone(), logger.timeout, request)).map_err(|err| err.to_string()),
     }
 }
 
 fn send_request_reuse(logger: &Logger, request: ExportLogsServiceRequest) -> Result<(), String> {
     match &logger.backend {
         Backend::Http(endpoint) => post_otlp_http(endpoint, logger.timeout, &request).map_err(|err| err.to_string()),
-        Backend::Grpc(client) => send_otlp_grpc_pooled(client, logger.timeout, request),
+        Backend::Grpc(client) => client.runtime.block_on(send_pooled_async(client.shared.clone(), logger.timeout, request)),
     }
 }
 
-fn send_otlp_grpc_pooled(client: &GrpcClient, timeout: Duration, request: ExportLogsServiceRequest) -> Result<(), String> {
-    let runtime = client.runtime.lock().map_err(|_| "gRPC runtime lock poisoned".to_string())?;
+fn send_request_async(logger: &Logger, request: ExportLogsServiceRequest) -> Result<(), String> {
+    match &logger.backend {
+        Backend::Http(_) => Err("async send is not supported for HTTP loggers yet".to_string()),
+        Backend::Grpc(client) => enqueue_async_grpc(client, logger.timeout, request),
+    }
+}
 
+fn enqueue_async_grpc(client: &GrpcClient, timeout: Duration, request: ExportLogsServiceRequest) -> Result<(), String> {
+    let (model, semaphore) = {
+        let cfg = client.shared.backpressure.lock().map_err(|_| "backpressure lock poisoned".to_string())?;
+        (cfg.model, cfg.semaphore.clone())
+    };
+    match model {
+        LJ_BACKPRESSURE_UNBOUNDED => spawn_send(client, timeout, request, None),
+        LJ_BACKPRESSURE_DROP => match semaphore.try_acquire_owned() {
+            Ok(permit) => spawn_send(client, timeout, request, Some(permit)),
+            Err(_) => {
+                client.shared.async_dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        },
+        LJ_BACKPRESSURE_BLOCK => {
+            let permit = client.runtime.block_on(semaphore.acquire_owned()).map_err(|err| err.to_string())?;
+            spawn_send(client, timeout, request, Some(permit));
+        }
+        other => return Err(format!("invalid backpressure model {other}")),
+    }
+    Ok(())
+}
+
+fn spawn_send(client: &GrpcClient, timeout: Duration, request: ExportLogsServiceRequest, permit: Option<OwnedSemaphorePermit>) {
+    let shared = client.shared.clone();
+    shared.inflight.fetch_add(1, Ordering::SeqCst);
+    client.runtime.spawn(async move {
+        let _permit = permit;
+        if send_pooled_async(shared.clone(), timeout, request).await.is_err() {
+            shared.async_errors.fetch_add(1, Ordering::Relaxed);
+        }
+        if shared.inflight.fetch_sub(1, Ordering::SeqCst) == 1 {
+            shared.idle.notify_waiters();
+        }
+    });
+}
+
+fn flush_grpc(client: &GrpcClient, timeout: Duration) -> bool {
+    client.runtime.block_on(async {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if client.shared.inflight.load(Ordering::SeqCst) == 0 {
+                return true;
+            }
+            let notified = client.shared.idle.notified();
+            if client.shared.inflight.load(Ordering::SeqCst) == 0 {
+                return true;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            if tokio::time::timeout(deadline - now, notified).await.is_err() {
+                return client.shared.inflight.load(Ordering::SeqCst) == 0;
+            }
+        }
+    })
+}
+
+async fn send_pooled_async(shared: Arc<GrpcShared>, timeout: Duration, request: ExportLogsServiceRequest) -> Result<(), String> {
+    // Connect-once: hold the lock across connect so a concurrent burst opens a
+    // single connection; release it before export so sends run concurrently over
+    // the shared multiplexed channel.
     let channel = {
-        let mut guard = client.channel.lock().map_err(|_| "gRPC channel lock poisoned".to_string())?;
+        let mut guard = shared.channel.lock().await;
         match guard.as_ref() {
             Some(channel) => channel.clone(),
             None => {
-                let channel = runtime.block_on(connect_channel(&client.endpoint, timeout)).map_err(|err| err.to_string())?;
+                let channel = connect_channel(&shared.endpoint, timeout).await.map_err(|err| err.to_string())?;
                 *guard = Some(channel.clone());
                 channel
             }
         }
     };
 
-    let result = runtime.block_on(export_on_channel(channel, request));
-    if result.is_err()
-        && let Ok(mut guard) = client.channel.lock()
-    {
-        *guard = None;
+    let result = export_on_channel(channel, request).await.map_err(|err| err.to_string());
+    if result.is_err() {
+        *shared.channel.lock().await = None;
     }
-    result.map_err(|err| err.to_string())
+    result
 }
 
 async fn connect_channel(endpoint: &str, timeout: Duration) -> Result<Channel, Box<dyn std::error::Error>> {
