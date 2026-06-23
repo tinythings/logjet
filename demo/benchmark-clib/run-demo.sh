@@ -9,6 +9,7 @@ BENCH="$TARGET_DIR/benchmark-clib"
 CONFIG="$SCRIPT_DIR/ljd.conf"
 ENDPOINT="127.0.0.1:4317"
 COUNT="${1:-1000}"
+BATCH_SIZE="${2:-100}"
 
 echo "building ljd, liblogjet, and the benchmark driver"
 cargo build -p ljd -p liblogjet -p otlp-demo --bin benchmark-clib
@@ -26,6 +27,6 @@ trap cleanup EXIT INT TERM
 
 sleep 1
 
-echo "running benchmark ($COUNT records per phase)"
+echo "running benchmark ($COUNT records per phase, batch=$BATCH_SIZE)"
 echo
-"$BENCH" "$ENDPOINT" "$COUNT"
+"$BENCH" "$ENDPOINT" "$COUNT" "$BATCH_SIZE"
