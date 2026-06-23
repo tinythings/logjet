@@ -693,7 +693,9 @@ fn key_value(key: impl Into<String>, value: AnyValue) -> KeyValue {
 fn send_request(logger: &Logger, request: ExportLogsServiceRequest) -> Result<(), String> {
     match &logger.backend {
         Backend::Http(endpoint) => post_otlp_http(endpoint, logger.timeout, &request).map_err(|err| err.to_string()),
-        Backend::Grpc(client) => client.runtime.block_on(send_otlp_grpc(client.shared.endpoint.clone(), logger.timeout, request)).map_err(|err| err.to_string()),
+        Backend::Grpc(client) => {
+            client.runtime.block_on(send_otlp_grpc(client.shared.endpoint.clone(), logger.timeout, request)).map_err(|err| err.to_string())
+        }
     }
 }
 

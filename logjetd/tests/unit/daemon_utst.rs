@@ -48,9 +48,7 @@ async fn handle_otlp_http_request_logs_accepts_valid_batch() {
                 log_records: vec![LogRecord {
                     severity_number: 13,
                     severity_text: "WARN".to_string(),
-                    body: Some(AnyValue {
-                        value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue("warn".to_string())),
-                    }),
+                    body: Some(AnyValue { value: Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue("warn".to_string())) }),
                     ..Default::default()
                 }],
                 schema_url: String::new(),
@@ -223,11 +221,7 @@ async fn handle_otlp_http_request_unknown_path_returns_404() {
     }));
     let next_seq = Arc::new(AtomicU64::new(1));
 
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/v1/unknown")
-        .body(Full::new(Bytes::new()))
-        .unwrap();
+    let req = Request::builder().method(Method::POST).uri("/v1/unknown").body(Full::new(Bytes::new())).unwrap();
     let response = handle_otlp_http_request(req, shared_spool, policy, next_seq, 1024).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
@@ -475,7 +469,12 @@ fn extract_batch_timestamp_metrics_finds_first_datapoint_time() {
         resource_metrics: vec![ResourceMetrics {
             resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
             scope_metrics: vec![ScopeMetrics {
-                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 metrics: vec![metric],
                 schema_url: String::new(),
             }],
@@ -497,7 +496,12 @@ fn extract_batch_timestamp_traces_finds_first_span_start_time() {
         resource_spans: vec![ResourceSpans {
             resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
             scope_spans: vec![ScopeSpans {
-                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 spans: vec![Span {
                     trace_id: vec![1, 2, 3, 4],
                     span_id: vec![5, 6, 7, 8],

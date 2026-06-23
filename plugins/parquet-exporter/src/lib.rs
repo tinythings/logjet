@@ -135,11 +135,7 @@ impl ParquetExporter {
         if record.struct_size < std::mem::size_of::<LjxExportRecordV1>() as u32 {
             return self.fail_status(
                 LJX_EXPORT_STATUS_BAD_ARG,
-                format!(
-                    "record struct_size {} is smaller than host ABI expects {}",
-                    record.struct_size,
-                    std::mem::size_of::<LjxExportRecordV1>()
-                ),
+                format!("record struct_size {} is smaller than host ABI expects {}", record.struct_size, std::mem::size_of::<LjxExportRecordV1>()),
             );
         }
         if record.payload.ptr.is_null() && record.payload.len != 0 {
@@ -246,7 +242,7 @@ impl ParquetExporter {
         let request = match ExportMetricsServiceRequest::decode(payload) {
             Ok(request) => request,
             Err(err) => {
-                return self.fail_status(LJX_EXPORT_STATUS_ERROR, format!("failed to decode OTLP metrics payload at seq {}: {err}", record.seq))
+                return self.fail_status(LJX_EXPORT_STATUS_ERROR, format!("failed to decode OTLP metrics payload at seq {}: {err}", record.seq));
             }
         };
 
@@ -269,7 +265,18 @@ impl ParquetExporter {
                         match data {
                             MetricData::Gauge(gauge) => {
                                 for dp in &gauge.data_points {
-                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Gauge");
+                                    let mut row = self.base_metrics_row(
+                                        record,
+                                        &service_name,
+                                        &resource_attributes_json,
+                                        scope_name,
+                                        scope_version,
+                                        &scope_attributes_json,
+                                        &metric_name,
+                                        &metric_description,
+                                        &metric_unit,
+                                        "Gauge",
+                                    );
                                     row.metric_value_number = dp.value.as_ref().and_then(number_data_point_value_f64);
                                     row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
                                     row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
@@ -279,7 +286,18 @@ impl ParquetExporter {
                             }
                             MetricData::Sum(sum) => {
                                 for dp in &sum.data_points {
-                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Sum");
+                                    let mut row = self.base_metrics_row(
+                                        record,
+                                        &service_name,
+                                        &resource_attributes_json,
+                                        scope_name,
+                                        scope_version,
+                                        &scope_attributes_json,
+                                        &metric_name,
+                                        &metric_description,
+                                        &metric_unit,
+                                        "Sum",
+                                    );
                                     row.metric_value_number = dp.value.as_ref().and_then(number_data_point_value_f64);
                                     row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
                                     row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
@@ -291,7 +309,18 @@ impl ParquetExporter {
                             }
                             MetricData::Histogram(hist) => {
                                 for dp in &hist.data_points {
-                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Histogram");
+                                    let mut row = self.base_metrics_row(
+                                        record,
+                                        &service_name,
+                                        &resource_attributes_json,
+                                        scope_name,
+                                        scope_version,
+                                        &scope_attributes_json,
+                                        &metric_name,
+                                        &metric_description,
+                                        &metric_unit,
+                                        "Histogram",
+                                    );
                                     row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
                                     row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
                                     row.metric_value_count = Some(dp.count);
@@ -303,7 +332,18 @@ impl ParquetExporter {
                             }
                             MetricData::ExponentialHistogram(ehist) => {
                                 for dp in &ehist.data_points {
-                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "ExponentialHistogram");
+                                    let mut row = self.base_metrics_row(
+                                        record,
+                                        &service_name,
+                                        &resource_attributes_json,
+                                        scope_name,
+                                        scope_version,
+                                        &scope_attributes_json,
+                                        &metric_name,
+                                        &metric_description,
+                                        &metric_unit,
+                                        "ExponentialHistogram",
+                                    );
                                     row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
                                     row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
                                     row.metric_value_count = Some(dp.count);
@@ -315,7 +355,18 @@ impl ParquetExporter {
                             }
                             MetricData::Summary(summary) => {
                                 for dp in &summary.data_points {
-                                    let mut row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Summary");
+                                    let mut row = self.base_metrics_row(
+                                        record,
+                                        &service_name,
+                                        &resource_attributes_json,
+                                        scope_name,
+                                        scope_version,
+                                        &scope_attributes_json,
+                                        &metric_name,
+                                        &metric_description,
+                                        &metric_unit,
+                                        "Summary",
+                                    );
                                     row.timestamp_unix_ns = Some(dp.time_unix_nano.max(record.timestamp_unix_ns));
                                     row.start_time_unix_ns = zero_is_none(dp.start_time_unix_nano);
                                     row.metric_value_count = Some(dp.count);
@@ -327,7 +378,18 @@ impl ParquetExporter {
                         }
                     } else {
                         // Metric with no data: emit one row with metadata only
-                        let row = self.base_metrics_row(record, &service_name, &resource_attributes_json, scope_name, scope_version, &scope_attributes_json, &metric_name, &metric_description, &metric_unit, "Unknown");
+                        let row = self.base_metrics_row(
+                            record,
+                            &service_name,
+                            &resource_attributes_json,
+                            scope_name,
+                            scope_version,
+                            &scope_attributes_json,
+                            &metric_name,
+                            &metric_description,
+                            &metric_unit,
+                            "Unknown",
+                        );
                         self.rows.push(row);
                     }
                 }
@@ -351,7 +413,7 @@ impl ParquetExporter {
         let request = match ExportTraceServiceRequest::decode(payload) {
             Ok(request) => request,
             Err(err) => {
-                return self.fail_status(LJX_EXPORT_STATUS_ERROR, format!("failed to decode OTLP traces payload at seq {}: {err}", record.seq))
+                return self.fail_status(LJX_EXPORT_STATUS_ERROR, format!("failed to decode OTLP traces payload at seq {}: {err}", record.seq));
             }
         };
 
@@ -774,11 +836,7 @@ fn schema() -> SchemaRef {
 
 fn validate_host(host: &LjxExportHostV1) -> Result<(), String> {
     if host.struct_size < std::mem::size_of::<LjxExportHostV1>() as u32 {
-        return Err(format!(
-            "host struct_size {} is smaller than plugin ABI expects {}",
-            host.struct_size,
-            std::mem::size_of::<LjxExportHostV1>()
-        ));
+        return Err(format!("host struct_size {} is smaller than plugin ABI expects {}", host.struct_size, std::mem::size_of::<LjxExportHostV1>()));
     }
     Ok(())
 }
@@ -808,11 +866,7 @@ fn abi_bytes<'a>(value: LjxAbiBytes) -> Result<&'a [u8], String> {
 }
 
 fn status_for_message(message: &str) -> i32 {
-    if message.contains("host callback") || message.contains("flush host output") {
-        LJX_EXPORT_STATUS_IO
-    } else {
-        LJX_EXPORT_STATUS_ERROR
-    }
+    if message.contains("host callback") || message.contains("flush host output") { LJX_EXPORT_STATUS_IO } else { LJX_EXPORT_STATUS_ERROR }
 }
 
 fn zero_is_none(value: u64) -> Option<u64> {
@@ -923,10 +977,8 @@ fn attrs_to_json(attrs: &[KeyValue]) -> Option<String> {
     if attrs.is_empty() {
         return None;
     }
-    let mut pairs = attrs
-        .iter()
-        .filter_map(|attr| attr.value.as_ref().and_then(any_value_to_json).map(|value| (attr.key.clone(), value)))
-        .collect::<Vec<_>>();
+    let mut pairs =
+        attrs.iter().filter_map(|attr| attr.value.as_ref().and_then(any_value_to_json).map(|value| (attr.key.clone(), value))).collect::<Vec<_>>();
     if pairs.is_empty() {
         return None;
     }

@@ -345,10 +345,18 @@ impl BridgeStats {
 
     fn drop_summary(&self) -> String {
         let mut parts = Vec::new();
-        if self.drops_logs > 0 { parts.push(format!("logs_drops={}", self.drops_logs)); }
-        if self.drops_metrics > 0 { parts.push(format!("metrics_drops={}", self.drops_metrics)); }
-        if self.drops_traces > 0 { parts.push(format!("traces_drops={}", self.drops_traces)); }
-        if self.drops_events > 0 { parts.push(format!("events_drops={}", self.drops_events)); }
+        if self.drops_logs > 0 {
+            parts.push(format!("logs_drops={}", self.drops_logs));
+        }
+        if self.drops_metrics > 0 {
+            parts.push(format!("metrics_drops={}", self.drops_metrics));
+        }
+        if self.drops_traces > 0 {
+            parts.push(format!("traces_drops={}", self.drops_traces));
+        }
+        if self.drops_events > 0 {
+            parts.push(format!("events_drops={}", self.drops_events));
+        }
         if parts.is_empty() { "drops=0".to_string() } else { parts.join(" ") }
     }
 
@@ -551,7 +559,8 @@ impl GrpcCollectorConnection {
     }
 
     fn reconnect(&mut self) -> io::Result<()> {
-        let (client, metrics_client, traces_client) = self.runtime.block_on(connect_grpc_with_collector(&self.endpoint, self.timeout, Some(&self.collector)))?;
+        let (client, metrics_client, traces_client) =
+            self.runtime.block_on(connect_grpc_with_collector(&self.endpoint, self.timeout, Some(&self.collector)))?;
         self.client = client;
         self.metrics_client = metrics_client;
         self.traces_client = traces_client;

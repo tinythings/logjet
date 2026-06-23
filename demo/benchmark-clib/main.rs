@@ -20,8 +20,8 @@ use std::ptr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use liblogjet::{
-    LjAttribute, LjLogRecord, lj_error_message, lj_logger, lj_logger_async_dropped, lj_logger_async_errors, lj_logger_flush, lj_logger_free, lj_logger_log, lj_logger_log_async,
-    lj_logger_log_batch, lj_logger_log_reuse, lj_logger_new_grpc,
+    LjAttribute, LjLogRecord, lj_error_message, lj_logger, lj_logger_async_dropped, lj_logger_async_errors, lj_logger_flush, lj_logger_free,
+    lj_logger_log, lj_logger_log_async, lj_logger_log_batch, lj_logger_log_reuse, lj_logger_new_grpc,
 };
 use logjet::{LogjetWriter, RecordType};
 

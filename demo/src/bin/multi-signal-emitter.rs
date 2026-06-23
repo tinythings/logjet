@@ -15,21 +15,12 @@ fn main() {
     let addr = &args[1];
     let count: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
 
-    let logs_endpoint = if addr.starts_with("http://") || addr.starts_with("https://") {
-        format!("{addr}/v1/logs")
-    } else {
-        format!("http://{addr}/v1/logs")
-    };
-    let metrics_endpoint = if addr.starts_with("http://") || addr.starts_with("https://") {
-        format!("{addr}/v1/metrics")
-    } else {
-        format!("http://{addr}/v1/metrics")
-    };
-    let traces_endpoint = if addr.starts_with("http://") || addr.starts_with("https://") {
-        format!("{addr}/v1/traces")
-    } else {
-        format!("http://{addr}/v1/traces")
-    };
+    let logs_endpoint =
+        if addr.starts_with("http://") || addr.starts_with("https://") { format!("{addr}/v1/logs") } else { format!("http://{addr}/v1/logs") };
+    let metrics_endpoint =
+        if addr.starts_with("http://") || addr.starts_with("https://") { format!("{addr}/v1/metrics") } else { format!("http://{addr}/v1/metrics") };
+    let traces_endpoint =
+        if addr.starts_with("http://") || addr.starts_with("https://") { format!("{addr}/v1/traces") } else { format!("http://{addr}/v1/traces") };
 
     println!("multi-signal-emitter sending {count} batches per signal (logs, metrics, traces) to {addr}");
 

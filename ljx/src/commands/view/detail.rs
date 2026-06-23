@@ -1,9 +1,9 @@
 use chrono::{TimeZone, Utc};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
-use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::metrics::v1::metric::Data as MetricData;
 use prost::Message;
 use ratatui::style::{Color, Modifier, Style};
@@ -289,11 +289,7 @@ pub(crate) fn extract_otlp_metrics_summary(payload: &[u8]) -> Option<String> {
         }
     }
 
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(", "))
-    }
+    if parts.is_empty() { None } else { Some(parts.join(", ")) }
 }
 
 pub(crate) fn extract_otlp_traces_summary(payload: &[u8]) -> Option<String> {
@@ -315,11 +311,7 @@ pub(crate) fn extract_otlp_traces_summary(payload: &[u8]) -> Option<String> {
         }
     }
 
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(", "))
-    }
+    if parts.is_empty() { None } else { Some(parts.join(", ")) }
 }
 
 pub(crate) fn extract_otlp_traces_message(payload: &[u8]) -> Option<String> {
@@ -353,11 +345,7 @@ pub(crate) fn extract_otlp_traces_message(payload: &[u8]) -> Option<String> {
         }
     }
 
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
+    if lines.is_empty() { None } else { Some(lines.join("\n")) }
 }
 
 fn format_span_kind(kind: i32) -> String {
@@ -393,13 +381,22 @@ pub(crate) fn extract_otlp_metrics_message(payload: &[u8]) -> Option<String> {
                     Some(Data::Gauge(g)) => {
                         lines.push("  Type: Gauge".to_string());
                         for dp in &g.data_points {
-                            lines.push(format!("  - time={}, value={}", format_timestamp(dp.time_unix_nano), dp.value.as_ref().map(format_data_point_value).unwrap_or_default()));
+                            lines.push(format!(
+                                "  - time={}, value={}",
+                                format_timestamp(dp.time_unix_nano),
+                                dp.value.as_ref().map(format_data_point_value).unwrap_or_default()
+                            ));
                         }
                     }
                     Some(Data::Sum(s)) => {
                         lines.push(format!("  Type: Sum (monotonic={}, temporality={})", s.is_monotonic, s.aggregation_temporality));
                         for dp in &s.data_points {
-                            lines.push(format!("  - time={}, start_time={}, value={}", format_timestamp(dp.time_unix_nano), format_timestamp(dp.start_time_unix_nano), dp.value.as_ref().map(format_data_point_value).unwrap_or_default()));
+                            lines.push(format!(
+                                "  - time={}, start_time={}, value={}",
+                                format_timestamp(dp.time_unix_nano),
+                                format_timestamp(dp.start_time_unix_nano),
+                                dp.value.as_ref().map(format_data_point_value).unwrap_or_default()
+                            ));
                         }
                     }
                     Some(Data::Histogram(h)) => {
@@ -427,11 +424,7 @@ pub(crate) fn extract_otlp_metrics_message(payload: &[u8]) -> Option<String> {
         }
     }
 
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
+    if lines.is_empty() { None } else { Some(lines.join("\n")) }
 }
 
 fn format_data_point_value(value: &opentelemetry_proto::tonic::metrics::v1::number_data_point::Value) -> String {
@@ -624,7 +617,7 @@ fn render_modal_metrics_info_entries(detail: &DetailRecord) -> Vec<(String, Stri
     for resource_metrics in &batch.resource_metrics {
         for scope_metrics in &resource_metrics.scope_metrics {
             for metric in &scope_metrics.metrics {
-                let prefix = format!("metric.{}" , metric.name);
+                let prefix = format!("metric.{}", metric.name);
                 entries.push((format!("{prefix}.unit"), metric.unit.clone()));
                 if !metric.description.is_empty() {
                     entries.push((format!("{prefix}.description"), metric.description.clone()));
@@ -1018,7 +1011,9 @@ fn export_metrics_ndjson(detail: &DetailRecord) -> Vec<JsonValue> {
 
 fn data_point_value_to_json(value: &opentelemetry_proto::tonic::metrics::v1::number_data_point::Value) -> JsonValue {
     match value {
-        opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(v) => serde_json::Number::from_f64(*v).map(JsonValue::Number).unwrap_or(JsonValue::Null),
+        opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(v) => {
+            serde_json::Number::from_f64(*v).map(JsonValue::Number).unwrap_or(JsonValue::Null)
+        }
         opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(v) => JsonValue::Number((*v).into()),
     }
 }

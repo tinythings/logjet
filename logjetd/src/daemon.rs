@@ -284,8 +284,10 @@ fn ingest_loop(
             );
 
             let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|err| io::Error::other(err.to_string()))?;
-            let logs_service = OtlpGrpcLogsService { spool: Arc::clone(&spool), next_seq: Arc::clone(&next_seq), ingest_policy: Arc::clone(&ingest_policy) };
-            let metrics_service = OtlpGrpcMetricsService { spool: Arc::clone(&spool), next_seq: Arc::clone(&next_seq), ingest_policy: Arc::clone(&ingest_policy) };
+            let logs_service =
+                OtlpGrpcLogsService { spool: Arc::clone(&spool), next_seq: Arc::clone(&next_seq), ingest_policy: Arc::clone(&ingest_policy) };
+            let metrics_service =
+                OtlpGrpcMetricsService { spool: Arc::clone(&spool), next_seq: Arc::clone(&next_seq), ingest_policy: Arc::clone(&ingest_policy) };
             let traces_service = OtlpGrpcTracesService { spool, next_seq, ingest_policy };
             let grpc_tls = if ingest_tls.enable { Some(build_grpc_server_tls_config(&ingest_tls)?) } else { None };
 
@@ -365,15 +367,8 @@ async fn serve_otlp_http_connection(
         return Ok(());
     };
 
-    let svc = service_fn(move |req| {
-        handle_otlp_http_request(
-            req,
-            Arc::clone(&spool),
-            Arc::clone(&ingest_policy),
-            Arc::clone(&next_seq),
-            max_batch_bytes,
-        )
-    });
+    let svc =
+        service_fn(move |req| handle_otlp_http_request(req, Arc::clone(&spool), Arc::clone(&ingest_policy), Arc::clone(&next_seq), max_batch_bytes));
 
     if let Some(acceptor) = tls_acceptor {
         let tls_stream = acceptor.accept(stream).await.map_err(|err| io::Error::other(err.to_string()))?;
@@ -398,8 +393,7 @@ where
     let is_metrics = req.uri().path() == "/v1/metrics";
     let is_traces = req.uri().path() == "/v1/traces";
 
-    let content_encoding =
-        req.headers().get("content-encoding").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    let content_encoding = req.headers().get("content-encoding").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
 
     let (parts, body) = req.into_parts();
 
@@ -407,8 +401,8 @@ where
     if let Some(len) = parts.headers.get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<usize>().ok())
         && len > max_batch_bytes
     {
-            ingest_policy.note_oversize()?;
-            return Ok(HyperResponse::builder().status(StatusCode::PAYLOAD_TOO_LARGE).body(Full::new(Bytes::from("payload too large"))).unwrap());
+        ingest_policy.note_oversize()?;
+        return Ok(HyperResponse::builder().status(StatusCode::PAYLOAD_TOO_LARGE).body(Full::new(Bytes::from("payload too large"))).unwrap());
     }
 
     let collected = body.collect().await.map_err(|err| io::Error::other(format!("failed to read request body: {err}")))?;
@@ -448,10 +442,9 @@ where
                 append_batch_record(&spool, record)?;
                 Ok(HyperResponse::builder().status(StatusCode::OK).body(Full::new(Bytes::new())).unwrap())
             }
-            Err(err) => Ok(HyperResponse::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Full::new(Bytes::from(format!("decode error: {err}"))))
-                .unwrap()),
+            Err(err) => {
+                Ok(HyperResponse::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(format!("decode error: {err}")))).unwrap())
+            }
         }
     } else if is_traces {
         match ExportTraceServiceRequest::decode(body_vec.as_slice()) {
@@ -472,10 +465,9 @@ where
                 append_batch_record(&spool, record)?;
                 Ok(HyperResponse::builder().status(StatusCode::OK).body(Full::new(Bytes::new())).unwrap())
             }
-            Err(err) => Ok(HyperResponse::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Full::new(Bytes::from(format!("decode error: {err}"))))
-                .unwrap()),
+            Err(err) => {
+                Ok(HyperResponse::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(format!("decode error: {err}")))).unwrap())
+            }
         }
     } else {
         match ExportLogsServiceRequest::decode(body_vec.as_slice()) {
@@ -496,10 +488,9 @@ where
                 append_batch_record(&spool, record)?;
                 Ok(HyperResponse::builder().status(StatusCode::OK).body(Full::new(Bytes::new())).unwrap())
             }
-            Err(err) => Ok(HyperResponse::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Full::new(Bytes::from(format!("decode error: {err}"))))
-                .unwrap()),
+            Err(err) => {
+                Ok(HyperResponse::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(format!("decode error: {err}")))).unwrap())
+            }
         }
     }
 }

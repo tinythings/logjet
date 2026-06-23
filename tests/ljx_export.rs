@@ -44,7 +44,9 @@ fn ljx_exports_cpp_demo_to_parquet_and_preserves_rows() -> io::Result<()> {
         actual.iter().filter_map(|row| row.service_name.clone()).collect::<Vec<_>>(),
         expected.iter().filter_map(|row| row.service_name.clone()).collect::<Vec<_>>()
     );
-    assert!(actual.iter().all(|row| row.body_kind == Some("string".to_string()) || row.body_kind == Some("empty".to_string()) || row.body_json.is_some()));
+    assert!(
+        actual.iter().all(|row| row.body_kind == Some("string".to_string()) || row.body_kind == Some("empty".to_string()) || row.body_json.is_some())
+    );
     Ok(())
 }
 
@@ -449,11 +451,7 @@ fn encode_metrics_request(service_name: Option<&str>) -> io::Result<Vec<u8>> {
 
     let resource_metrics = ResourceMetrics {
         resource: Some(resource),
-        scope_metrics: vec![ScopeMetrics {
-            scope: None,
-            metrics,
-            schema_url: String::new(),
-        }],
+        scope_metrics: vec![ScopeMetrics { scope: None, metrics, schema_url: String::new() }],
         schema_url: String::new(),
     };
 
@@ -512,11 +510,7 @@ fn encode_traces_request(service_name: Option<&str>) -> io::Result<Vec<u8>> {
 
     let resource_spans = ResourceSpans {
         resource: Some(resource),
-        scope_spans: vec![ScopeSpans {
-            scope: None,
-            spans,
-            schema_url: String::new(),
-        }],
+        scope_spans: vec![ScopeSpans { scope: None, spans, schema_url: String::new() }],
         schema_url: String::new(),
     };
 

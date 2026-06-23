@@ -9,14 +9,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use colored::Colorize;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs, SeverityNumber};
 use opentelemetry_proto::tonic::metrics::v1::number_data_point::Value as DataPointValue;
-use opentelemetry_proto::tonic::metrics::v1::{
-    AggregationTemporality, Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, Sum,
-};
+use opentelemetry_proto::tonic::metrics::v1::{AggregationTemporality, Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, Sum};
 use opentelemetry_proto::tonic::resource::v1::Resource;
-use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
 use prost::Message;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
@@ -131,10 +129,7 @@ pub fn build_metrics_request(sequence: u64) -> ExportMetricsServiceRequest {
     let request_count = sequence * 100 + 42;
 
     let resource = Resource {
-        attributes: vec![
-            string_attr("service.name", "metrics-demo"),
-            string_attr("host.name", "garage-rig"),
-        ],
+        attributes: vec![string_attr("service.name", "metrics-demo"), string_attr("host.name", "garage-rig")],
         dropped_attributes_count: 0,
         entity_refs: Vec::new(),
     };
@@ -185,11 +180,7 @@ pub fn build_metrics_request(sequence: u64) -> ExportMetricsServiceRequest {
     ExportMetricsServiceRequest {
         resource_metrics: vec![ResourceMetrics {
             resource: Some(resource),
-            scope_metrics: vec![ScopeMetrics {
-                scope: Some(scope),
-                metrics: vec![cpu_metric, requests_metric],
-                schema_url: String::new(),
-            }],
+            scope_metrics: vec![ScopeMetrics { scope: Some(scope), metrics: vec![cpu_metric, requests_metric], schema_url: String::new() }],
             schema_url: String::new(),
         }],
     }
@@ -537,10 +528,7 @@ pub fn build_trace_request(sequence: u64) -> ExportTraceServiceRequest {
     ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
             resource: Some(Resource {
-                attributes: vec![
-                    string_attr("service.name", "traces-demo"),
-                    string_attr("host.name", "garage-rig"),
-                ],
+                attributes: vec![string_attr("service.name", "traces-demo"), string_attr("host.name", "garage-rig")],
                 dropped_attributes_count: 0,
                 entity_refs: Vec::new(),
             }),
@@ -582,10 +570,7 @@ pub fn build_trace_request(sequence: u64) -> ExportTraceServiceRequest {
                         kind: 3,
                         start_time_unix_nano: base_nanos + sequence * 1_000_000 + 2_000_000,
                         end_time_unix_nano: base_nanos + sequence * 1_000_000 + ((sequence % 50 + 1) * 1_000_000) - 1_000_000,
-                        attributes: vec![
-                            string_attr("db.system", "postgres"),
-                            string_attr("db.statement", "SELECT * FROM items WHERE id = $1"),
-                        ],
+                        attributes: vec![string_attr("db.system", "postgres"), string_attr("db.statement", "SELECT * FROM items WHERE id = $1")],
                         dropped_attributes_count: 0,
                         events: vec![],
                         dropped_events_count: 0,
