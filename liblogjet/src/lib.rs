@@ -209,6 +209,43 @@ pub unsafe extern "C" fn lj_logger_log_reuse(logger: *mut lj_logger, record: *co
     }
 }
 
+/// Sends a batch of records in a single export request over a persistent
+/// connection.
+///
+/// Records sharing the same effective service name, scope name, resource
+/// attributes, and scope attributes are grouped into one `ScopeLogs`. A `len`
+/// of `0` (or a null `records` pointer) is a successful no-op. For gRPC loggers
+/// the batch is sent over the reused channel; HTTP loggers send one POST for
+/// the whole batch.
+///
+/// # Safety
+///
+/// `logger` must be a valid pointer returned by `lj_logger_new_http` or
+/// `lj_logger_new_grpc`. When `len > 0`, `records` must point to `len` valid
+/// `LjLogRecord` values for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_logger_log_batch(logger: *mut lj_logger, records: *const LjLogRecord, len: usize) -> bool {
+    clear_last_error();
+    let logger = match unsafe { logger.as_mut() } {
+        Some(logger) => logger,
+        None => {
+            set_last_error("logger is null");
+            return false;
+        }
+    };
+    if len == 0 || records.is_null() {
+        return true;
+    }
+    let records = unsafe { std::slice::from_raw_parts(records, len) };
+    match build_batch_request(&logger.inner, records).and_then(|request| send_request_reuse(&logger.inner, request)) {
+        Ok(()) => true,
+        Err(err) => {
+            set_last_error(err);
+            false
+        }
+    }
+}
+
 /// Frees a logger created by one of the constructors. Accepts null.
 ///
 /// # Safety
@@ -256,24 +293,115 @@ fn grpc_runtime() -> Result<Runtime, String> {
     Builder::new_multi_thread().enable_all().build().map_err(|err| err.to_string())
 }
 
+/// Raw `(key, value_type, value)` attribute triples read once from the C side.
+type AttrTriples = Vec<(String, i32, String)>;
+/// Grouping key for a resource: effective service name plus resource attributes.
+type ResourceKey = (String, AttrTriples);
+/// Grouping key for a scope: effective scope name plus scope attributes.
+type ScopeKey = (String, AttrTriples);
+
 fn build_request(logger: &Logger, record: &LjLogRecord) -> Result<ExportLogsServiceRequest, String> {
+    let (_, resource_attrs) = resolve_resource(logger, record)?;
+    let (_, scope) = resolve_scope(record)?;
+    let log = record_to_log(record)?;
+
+    Ok(ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            schema_url: String::new(),
+            resource: Some(Resource { attributes: resource_attrs, dropped_attributes_count: 0, entity_refs: Vec::new() }),
+            scope_logs: vec![ScopeLogs { schema_url: String::new(), scope: Some(scope), log_records: vec![log] }],
+        }],
+    })
+}
+
+fn build_batch_request(logger: &Logger, records: &[LjLogRecord]) -> Result<ExportLogsServiceRequest, String> {
+    use std::collections::HashMap;
+
+    struct ScopeGroup {
+        scope: InstrumentationScope,
+        log_records: Vec<LogRecord>,
+    }
+    struct ResourceGroup {
+        resource_attrs: Vec<KeyValue>,
+        scopes: Vec<ScopeGroup>,
+        scope_index: HashMap<ScopeKey, usize>,
+    }
+
+    let mut groups: Vec<ResourceGroup> = Vec::new();
+    let mut resource_index: HashMap<ResourceKey, usize> = HashMap::new();
+
+    for record in records {
+        let (resource_key, resource_attrs) = resolve_resource(logger, record)?;
+        let (scope_key, scope) = resolve_scope(record)?;
+        let log = record_to_log(record)?;
+
+        let resource_idx = match resource_index.get(&resource_key) {
+            Some(idx) => *idx,
+            None => {
+                groups.push(ResourceGroup { resource_attrs, scopes: Vec::new(), scope_index: HashMap::new() });
+                let idx = groups.len() - 1;
+                resource_index.insert(resource_key, idx);
+                idx
+            }
+        };
+
+        let group = &mut groups[resource_idx];
+        let scope_idx = match group.scope_index.get(&scope_key) {
+            Some(idx) => *idx,
+            None => {
+                group.scopes.push(ScopeGroup { scope, log_records: Vec::new() });
+                let idx = group.scopes.len() - 1;
+                group.scope_index.insert(scope_key, idx);
+                idx
+            }
+        };
+        group.scopes[scope_idx].log_records.push(log);
+    }
+
+    Ok(ExportLogsServiceRequest {
+        resource_logs: groups
+            .into_iter()
+            .map(|group| ResourceLogs {
+                schema_url: String::new(),
+                resource: Some(Resource { attributes: group.resource_attrs, dropped_attributes_count: 0, entity_refs: Vec::new() }),
+                scope_logs: group
+                    .scopes
+                    .into_iter()
+                    .map(|scope_group| ScopeLogs { schema_url: String::new(), scope: Some(scope_group.scope), log_records: scope_group.log_records })
+                    .collect(),
+            })
+            .collect(),
+    })
+}
+
+fn resolve_resource(logger: &Logger, record: &LjLogRecord) -> Result<(ResourceKey, Vec<KeyValue>), String> {
     let service_name = read_optional(record.service_name)?.unwrap_or_else(|| logger.service_name.clone());
     if service_name.is_empty() {
         return Err("service name is empty".to_string());
     }
 
-    let severity_text = read_optional(record.severity_text)?.unwrap_or_else(|| severity_text(record.severity_number).to_string());
-    let body = read_required_nonnull(record.body, "record.body")?;
-    let event_name = read_optional(record.event_name)?.unwrap_or_default();
-    let scope_name = read_optional(record.scope_name)?.unwrap_or_else(|| DEFAULT_SCOPE_NAME.to_string());
-
-    let mut resource_attrs = attrs_to_kvs(record.resource_attrs, record.resource_attrs_len)?;
-    if !resource_attrs.iter().any(|kv| kv.key == "service.name") {
+    let triples = read_attrs(record.resource_attrs, record.resource_attrs_len)?;
+    let mut resource_attrs = triples_to_kvs(&triples)?;
+    if !triples.iter().any(|(key, _, _)| key == "service.name") {
         resource_attrs.insert(0, key_value("service.name", AnyValue { value: Some(Value::StringValue(service_name.clone())) }));
     }
 
-    let scope_attrs = attrs_to_kvs(record.scope_attrs, record.scope_attrs_len)?;
-    let log_attrs = attrs_to_kvs(record.attributes, record.attributes_len)?;
+    Ok(((service_name, triples), resource_attrs))
+}
+
+fn resolve_scope(record: &LjLogRecord) -> Result<(ScopeKey, InstrumentationScope), String> {
+    let scope_name = read_optional(record.scope_name)?.unwrap_or_else(|| DEFAULT_SCOPE_NAME.to_string());
+    let triples = read_attrs(record.scope_attrs, record.scope_attrs_len)?;
+    let scope_attrs = triples_to_kvs(&triples)?;
+    let scope = InstrumentationScope { name: scope_name.clone(), version: String::new(), attributes: scope_attrs, dropped_attributes_count: 0 };
+    Ok(((scope_name, triples), scope))
+}
+
+fn record_to_log(record: &LjLogRecord) -> Result<LogRecord, String> {
+    let severity_text = read_optional(record.severity_text)?.unwrap_or_else(|| severity_text(record.severity_number).to_string());
+    let body = read_required_nonnull(record.body, "record.body")?;
+    let event_name = read_optional(record.event_name)?.unwrap_or_default();
+    let log_attrs = triples_to_kvs(&read_attrs(record.attributes, record.attributes_len)?)?;
 
     let mut log = LogRecord {
         time_unix_nano: record.timestamp_unix_ns,
@@ -291,47 +419,46 @@ fn build_request(logger: &Logger, record: &LjLogRecord) -> Result<ExportLogsServ
     if log.time_unix_nano == 0 {
         log.time_unix_nano = now_unix_ns();
     }
-
-    Ok(ExportLogsServiceRequest {
-        resource_logs: vec![ResourceLogs {
-            schema_url: String::new(),
-            resource: Some(Resource { attributes: resource_attrs, dropped_attributes_count: 0, entity_refs: Vec::new() }),
-            scope_logs: vec![ScopeLogs {
-                schema_url: String::new(),
-                scope: Some(InstrumentationScope { name: scope_name, version: String::new(), attributes: scope_attrs, dropped_attributes_count: 0 }),
-                log_records: vec![log],
-            }],
-        }],
-    })
+    Ok(log)
 }
 
-fn attrs_to_kvs(attrs: *const LjAttribute, len: usize) -> Result<Vec<KeyValue>, String> {
+fn read_attrs(attrs: *const LjAttribute, len: usize) -> Result<AttrTriples, String> {
     if len == 0 || attrs.is_null() {
         return Ok(Vec::new());
     }
     let attrs = unsafe { std::slice::from_raw_parts(attrs, len) };
-    attrs.iter().map(attr_to_kv).collect()
+    attrs
+        .iter()
+        .map(|attr| {
+            let key = read_required_nonnull(attr.key, "attribute.key")?;
+            let value = read_required_nonnull(attr.value, "attribute.value")?;
+            Ok((key, attr.value_type, value))
+        })
+        .collect()
 }
 
-fn attr_to_kv(attr: &LjAttribute) -> Result<KeyValue, String> {
-    let key = read_required_nonnull(attr.key, "attribute.key")?;
-    let raw = read_required_nonnull(attr.value, "attribute.value")?;
-    let value = match attr.value_type {
-        LJ_ATTR_STRING => AnyValue { value: Some(Value::StringValue(raw)) },
-        LJ_ATTR_INT => AnyValue { value: Some(Value::IntValue(raw.parse::<i64>().unwrap_or(0))) },
-        LJ_ATTR_ARRAY => AnyValue {
-            value: Some(Value::ArrayValue(ArrayValue {
-                values: raw
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|part| !part.is_empty())
-                    .map(|part| AnyValue { value: Some(Value::StringValue(part.to_string())) })
-                    .collect(),
-            })),
-        },
-        other => return Err(format!("unsupported attribute value_type {other}")),
-    };
-    Ok(key_value(key, value))
+fn triples_to_kvs(triples: &[(String, i32, String)]) -> Result<Vec<KeyValue>, String> {
+    triples
+        .iter()
+        .map(|(key, value_type, raw)| {
+            let value = match *value_type {
+                LJ_ATTR_STRING => AnyValue { value: Some(Value::StringValue(raw.clone())) },
+                LJ_ATTR_INT => AnyValue { value: Some(Value::IntValue(raw.parse::<i64>().unwrap_or(0))) },
+                LJ_ATTR_ARRAY => AnyValue {
+                    value: Some(Value::ArrayValue(ArrayValue {
+                        values: raw
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|part| !part.is_empty())
+                            .map(|part| AnyValue { value: Some(Value::StringValue(part.to_string())) })
+                            .collect(),
+                    })),
+                },
+                other => return Err(format!("unsupported attribute value_type {other}")),
+            };
+            Ok(key_value(key.clone(), value))
+        })
+        .collect()
 }
 
 fn key_value(key: impl Into<String>, value: AnyValue) -> KeyValue {
@@ -492,3 +619,7 @@ fn set_last_error(message: impl Into<String>) {
         *slot.borrow_mut() = CString::new(clean).unwrap_or_else(|_| CString::new("invalid error").expect("static"));
     });
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/batch_ut.rs"]
+mod batch_ut;

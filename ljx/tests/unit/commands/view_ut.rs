@@ -115,7 +115,7 @@ fn modal_info_lists_otlp_attributes() {
                             value: Some(Value::ArrayValue(opentelemetry_proto::tonic::common::v1::ArrayValue {
                                 values: vec![
                                     AnyValue { value: Some(Value::StringValue("de".to_string())) },
-                                    AnyValue { value: Some(Value::StringValue("eso".to_string())) },
+                                    AnyValue { value: Some(Value::StringValue("demo".to_string())) },
                                 ],
                             })),
                         }),
@@ -159,7 +159,7 @@ fn modal_info_lists_otlp_attributes() {
     let entries = render_modal_info_entries(&detail);
     assert!(entries.iter().any(|(key, value)| key == "resource.service.name" && value == "cpp-appliance"));
     assert!(entries.iter().any(|(key, value)| key == "scope.demo.channel" && value == "de"));
-    assert!(entries.iter().any(|(key, value)| key.is_empty() && value == "eso"));
+    assert!(entries.iter().any(|(key, value)| key.is_empty() && value == "demo"));
     assert!(entries.iter().any(|(key, value)| key == "record.character" && value == "Bender"));
 }
 
