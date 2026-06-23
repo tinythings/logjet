@@ -7,7 +7,6 @@
 #include <iostream>
 #include <random>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace {
@@ -18,6 +17,10 @@ using new_http_fn = lj_logger *(*)(const char *, const char *, std::uint64_t);
 using new_grpc_fn = lj_logger *(*)(const char *, const char *, std::uint64_t);
 using free_fn = void (*)(lj_logger *);
 using log_fn = bool (*)(lj_logger *, const lj_log_record *);
+using batch_fn = bool (*)(lj_logger *, const lj_log_record *, std::size_t);
+using set_bp_fn = bool (*)(lj_logger *, std::int32_t, std::size_t);
+using flush_fn = bool (*)(lj_logger *, std::uint64_t);
+using counter_fn = std::uint64_t (*)(lj_logger *);
 
 struct api {
     version_fn version;
@@ -26,15 +29,32 @@ struct api {
     new_grpc_fn new_grpc;
     free_fn free_logger;
     log_fn log_record;
+    log_fn log_reuse;
+    batch_fn log_batch;
+    log_fn log_async;
+    set_bp_fn set_backpressure;
+    flush_fn flush;
+    counter_fn async_errors;
+    counter_fn async_dropped;
+    counter_fn async_inflight;
 };
 
-std::int32_t info_severity() {
-    return LJ_SEVERITY_INFO;
-}
+const std::vector<const char *> kQuotes = {
+    "Bender promised a classy fun park financed mostly by blackjack.",
+    "Fry pressed the glowing button because hesitation felt off-brand.",
+    "Leela requested a routine delivery and got stylish chaos instead.",
+    "The Professor called this outage a perfectly normal science moment.",
+    "Zoidberg celebrated because nobody had blamed him yet.",
+    "Hermes filed the disaster under efficient bureaucratic progress.",
+    "Amy said the ship felt stable, which worried everyone instantly.",
+    "Nibbler stared into the void like it owed him money.",
+    "Scruffy fixed the panel and resumed mopping without commentary.",
+    "Calculon demanded better lighting for the emergency landing.",
+};
 
-const char *pick(const std::vector<const char *> &values, std::mt19937 &rng) {
-    std::uniform_int_distribution<std::size_t> dist(0, values.size() - 1);
-    return values[dist(rng)];
+std::string pick_message(std::mt19937 &rng) {
+    std::uniform_int_distribution<std::size_t> dist(0, kQuotes.size() - 1);
+    return kQuotes[dist(rng)];
 }
 
 std::uint64_t unix_time_nanos() {
@@ -61,7 +81,38 @@ api load_api(void *handle) {
         reinterpret_cast<new_grpc_fn>(must_symbol(handle, "lj_logger_new_grpc")),
         reinterpret_cast<free_fn>(must_symbol(handle, "lj_logger_free")),
         reinterpret_cast<log_fn>(must_symbol(handle, "lj_logger_log")),
+        reinterpret_cast<log_fn>(must_symbol(handle, "lj_logger_log_reuse")),
+        reinterpret_cast<batch_fn>(must_symbol(handle, "lj_logger_log_batch")),
+        reinterpret_cast<log_fn>(must_symbol(handle, "lj_logger_log_async")),
+        reinterpret_cast<set_bp_fn>(must_symbol(handle, "lj_logger_set_backpressure")),
+        reinterpret_cast<flush_fn>(must_symbol(handle, "lj_logger_flush")),
+        reinterpret_cast<counter_fn>(must_symbol(handle, "lj_logger_async_errors")),
+        reinterpret_cast<counter_fn>(must_symbol(handle, "lj_logger_async_dropped")),
+        reinterpret_cast<counter_fn>(must_symbol(handle, "lj_logger_async_inflight")),
     };
+}
+
+// Sends one record one at a time via the given function (log / reuse / async).
+// Safe to use local strings: the library reads them before the call returns
+// (async builds its request synchronously, then sends in the background).
+void send_one_at_a_time(const api &lib, lj_logger *logger, log_fn send, const char *phase, int count, std::mt19937 &rng) {
+    int ok = 0;
+    for (int i = 0; i < count; ++i) {
+        const std::string message = pick_message(rng);
+        const lj_attribute attrs[] = {
+            {"appliance.kind", "cpp-demo"},
+            {"phase", phase},
+        };
+        const lj_log_record record{
+            unix_time_nanos(), LJ_SEVERITY_INFO, "INFO", message.c_str(), attrs, sizeof(attrs) / sizeof(attrs[0]),
+        };
+        if (send(logger, &record)) {
+            ++ok;
+        } else {
+            std::cerr << "  " << phase << " send failed: " << lib.error_message() << "\n";
+        }
+    }
+    std::cout << "  [" << phase << "] accepted " << ok << "/" << count << "\n";
 }
 
 }  // namespace
@@ -70,6 +121,7 @@ int main(int argc, char **argv) {
     const std::string so_path = argc > 1 ? argv[1] : "./liblogjet.so";
     const std::string endpoint = argc > 2 ? argv[2] : "127.0.0.1:4317";
     const int message_count = argc > 3 ? std::atoi(argv[3]) : 25;
+    const std::string protocol = argc > 4 ? argv[4] : "grpc";
 
     void *handle = dlopen(so_path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (handle == nullptr) {
@@ -78,91 +130,56 @@ int main(int argc, char **argv) {
     }
 
     const api lib = load_api(handle);
-    std::cout << "loaded liblogjet version " << lib.version() << "\n";
+    std::cout << "loaded liblogjet version " << lib.version() << " (transport: " << protocol << ", endpoint: " << endpoint << ")\n";
 
-    std::mt19937 rng(std::random_device{}());
-    const std::vector<const char *> characters = {
-        "Bender", "Fry", "Leela", "Professor Farnsworth", "Zoidberg",
-        "Amy", "Hermes", "Nibbler", "Scruffy", "Calculon",
-    };
-    const std::vector<const char *> locations = {
-        "Planet Express", "New New York", "The Moon", "Mars University",
-        "Robot Hell", "Slurm factory", "Omicron Persei 8", "Bender's fun park",
-    };
-    const std::vector<const char *> attractions = {
-        "blackjack dome", "dark matter coaster", "hooker-bot lounge",
-        "slurm chute", "robot petting zoo", "delivery cannon",
-    };
-    const std::vector<const char *> moods = {
-        "greedy", "heroic", "dramatic", "sleepy",
-        "chaotic", "optimistic", "hungry", "unbothered",
-    };
-    const std::vector<const char *> schemes = {
-        "casino expansion", "fun park launch", "delivery detour",
-        "robot uprising rehearsal", "slurm promotion", "budget evaporation",
-    };
-    const std::vector<const char *> quotes = {
-        "Bender promised a classy fun park financed mostly by blackjack.",
-        "Fry pressed the glowing button because hesitation felt off-brand.",
-        "Leela requested a routine delivery and got stylish chaos instead.",
-        "The Professor called this outage a perfectly normal science moment.",
-        "Zoidberg celebrated because nobody had blamed him yet.",
-        "Hermes filed the disaster under efficient bureaucratic progress.",
-        "Amy said the ship felt stable, which worried everyone instantly.",
-        "Nibbler stared into the void like it owed him money.",
-        "Scruffy fixed the panel and resumed mopping without commentary.",
-        "Calculon demanded better lighting for the emergency landing.",
-        "Bender unveiled a premium attraction featuring hooker-bots and bad odds.",
-        "The crew found a shortcut through poor planning and dark matter.",
-        "Mission control agreed this was still cheaper than preparation.",
-        "Someone ordered suspicious robot bees and called it innovation.",
-        "The delivery manifest now includes one crate of dramatic overreaction.",
-    };
-
-    lj_logger *logger = lib.new_grpc(endpoint.c_str(), "cpp-appliance", 2000);
+    lj_logger *logger = nullptr;
+    if (protocol == "http") {
+        logger = lib.new_http(endpoint.c_str(), "cpp-appliance", 2000);
+    } else {
+        logger = lib.new_grpc(endpoint.c_str(), "cpp-appliance", 2000);
+    }
     if (logger == nullptr) {
-        std::cerr << "lj_logger_new_grpc failed: " << lib.error_message() << "\n";
+        std::cerr << "logger creation failed: " << lib.error_message() << "\n";
         dlclose(handle);
         return 1;
     }
 
-    for (int index = 1; index <= message_count; ++index) {
-        const std::string sequence = std::to_string(index);
-        const std::string character = pick(characters, rng);
-        const std::string location = pick(locations, rng);
-        const std::string attraction = pick(attractions, rng);
-        const std::string mood = pick(moods, rng);
-        const std::string scheme = pick(schemes, rng);
-        const std::string message =
-            std::string(pick(quotes, rng)) + " character=" + character + " location=" + location;
-        const lj_attribute attributes[] = {
+    std::mt19937 rng(std::random_device{}());
+    const int per_phase = std::max(1, message_count / 4);
+
+    // Phase 1: per-connection (a fresh connection per record).
+    send_one_at_a_time(lib, logger, lib.log_record, "per-connection", per_phase, rng);
+
+    // Phase 2: reuse (one persistent connection).
+    send_one_at_a_time(lib, logger, lib.log_reuse, "reuse", per_phase, rng);
+
+    // Phase 3: batch (one request carrying many records).
+    {
+        std::vector<std::string> bodies(static_cast<std::size_t>(per_phase));
+        const lj_attribute attrs[] = {
             {"appliance.kind", "cpp-demo"},
-            {"appliance.sequence", sequence.c_str()},
-            {"character", character.c_str()},
-            {"location", location.c_str()},
-            {"attraction", attraction.c_str()},
-            {"mood", mood.c_str()},
-            {"scheme", scheme.c_str()},
+            {"phase", "batch"},
         };
-        const lj_log_record record{
-            unix_time_nanos(),
-            info_severity(),
-            "INFO",
-            message.c_str(),
-            attributes,
-            sizeof(attributes) / sizeof(attributes[0]),
-        };
-
-        if (!lib.log_record(logger, &record)) {
-            std::cerr << "lj_logger_log failed: " << lib.error_message() << "\n";
-            lib.free_logger(logger);
-            dlclose(handle);
-            return 1;
+        std::vector<lj_log_record> records;
+        records.reserve(static_cast<std::size_t>(per_phase));
+        for (int i = 0; i < per_phase; ++i) {
+            bodies[static_cast<std::size_t>(i)] = pick_message(rng);
+            records.push_back(lj_log_record{
+                unix_time_nanos(), LJ_SEVERITY_INFO, "INFO", bodies[static_cast<std::size_t>(i)].c_str(), attrs, sizeof(attrs) / sizeof(attrs[0]),
+            });
         }
-
-        std::cout << "sent: " << message << "\n";
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        if (lib.log_batch(logger, records.data(), records.size())) {
+            std::cout << "  [batch] sent " << records.size() << " records in one request\n";
+        } else {
+            std::cerr << "  [batch] send failed: " << lib.error_message() << "\n";
+        }
     }
+
+    // Phase 4: async (non-blocking; bounded by backpressure, then drained).
+    lib.set_backpressure(logger, LJ_BACKPRESSURE_DROP, 256);
+    send_one_at_a_time(lib, logger, lib.log_async, "async", per_phase, rng);
+    lib.flush(logger, 5000);
+    std::cout << "  [async] errors=" << lib.async_errors(logger) << " dropped=" << lib.async_dropped(logger) << " inflight=" << lib.async_inflight(logger) << "\n";
 
     lib.free_logger(logger);
     dlclose(handle);
