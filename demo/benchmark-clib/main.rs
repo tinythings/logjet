@@ -13,24 +13,27 @@
 //! the exported C ABI symbols of `liblogjet` (the same code a C/C++ caller
 //! exercises through the shared library).
 
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, c_char};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::ptr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use liblogjet::{
-    LjAttribute, LjLogRecord, lj_error_message, lj_logger, lj_logger_async_dropped, lj_logger_async_errors, lj_logger_flush, lj_logger_free,
-    lj_logger_log, lj_logger_log_async, lj_logger_log_batch, lj_logger_log_reuse, lj_logger_new_grpc,
+    LjAttribute, LjLogRecord, lj_error_message, lj_logger, lj_logger_async_dropped, lj_logger_async_errors, lj_logger_flush, lj_logger_free, lj_logger_log, lj_logger_log_async,
+    lj_logger_log_batch, lj_logger_log_reuse, lj_logger_new_grpc, lj_logger_new_http, lj_logger_set_backpressure,
 };
 use logjet::{LogjetWriter, RecordType};
 
 const LJ_ATTR_STRING: i32 = 0;
+const LJ_BACKPRESSURE_BLOCK: i32 = 2;
+const HTTP_ASYNC_CAPACITY: usize = 64;
 const SEVERITY_INFO: i32 = 9;
 const TIMEOUT_MS: u64 = 2000;
 const PAYLOAD_LEN: usize = 200;
 
 type LogFn = unsafe extern "C" fn(*mut lj_logger, *const LjLogRecord) -> bool;
+type NewFn = unsafe extern "C" fn(*const c_char, *const c_char, u64) -> *mut lj_logger;
 
 struct Stats {
     count: usize,
@@ -48,8 +51,13 @@ fn main() {
     let endpoint = args.next().unwrap_or_else(|| "127.0.0.1:4317".to_string());
     let count: usize = args.next().and_then(|value| value.parse().ok()).filter(|n| *n > 0).unwrap_or(1000);
     let batch_size: usize = args.next().and_then(|value| value.parse().ok()).filter(|n| *n > 0).unwrap_or(100);
+    let http_endpoint = args.next().filter(|value| !value.is_empty());
 
-    println!("benchmark-clib: {count} records per phase, batch={batch_size}, endpoint {endpoint}\n");
+    println!("benchmark-clib: {count} records per phase, batch={batch_size}, gRPC endpoint {endpoint}");
+    match &http_endpoint {
+        Some(http) => println!("HTTP endpoint {http}\n"),
+        None => println!("(HTTP phases skipped; pass an HTTP endpoint as the 4th argument)\n"),
+    }
 
     let file_samples = match run_file_phase(count) {
         Ok(samples) => samples,
@@ -89,70 +97,116 @@ fn main() {
         scope_attrs_len: 0,
     };
 
-    let per_connection = match unsafe { run_backend_phase(&endpoint_c, &service_c, &mut record, count, lj_logger_log) } {
-        Ok(result) => result,
-        Err(err) => {
-            eprintln!("per-connection backend phase failed: {err}");
-            eprintln!("is ljd listening on {endpoint}? start it with run-demo.sh");
-            std::process::exit(1);
-        }
-    };
-
-    let reuse = match unsafe { run_backend_phase(&endpoint_c, &service_c, &mut record, count, lj_logger_log_reuse) } {
-        Ok(result) => result,
-        Err(err) => {
-            eprintln!("reuse backend phase failed: {err}");
-            std::process::exit(1);
-        }
-    };
-
-    let batch = match unsafe { run_batch_phase(&endpoint_c, &service_c, &record, count, batch_size) } {
-        Ok(result) => result,
-        Err(err) => {
-            eprintln!("batch backend phase failed: {err}");
-            std::process::exit(1);
-        }
-    };
-
-    let async_phase = match unsafe { run_async_phase(&endpoint_c, &service_c, &record, count) } {
-        Ok(result) => result,
-        Err(err) => {
-            eprintln!("async backend phase failed: {err}");
-            std::process::exit(1);
-        }
-    };
-
     let file_stats = summarize(file_samples);
+
+    run_and_print_transport("gRPC", lj_logger_new_grpc, &endpoint_c, &endpoint, &service_c, &mut record, count, batch_size, Some(&file_stats));
+
+    if let Some(http) = http_endpoint {
+        let http_c = CString::new(http.as_str()).expect("http endpoint has interior NUL");
+        run_and_print_transport("HTTP", lj_logger_new_http, &http_c, &http, &service_c, &mut record, count, batch_size, None);
+    }
+
+    print_legend();
+}
+
+fn print_legend() {
+    println!("Columns:");
+    println!("  calls  how many log messages this test sent");
+    println!("  total  all the per-message times added together");
+    println!("  mean   average time for one message");
+    println!("  p50    middle time: half the messages were faster, half slower (median)");
+    println!("  p95    almost-worst: only ~5 of 100 messages were slower (95th percentile)");
+    println!("  p99    worst cases: only ~1 of 100 messages was slower (99th percentile)");
+    println!("  min    the single fastest message");
+    println!("  max    the single slowest message (worst hiccup)");
+    println!("  index  how many times faster than per-connection (1.0x = baseline; higher is better)");
+    println!("Units: ns < us < ms < s (smaller is faster).");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_and_print_transport(
+    proto: &str,
+    new_fn: NewFn,
+    endpoint: &CStr,
+    endpoint_str: &str,
+    service: &CStr,
+    record: &mut LjLogRecord,
+    count: usize,
+    batch_size: usize,
+    file_stats: Option<&Stats>,
+) {
+    let per_connection = match unsafe { run_backend_phase(endpoint, service, record, count, new_fn, lj_logger_log) } {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("{proto} per-connection phase failed: {err}");
+            eprintln!("is ljd listening on {endpoint_str}? start it with run-demo.sh");
+            std::process::exit(1);
+        }
+    };
+    let reuse = match unsafe { run_backend_phase(endpoint, service, record, count, new_fn, lj_logger_log_reuse) } {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("{proto} reuse phase failed: {err}");
+            std::process::exit(1);
+        }
+    };
+    let batch = match unsafe { run_batch_phase(endpoint, service, record, count, batch_size, new_fn) } {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("{proto} batch phase failed: {err}");
+            std::process::exit(1);
+        }
+    };
+    let async_backpressure = if proto == "HTTP" { Some((LJ_BACKPRESSURE_BLOCK, HTTP_ASYNC_CAPACITY)) } else { None };
+    let async_phase = match unsafe { run_async_phase(endpoint, service, record, count, new_fn, async_backpressure) } {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("{proto} async phase failed: {err}");
+            std::process::exit(1);
+        }
+    };
+
     let per_connection_stats = summarize(per_connection.samples);
     let reuse_cold = reuse.cold_first;
     let reuse_stats = summarize(reuse.samples);
     let raw_batch_mean = batch.raw_batch_mean;
     let batch_stats = summarize(batch.samples);
-    let batch_label = format!("backend OTLP/gRPC (batch={batch_size})");
     let async_stats = summarize(async_phase.samples);
 
-    let baseline = per_connection_stats.mean;
-    print_table(
-        &[
-            ("logjet file (LogjetWriter::push)", &file_stats),
-            ("backend OTLP/gRPC (per-connection)", &per_connection_stats),
-            ("backend OTLP/gRPC (reuse)", &reuse_stats),
-            (batch_label.as_str(), &batch_stats),
-            ("backend OTLP/gRPC (async enqueue)", &async_stats),
-        ],
-        baseline,
-    );
+    let pc_label = format!("backend OTLP/{proto} (per-connection)");
+    let reuse_label = format!("backend OTLP/{proto} (reuse)");
+    let batch_label = format!("backend OTLP/{proto} (batch={batch_size})");
+    let async_label = format!("backend OTLP/{proto} (async enqueue)");
 
+    let baseline = per_connection_stats.mean;
+    let mut rows: Vec<(&str, &Stats)> = Vec::new();
+    if let Some(file_stats) = file_stats {
+        rows.push(("logjet file (LogjetWriter::push)", file_stats));
+    }
+    rows.push((pc_label.as_str(), &per_connection_stats));
+    rows.push((reuse_label.as_str(), &reuse_stats));
+    rows.push((batch_label.as_str(), &batch_stats));
+    rows.push((async_label.as_str(), &async_stats));
+
+    println!("== OTLP/{proto} ==");
+    print_table(&rows, baseline);
     println!();
-    println!("index = per-connection mean / row mean (baseline = per-connection; logjet file is a no-network reference)");
-    println!("note: batch row is per-record amortized; raw per-batch-call mean: {}", fmt_dur(raw_batch_mean));
+    println!("index = how many times faster than per-connection (baseline 1.0x; higher is better)");
+    if file_stats.is_some() {
+        println!("note: 'logjet file' has no network, so its index is a best-case floor, not a real speed-up");
+    }
     println!(
-        "note: async row is the caller-thread enqueue cost (fire-and-forget); flush: {}, errors: {}, dropped: {}",
+        "note: 'batch' shows time per message ({batch_size} sent in one shipment, split across them); one full shipment took {} on average",
+        fmt_dur(raw_batch_mean)
+    );
+    println!(
+        "note: 'async' is only the hand-off cost (we don't wait for the network); waited {} at the end for all to finish; {} failed to send, {} thrown away (sending slower than produced)",
         fmt_dur(async_phase.flush_ns),
         async_phase.errors,
         async_phase.dropped,
     );
-    println!("reuse first/cold call (one-time connect): {}", fmt_dur(reuse_cold));
+    println!("note: the first 'reuse' message opens the connection once ({}); every message after reuses it", fmt_dur(reuse_cold));
+    println!();
 }
 
 fn run_file_phase(count: usize) -> std::io::Result<Vec<u128>> {
@@ -182,8 +236,8 @@ struct BackendResult {
     cold_first: f64,
 }
 
-unsafe fn run_backend_phase(endpoint: &CStr, service: &CStr, record: &mut LjLogRecord, count: usize, log_fn: LogFn) -> Result<BackendResult, String> {
-    let logger = unsafe { lj_logger_new_grpc(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
+unsafe fn run_backend_phase(endpoint: &CStr, service: &CStr, record: &mut LjLogRecord, count: usize, new_fn: NewFn, log_fn: LogFn) -> Result<BackendResult, String> {
+    let logger = unsafe { new_fn(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
     if logger.is_null() {
         return Err(last_error());
     }
@@ -235,8 +289,8 @@ fn clone_record(template: &LjLogRecord) -> LjLogRecord {
     }
 }
 
-unsafe fn run_batch_phase(endpoint: &CStr, service: &CStr, template: &LjLogRecord, count: usize, batch_size: usize) -> Result<BatchResult, String> {
-    let logger = unsafe { lj_logger_new_grpc(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
+unsafe fn run_batch_phase(endpoint: &CStr, service: &CStr, template: &LjLogRecord, count: usize, batch_size: usize, new_fn: NewFn) -> Result<BatchResult, String> {
+    let logger = unsafe { new_fn(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
     if logger.is_null() {
         return Err(last_error());
     }
@@ -287,10 +341,13 @@ struct AsyncResult {
     dropped: u64,
 }
 
-unsafe fn run_async_phase(endpoint: &CStr, service: &CStr, template: &LjLogRecord, count: usize) -> Result<AsyncResult, String> {
-    let logger = unsafe { lj_logger_new_grpc(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
+unsafe fn run_async_phase(endpoint: &CStr, service: &CStr, template: &LjLogRecord, count: usize, new_fn: NewFn, backpressure: Option<(i32, usize)>) -> Result<AsyncResult, String> {
+    let logger = unsafe { new_fn(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
     if logger.is_null() {
         return Err(last_error());
+    }
+    if let Some((model, capacity)) = backpressure {
+        unsafe { lj_logger_set_backpressure(logger, model, capacity) };
     }
 
     let mut record = clone_record(template);
