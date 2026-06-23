@@ -95,3 +95,23 @@ int main() {
 - attribute keys and values are currently string-only by design
 - richer C++ usage lives in the demo:
   - [`demo/cpp-shared-lib`](../demo/cpp-shared-lib)
+
+## Performance: connection reuse, batching, async
+
+`lj_logger_log` opens a fresh connection per record (simplest, most robust). For
+high-rate logging, additive entry points reuse the connection and amortise the
+network cost, for both gRPC and HTTP (HTTP via a keep-alive connection pool):
+
+- `lj_logger_log_reuse(logger, record)` — one record over a persistent connection.
+- `lj_logger_log_batch(logger, records, len)` — many records in one request.
+- `lj_logger_log_async(logger, record)` / `lj_logger_log_batch_async(...)` —
+  non-blocking; hands the send to a background runtime and returns immediately.
+
+Async sends are bounded by a backpressure policy
+(`lj_logger_set_backpressure(logger, model, capacity)`; models
+`LJ_BACKPRESSURE_UNBOUNDED` / `LJ_BACKPRESSURE_DROP` / `LJ_BACKPRESSURE_BLOCK`,
+default `DROP`/1024). Drain in-flight sends with
+`lj_logger_flush(logger, timeout_ms)` (also done on `lj_logger_free`), and observe
+`lj_logger_async_errors` / `lj_logger_async_dropped` / `lj_logger_async_inflight`.
+
+A measured comparison lives in [`demo/benchmark-clib`](../demo/benchmark-clib).
