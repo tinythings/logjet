@@ -4,10 +4,10 @@ pub mod export;
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
-use std::io::{Read, Write};
-use std::net::{Shutdown, TcpStream};
+use std::io::{BufRead, Read, Write};
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use opentelemetry_proto::tonic::collector::logs::v1::{ExportLogsServiceRequest, logs_service_client::LogsServiceClient};
@@ -28,6 +28,7 @@ const LJ_BACKPRESSURE_UNBOUNDED: i32 = 0;
 const LJ_BACKPRESSURE_DROP: i32 = 1;
 const LJ_BACKPRESSURE_BLOCK: i32 = 2;
 const DEFAULT_BACKPRESSURE_CAPACITY: usize = 1024;
+const MAX_HTTP_POOL: usize = 256;
 const DEFAULT_SCOPE_NAME: &str = "liblogjet";
 const VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
 
@@ -90,7 +91,7 @@ struct Logger {
 }
 
 enum Backend {
-    Http(HttpEndpoint),
+    Http(HttpClient),
     Grpc(GrpcClient),
 }
 
@@ -103,17 +104,45 @@ struct HttpEndpoint {
 
 struct GrpcClient {
     runtime: Runtime,
-    shared: Arc<GrpcShared>,
+    engine: Arc<AsyncEngine>,
+    channel: Arc<GrpcChannel>,
 }
 
-struct GrpcShared {
+struct GrpcChannel {
     endpoint: String,
     channel: TokioMutex<Option<Channel>>,
+}
+
+struct HttpClient {
+    runtime: OnceLock<Runtime>,
+    engine: Arc<AsyncEngine>,
+    pool: Arc<HttpPool>,
+}
+
+struct HttpPool {
+    endpoint: HttpEndpoint,
+    idle: Mutex<Vec<TcpStream>>,
+}
+
+/// Backend-agnostic async send engine: backpressure, counters, and drain.
+struct AsyncEngine {
     backpressure: Mutex<Backpressure>,
     inflight: AtomicU64,
-    async_errors: AtomicU64,
-    async_dropped: AtomicU64,
+    errors: AtomicU64,
+    dropped: AtomicU64,
     idle: Notify,
+}
+
+impl AsyncEngine {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            backpressure: Mutex::new(Backpressure { model: LJ_BACKPRESSURE_DROP, semaphore: Arc::new(Semaphore::new(DEFAULT_BACKPRESSURE_CAPACITY)) }),
+            inflight: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
+            idle: Notify::new(),
+        })
+    }
 }
 
 struct Backpressure {
@@ -335,17 +364,34 @@ pub unsafe extern "C" fn lj_logger_log_batch_async(logger: *mut lj_logger, recor
     }
 }
 
-/// Configures the async backpressure policy for a gRPC logger.
+fn logger_engine(logger: &Logger) -> &Arc<AsyncEngine> {
+    match &logger.backend {
+        Backend::Grpc(client) => &client.engine,
+        Backend::Http(client) => &client.engine,
+    }
+}
+
+fn flush_logger(logger: &Logger, timeout: Duration) -> bool {
+    match &logger.backend {
+        Backend::Grpc(client) => flush_engine(&client.runtime, &client.engine, timeout),
+        Backend::Http(client) => match client.runtime.get() {
+            Some(runtime) => flush_engine(runtime, &client.engine, timeout),
+            None => client.engine.inflight.load(Ordering::SeqCst) == 0,
+        },
+    }
+}
+
+/// Configures the async backpressure policy (gRPC or HTTP).
 ///
 /// `model` is one of `LJ_BACKPRESSURE_UNBOUNDED`, `LJ_BACKPRESSURE_DROP`, or
 /// `LJ_BACKPRESSURE_BLOCK`. `capacity` is the maximum number of in-flight async
 /// sends for the bounded models (ignored for unbounded). Should be called
 /// before the first async send. Returns `false` (with `lj_error_message`) on
-/// invalid input or for non-gRPC loggers.
+/// invalid input.
 ///
 /// # Safety
 ///
-/// `logger` must be a valid pointer returned by `lj_logger_new_grpc`.
+/// `logger` must be a valid pointer returned by this library.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_logger_set_backpressure(logger: *mut lj_logger, model: i32, capacity: usize) -> bool {
     clear_last_error();
@@ -353,13 +399,6 @@ pub unsafe extern "C" fn lj_logger_set_backpressure(logger: *mut lj_logger, mode
         Some(logger) => logger,
         None => {
             set_last_error("logger is null");
-            return false;
-        }
-    };
-    let client = match &logger.inner.backend {
-        Backend::Grpc(client) => client,
-        Backend::Http(_) => {
-            set_last_error("backpressure applies to gRPC loggers only");
             return false;
         }
     };
@@ -375,7 +414,7 @@ pub unsafe extern "C" fn lj_logger_set_backpressure(logger: *mut lj_logger, mode
     } else {
         capacity
     };
-    match client.shared.backpressure.lock() {
+    match logger_engine(&logger.inner).backpressure.lock() {
         Ok(mut cfg) => {
             cfg.model = model;
             cfg.semaphore = Arc::new(Semaphore::new(capacity));
@@ -390,8 +429,7 @@ pub unsafe extern "C" fn lj_logger_set_backpressure(logger: *mut lj_logger, mode
 
 /// Blocks until all in-flight async sends complete or `timeout_ms` elapses.
 ///
-/// Returns `true` if fully drained, `false` on timeout. HTTP loggers (which have
-/// no async queue) always return `true`.
+/// Returns `true` if fully drained, `false` on timeout.
 ///
 /// # Safety
 ///
@@ -402,10 +440,7 @@ pub unsafe extern "C" fn lj_logger_flush(logger: *mut lj_logger, timeout_ms: u64
         Some(logger) => logger,
         None => return false,
     };
-    match &logger.inner.backend {
-        Backend::Grpc(client) => flush_grpc(client, Duration::from_millis(timeout_ms)),
-        Backend::Http(_) => true,
-    }
+    flush_logger(&logger.inner, Duration::from_millis(timeout_ms))
 }
 
 /// Returns the number of async sends that failed on the network.
@@ -416,10 +451,7 @@ pub unsafe extern "C" fn lj_logger_flush(logger: *mut lj_logger, timeout_ms: u64
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_logger_async_errors(logger: *mut lj_logger) -> u64 {
     match unsafe { logger.as_ref() } {
-        Some(logger) => match &logger.inner.backend {
-            Backend::Grpc(client) => client.shared.async_errors.load(Ordering::Relaxed),
-            Backend::Http(_) => 0,
-        },
+        Some(logger) => logger_engine(&logger.inner).errors.load(Ordering::Relaxed),
         None => 0,
     }
 }
@@ -432,10 +464,7 @@ pub unsafe extern "C" fn lj_logger_async_errors(logger: *mut lj_logger) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_logger_async_dropped(logger: *mut lj_logger) -> u64 {
     match unsafe { logger.as_ref() } {
-        Some(logger) => match &logger.inner.backend {
-            Backend::Grpc(client) => client.shared.async_dropped.load(Ordering::Relaxed),
-            Backend::Http(_) => 0,
-        },
+        Some(logger) => logger_engine(&logger.inner).dropped.load(Ordering::Relaxed),
         None => 0,
     }
 }
@@ -448,10 +477,7 @@ pub unsafe extern "C" fn lj_logger_async_dropped(logger: *mut lj_logger) -> u64 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lj_logger_async_inflight(logger: *mut lj_logger) -> u64 {
     match unsafe { logger.as_ref() } {
-        Some(logger) => match &logger.inner.backend {
-            Backend::Grpc(client) => client.shared.inflight.load(Ordering::SeqCst),
-            Backend::Http(_) => 0,
-        },
+        Some(logger) => logger_engine(&logger.inner).inflight.load(Ordering::SeqCst),
         None => 0,
     }
 }
@@ -468,9 +494,7 @@ pub unsafe extern "C" fn lj_logger_free(logger: *mut lj_logger) {
         return;
     }
     let boxed = unsafe { Box::from_raw(logger) };
-    if let Backend::Grpc(client) = &boxed.inner.backend {
-        let _ = flush_grpc(client, boxed.inner.timeout);
-    }
+    let _ = flush_logger(&boxed.inner, boxed.inner.timeout);
 }
 
 enum BackendKind {
@@ -494,27 +518,19 @@ unsafe fn new_logger_impl(endpoint: *const c_char, service_name: *const c_char, 
     let service_name = read_required(service_name, "service_name")?;
     let timeout = Duration::from_millis(timeout_ms.max(1));
     let backend = match kind {
-        BackendKind::Http => Backend::Http(parse_http_endpoint(&endpoint)?),
+        BackendKind::Http => {
+            let pool = Arc::new(HttpPool { endpoint: parse_http_endpoint(&endpoint)?, idle: Mutex::new(Vec::new()) });
+            Backend::Http(HttpClient { runtime: OnceLock::new(), engine: AsyncEngine::new(), pool })
+        }
         BackendKind::Grpc => {
-            let shared = Arc::new(GrpcShared {
-                endpoint: normalise_grpc_endpoint(&endpoint),
-                channel: TokioMutex::new(None),
-                backpressure: Mutex::new(Backpressure {
-                    model: LJ_BACKPRESSURE_DROP,
-                    semaphore: Arc::new(Semaphore::new(DEFAULT_BACKPRESSURE_CAPACITY)),
-                }),
-                inflight: AtomicU64::new(0),
-                async_errors: AtomicU64::new(0),
-                async_dropped: AtomicU64::new(0),
-                idle: Notify::new(),
-            });
-            Backend::Grpc(GrpcClient { runtime: grpc_runtime()?, shared })
+            let channel = Arc::new(GrpcChannel { endpoint: normalise_grpc_endpoint(&endpoint), channel: TokioMutex::new(None) });
+            Backend::Grpc(GrpcClient { runtime: make_runtime()?, engine: AsyncEngine::new(), channel })
         }
     };
     Ok(Logger { backend, service_name, timeout })
 }
 
-fn grpc_runtime() -> Result<Runtime, String> {
+fn make_runtime() -> Result<Runtime, String> {
     Builder::new_multi_thread().enable_all().build().map_err(|err| err.to_string())
 }
 
@@ -692,72 +708,102 @@ fn key_value(key: impl Into<String>, value: AnyValue) -> KeyValue {
 
 fn send_request(logger: &Logger, request: ExportLogsServiceRequest) -> Result<(), String> {
     match &logger.backend {
-        Backend::Http(endpoint) => post_otlp_http(endpoint, logger.timeout, &request).map_err(|err| err.to_string()),
+        Backend::Http(client) => post_otlp_http_once(&client.pool.endpoint, logger.timeout, &request).map_err(|err| err.to_string()),
         Backend::Grpc(client) => {
-            client.runtime.block_on(send_otlp_grpc(client.shared.endpoint.clone(), logger.timeout, request)).map_err(|err| err.to_string())
+            client.runtime.block_on(send_otlp_grpc(client.channel.endpoint.clone(), logger.timeout, request)).map_err(|err| err.to_string())
         }
     }
 }
 
 fn send_request_reuse(logger: &Logger, request: ExportLogsServiceRequest) -> Result<(), String> {
     match &logger.backend {
-        Backend::Http(endpoint) => post_otlp_http(endpoint, logger.timeout, &request).map_err(|err| err.to_string()),
-        Backend::Grpc(client) => client.runtime.block_on(send_pooled_async(client.shared.clone(), logger.timeout, request)),
+        Backend::Http(client) => {
+            let payload = request.encode_to_vec();
+            http_send_blocking(&client.pool, logger.timeout, &payload).map_err(|err| err.to_string())
+        }
+        Backend::Grpc(client) => client.runtime.block_on(send_pooled_async(client.channel.clone(), logger.timeout, request)),
     }
 }
 
 fn send_request_async(logger: &Logger, request: ExportLogsServiceRequest) -> Result<(), String> {
     match &logger.backend {
-        Backend::Http(_) => Err("async send is not supported for HTTP loggers yet".to_string()),
-        Backend::Grpc(client) => enqueue_async_grpc(client, logger.timeout, request),
+        Backend::Grpc(client) => {
+            let channel = client.channel.clone();
+            let timeout = logger.timeout;
+            enqueue_async(&client.runtime, &client.engine, move || send_pooled_async(channel, timeout, request))
+        }
+        Backend::Http(client) => {
+            let runtime = http_runtime(client)?;
+            let pool = client.pool.clone();
+            let timeout = logger.timeout;
+            let payload = request.encode_to_vec();
+            enqueue_async(runtime, &client.engine, move || http_send_async(pool, timeout, payload))
+        }
     }
 }
 
-fn enqueue_async_grpc(client: &GrpcClient, timeout: Duration, request: ExportLogsServiceRequest) -> Result<(), String> {
+fn http_runtime(client: &HttpClient) -> Result<&Runtime, String> {
+    if let Some(runtime) = client.runtime.get() {
+        return Ok(runtime);
+    }
+    let runtime = make_runtime()?;
+    let _ = client.runtime.set(runtime);
+    Ok(client.runtime.get().expect("http runtime set"))
+}
+
+fn enqueue_async<F, Fut>(runtime: &Runtime, engine: &Arc<AsyncEngine>, make_fut: F) -> Result<(), String>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
     let (model, semaphore) = {
-        let cfg = client.shared.backpressure.lock().map_err(|_| "backpressure lock poisoned".to_string())?;
+        let cfg = engine.backpressure.lock().map_err(|_| "backpressure lock poisoned".to_string())?;
         (cfg.model, cfg.semaphore.clone())
     };
     match model {
-        LJ_BACKPRESSURE_UNBOUNDED => spawn_send(client, timeout, request, None),
+        LJ_BACKPRESSURE_UNBOUNDED => spawn_task(runtime, engine, make_fut, None),
         LJ_BACKPRESSURE_DROP => match semaphore.try_acquire_owned() {
-            Ok(permit) => spawn_send(client, timeout, request, Some(permit)),
+            Ok(permit) => spawn_task(runtime, engine, make_fut, Some(permit)),
             Err(_) => {
-                client.shared.async_dropped.fetch_add(1, Ordering::Relaxed);
+                engine.dropped.fetch_add(1, Ordering::Relaxed);
             }
         },
         LJ_BACKPRESSURE_BLOCK => {
-            let permit = client.runtime.block_on(semaphore.acquire_owned()).map_err(|err| err.to_string())?;
-            spawn_send(client, timeout, request, Some(permit));
+            let permit = runtime.block_on(semaphore.acquire_owned()).map_err(|err| err.to_string())?;
+            spawn_task(runtime, engine, make_fut, Some(permit));
         }
         other => return Err(format!("invalid backpressure model {other}")),
     }
     Ok(())
 }
 
-fn spawn_send(client: &GrpcClient, timeout: Duration, request: ExportLogsServiceRequest, permit: Option<OwnedSemaphorePermit>) {
-    let shared = client.shared.clone();
-    shared.inflight.fetch_add(1, Ordering::SeqCst);
-    client.runtime.spawn(async move {
+fn spawn_task<F, Fut>(runtime: &Runtime, engine: &Arc<AsyncEngine>, make_fut: F, permit: Option<OwnedSemaphorePermit>)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
+    let engine = engine.clone();
+    engine.inflight.fetch_add(1, Ordering::SeqCst);
+    runtime.spawn(async move {
         let _permit = permit;
-        if send_pooled_async(shared.clone(), timeout, request).await.is_err() {
-            shared.async_errors.fetch_add(1, Ordering::Relaxed);
+        if make_fut().await.is_err() {
+            engine.errors.fetch_add(1, Ordering::Relaxed);
         }
-        if shared.inflight.fetch_sub(1, Ordering::SeqCst) == 1 {
-            shared.idle.notify_waiters();
+        if engine.inflight.fetch_sub(1, Ordering::SeqCst) == 1 {
+            engine.idle.notify_waiters();
         }
     });
 }
 
-fn flush_grpc(client: &GrpcClient, timeout: Duration) -> bool {
-    client.runtime.block_on(async {
+fn flush_engine(runtime: &Runtime, engine: &Arc<AsyncEngine>, timeout: Duration) -> bool {
+    runtime.block_on(async {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            if client.shared.inflight.load(Ordering::SeqCst) == 0 {
+            if engine.inflight.load(Ordering::SeqCst) == 0 {
                 return true;
             }
-            let notified = client.shared.idle.notified();
-            if client.shared.inflight.load(Ordering::SeqCst) == 0 {
+            let notified = engine.idle.notified();
+            if engine.inflight.load(Ordering::SeqCst) == 0 {
                 return true;
             }
             let now = tokio::time::Instant::now();
@@ -765,31 +811,31 @@ fn flush_grpc(client: &GrpcClient, timeout: Duration) -> bool {
                 return false;
             }
             if tokio::time::timeout(deadline - now, notified).await.is_err() {
-                return client.shared.inflight.load(Ordering::SeqCst) == 0;
+                return engine.inflight.load(Ordering::SeqCst) == 0;
             }
         }
     })
 }
 
-async fn send_pooled_async(shared: Arc<GrpcShared>, timeout: Duration, request: ExportLogsServiceRequest) -> Result<(), String> {
+async fn send_pooled_async(channel: Arc<GrpcChannel>, timeout: Duration, request: ExportLogsServiceRequest) -> Result<(), String> {
     // Connect-once: hold the lock across connect so a concurrent burst opens a
     // single connection; release it before export so sends run concurrently over
     // the shared multiplexed channel.
-    let channel = {
-        let mut guard = shared.channel.lock().await;
+    let active = {
+        let mut guard = channel.channel.lock().await;
         match guard.as_ref() {
-            Some(channel) => channel.clone(),
+            Some(active) => active.clone(),
             None => {
-                let channel = connect_channel(&shared.endpoint, timeout).await.map_err(|err| err.to_string())?;
-                *guard = Some(channel.clone());
-                channel
+                let active = connect_channel(&channel.endpoint, timeout).await.map_err(|err| err.to_string())?;
+                *guard = Some(active.clone());
+                active
             }
         }
     };
 
-    let result = export_on_channel(channel, request).await.map_err(|err| err.to_string());
+    let result = export_on_channel(active, request).await.map_err(|err| err.to_string());
     if result.is_err() {
-        *shared.channel.lock().await = None;
+        *channel.channel.lock().await = None;
     }
     result
 }
@@ -811,22 +857,23 @@ async fn send_otlp_grpc(endpoint: String, timeout: Duration, request: ExportLogs
     Ok(())
 }
 
-fn post_otlp_http(endpoint: &HttpEndpoint, timeout: Duration, request: &ExportLogsServiceRequest) -> std::io::Result<()> {
+/// Fresh-connect, `Connection: close` POST. Baseline used by `lj_logger_log`.
+fn post_otlp_http_once(endpoint: &HttpEndpoint, timeout: Duration, request: &ExportLogsServiceRequest) -> std::io::Result<()> {
     let payload = request.encode_to_vec();
     let mut stream = TcpStream::connect(endpoint.authority.as_str())?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
-    stream.write_all(
-        format!(
-            "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            endpoint.path,
-            endpoint.host_header,
-            payload.len()
-        )
-        .as_bytes(),
-    )?;
-    stream.write_all(&payload)?;
-    stream.shutdown(Shutdown::Write)?;
+    stream.set_nodelay(true)?;
+    let header = format!(
+        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        endpoint.path,
+        endpoint.host_header,
+        payload.len()
+    );
+    let mut framed = Vec::with_capacity(header.len() + payload.len());
+    framed.extend_from_slice(header.as_bytes());
+    framed.extend_from_slice(&payload);
+    stream.write_all(&framed)?;
 
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
@@ -837,6 +884,115 @@ fn post_otlp_http(endpoint: &HttpEndpoint, timeout: Duration, request: &ExportLo
         return Ok(());
     }
     Err(std::io::Error::other(format!("HTTP export failed: {status}")))
+}
+
+async fn http_send_async(pool: Arc<HttpPool>, timeout: Duration, payload: Vec<u8>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || http_send_blocking(&pool, timeout, &payload))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+/// Keep-alive POST over a pooled connection, with one fresh-connect retry.
+fn http_send_blocking(pool: &HttpPool, timeout: Duration, payload: &[u8]) -> std::io::Result<()> {
+    if let Some(stream) = pool_checkout(pool)
+        && http_exchange(pool, stream, payload).is_ok()
+    {
+        return Ok(());
+    }
+    let stream = http_connect(pool, timeout)?;
+    http_exchange(pool, stream, payload)
+}
+
+fn pool_checkout(pool: &HttpPool) -> Option<TcpStream> {
+    pool.idle.lock().ok().and_then(|mut idle| idle.pop())
+}
+
+fn pool_checkin(pool: &HttpPool, stream: TcpStream) {
+    if let Ok(mut idle) = pool.idle.lock()
+        && idle.len() < MAX_HTTP_POOL
+    {
+        idle.push(stream);
+    }
+}
+
+fn http_connect(pool: &HttpPool, timeout: Duration) -> std::io::Result<TcpStream> {
+    let stream = TcpStream::connect(pool.endpoint.authority.as_str())?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    stream.set_nodelay(true)?;
+    Ok(stream)
+}
+
+fn http_exchange(pool: &HttpPool, mut stream: TcpStream, payload: &[u8]) -> std::io::Result<()> {
+    let header = format!(
+        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\n\r\n",
+        pool.endpoint.path,
+        pool.endpoint.host_header,
+        payload.len()
+    );
+    // Single write (header + body) so Nagle/delayed-ACK does not stall the request.
+    let mut framed = Vec::with_capacity(header.len() + payload.len());
+    framed.extend_from_slice(header.as_bytes());
+    framed.extend_from_slice(payload);
+    stream.write_all(&framed)?;
+    stream.flush()?;
+
+    let (status_ok, keep_alive) = read_http_response(&mut stream)?;
+    if !status_ok {
+        return Err(std::io::Error::other("HTTP export failed"));
+    }
+    if keep_alive {
+        pool_checkin(pool, stream);
+    }
+    Ok(())
+}
+
+/// Reads one HTTP/1.1 response. Returns `(status_ok, can_keep_alive)`.
+fn read_http_response(stream: &mut TcpStream) -> std::io::Result<(bool, bool)> {
+    let mut reader = std::io::BufReader::new(stream);
+
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 || line == "\r\n" || line == "\n" {
+            break;
+        }
+        head.push_str(&line);
+    }
+
+    let status_line = head.lines().next().unwrap_or_default();
+    let status_ok = status_line.contains(" 200 ") || status_line.contains(" 202 ") || status_line.contains(" 204 ");
+
+    let mut content_length: Option<usize> = None;
+    let mut conn_close = false;
+    for line in head.lines().skip(1) {
+        if let Some((key, value)) = line.split_once(':') {
+            let key = key.trim().to_ascii_lowercase();
+            let value = value.trim();
+            if key == "content-length" {
+                content_length = value.parse::<usize>().ok();
+            } else if key == "connection" && value.eq_ignore_ascii_case("close") {
+                conn_close = true;
+            }
+        }
+    }
+
+    let keep_alive = match content_length {
+        Some(len) => {
+            let mut body = vec![0u8; len];
+            reader.read_exact(&mut body)?;
+            !conn_close
+        }
+        None => {
+            let mut sink = Vec::new();
+            let _ = reader.read_to_end(&mut sink);
+            false
+        }
+    };
+
+    Ok((status_ok, keep_alive))
 }
 
 fn parse_http_endpoint(raw: &str) -> Result<HttpEndpoint, String> {
