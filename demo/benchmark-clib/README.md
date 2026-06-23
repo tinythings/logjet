@@ -9,7 +9,9 @@ Reference: [`demo/cpp-shared-lib`](../cpp-shared-lib)
 ## What it measures
 
 The driver times each call across five phases and prints a table with real
-numbers (mean, p50, p95, p99, min, max):
+numbers (mean, p50, p95, p99, min, max) plus an `index` column — the improvement
+factor `per-connection mean / row mean` (baseline = per-connection; the
+`logjet file` row's index is a no-network reference floor):
 
 1. **logjet file (`LogjetWriter::push`)** — appending one record straight to a
    `.logjet` file. No network. Isolates the storage/format layer.

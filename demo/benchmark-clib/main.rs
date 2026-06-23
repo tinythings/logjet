@@ -131,15 +131,20 @@ fn main() {
     let batch_label = format!("backend OTLP/gRPC (batch={batch_size})");
     let async_stats = summarize(async_phase.samples);
 
-    print_table(&[
-        ("logjet file (LogjetWriter::push)", &file_stats),
-        ("backend OTLP/gRPC (per-connection)", &per_connection_stats),
-        ("backend OTLP/gRPC (reuse)", &reuse_stats),
-        (batch_label.as_str(), &batch_stats),
-        ("backend OTLP/gRPC (async enqueue)", &async_stats),
-    ]);
+    let baseline = per_connection_stats.mean;
+    print_table(
+        &[
+            ("logjet file (LogjetWriter::push)", &file_stats),
+            ("backend OTLP/gRPC (per-connection)", &per_connection_stats),
+            ("backend OTLP/gRPC (reuse)", &reuse_stats),
+            (batch_label.as_str(), &batch_stats),
+            ("backend OTLP/gRPC (async enqueue)", &async_stats),
+        ],
+        baseline,
+    );
 
     println!();
+    println!("index = per-connection mean / row mean (baseline = per-connection; logjet file is a no-network reference)");
     println!("note: batch row is per-record amortized; raw per-batch-call mean: {}", fmt_dur(raw_batch_mean));
     println!(
         "note: async row is the caller-thread enqueue cost (fire-and-forget); flush: {}, errors: {}, dropped: {}",
@@ -148,15 +153,6 @@ fn main() {
         async_phase.dropped,
     );
     println!("reuse first/cold call (one-time connect): {}", fmt_dur(reuse_cold));
-    if reuse_stats.mean > 0.0 {
-        println!("backend speedup (mean, per-connection -> reuse): {:.1}x", per_connection_stats.mean / reuse_stats.mean);
-    }
-    if batch_stats.mean > 0.0 {
-        println!("backend speedup (mean, per-connection -> batch): {:.1}x", per_connection_stats.mean / batch_stats.mean);
-    }
-    if async_stats.mean > 0.0 {
-        println!("backend speedup (mean, per-connection -> async enqueue): {:.1}x", per_connection_stats.mean / async_stats.mean);
-    }
 }
 
 fn run_file_phase(count: usize) -> std::io::Result<Vec<u128>> {
@@ -370,12 +366,16 @@ fn fmt_dur(ns: f64) -> String {
     }
 }
 
-fn print_table(rows: &[(&str, &Stats)]) {
-    println!("{:<36} {:>7} {:>11} {:>11} {:>11} {:>11} {:>11} {:>11} {:>11}", "path", "calls", "total", "mean", "p50", "p95", "p99", "min", "max");
-    println!("{}", "-".repeat(36 + 7 + 11 * 7 + 8));
+fn print_table(rows: &[(&str, &Stats)], baseline: f64) {
+    println!(
+        "{:<36} {:>7} {:>11} {:>11} {:>11} {:>11} {:>11} {:>11} {:>11} {:>9}",
+        "path", "calls", "total", "mean", "p50", "p95", "p99", "min", "max", "index"
+    );
+    println!("{}", "-".repeat(36 + 7 + 11 * 7 + 8 + 10));
     for (name, stats) in rows {
+        let index = if stats.mean > 0.0 && baseline > 0.0 { format!("{:.1}x", baseline / stats.mean) } else { "-".to_string() };
         println!(
-            "{:<36} {:>7} {:>11} {:>11} {:>11} {:>11} {:>11} {:>11} {:>11}",
+            "{:<36} {:>7} {:>11} {:>11} {:>11} {:>11} {:>11} {:>11} {:>11} {:>9}",
             name,
             stats.count,
             fmt_dur(stats.total),
@@ -385,6 +385,7 @@ fn print_table(rows: &[(&str, &Stats)]) {
             fmt_dur(stats.p99),
             fmt_dur(stats.min),
             fmt_dur(stats.max),
+            index,
         );
     }
     let _ = std::io::stdout().flush();
