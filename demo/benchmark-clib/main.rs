@@ -19,7 +19,10 @@ use std::io::{BufWriter, Write};
 use std::ptr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use liblogjet::{LjAttribute, LjLogRecord, lj_error_message, lj_logger, lj_logger_free, lj_logger_log, lj_logger_log_batch, lj_logger_log_reuse, lj_logger_new_grpc};
+use liblogjet::{
+    LjAttribute, LjLogRecord, lj_error_message, lj_logger, lj_logger_async_dropped, lj_logger_async_errors, lj_logger_flush, lj_logger_free, lj_logger_log, lj_logger_log_async,
+    lj_logger_log_batch, lj_logger_log_reuse, lj_logger_new_grpc,
+};
 use logjet::{LogjetWriter, RecordType};
 
 const LJ_ATTR_STRING: i32 = 0;
@@ -111,6 +114,14 @@ fn main() {
         }
     };
 
+    let async_phase = match unsafe { run_async_phase(&endpoint_c, &service_c, &record, count) } {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("async backend phase failed: {err}");
+            std::process::exit(1);
+        }
+    };
+
     let file_stats = summarize(file_samples);
     let per_connection_stats = summarize(per_connection.samples);
     let reuse_cold = reuse.cold_first;
@@ -118,22 +129,33 @@ fn main() {
     let raw_batch_mean = batch.raw_batch_mean;
     let batch_stats = summarize(batch.samples);
     let batch_label = format!("backend OTLP/gRPC (batch={batch_size})");
+    let async_stats = summarize(async_phase.samples);
 
     print_table(&[
         ("logjet file (LogjetWriter::push)", &file_stats),
         ("backend OTLP/gRPC (per-connection)", &per_connection_stats),
         ("backend OTLP/gRPC (reuse)", &reuse_stats),
         (batch_label.as_str(), &batch_stats),
+        ("backend OTLP/gRPC (async enqueue)", &async_stats),
     ]);
 
     println!();
     println!("note: batch row is per-record amortized; raw per-batch-call mean: {}", fmt_dur(raw_batch_mean));
+    println!(
+        "note: async row is the caller-thread enqueue cost (fire-and-forget); flush: {}, errors: {}, dropped: {}",
+        fmt_dur(async_phase.flush_ns),
+        async_phase.errors,
+        async_phase.dropped,
+    );
     println!("reuse first/cold call (one-time connect): {}", fmt_dur(reuse_cold));
     if reuse_stats.mean > 0.0 {
         println!("backend speedup (mean, per-connection -> reuse): {:.1}x", per_connection_stats.mean / reuse_stats.mean);
     }
     if batch_stats.mean > 0.0 {
         println!("backend speedup (mean, per-connection -> batch): {:.1}x", per_connection_stats.mean / batch_stats.mean);
+    }
+    if async_stats.mean > 0.0 {
+        println!("backend speedup (mean, per-connection -> async enqueue): {:.1}x", per_connection_stats.mean / async_stats.mean);
     }
 }
 
@@ -260,6 +282,45 @@ unsafe fn run_batch_phase(endpoint: &CStr, service: &CStr, template: &LjLogRecor
 
     let raw_batch_mean = if batch_calls > 0 { total_batch_ns as f64 / batch_calls as f64 } else { 0.0 };
     Ok(BatchResult { samples, raw_batch_mean })
+}
+
+struct AsyncResult {
+    samples: Vec<u128>,
+    flush_ns: f64,
+    errors: u64,
+    dropped: u64,
+}
+
+unsafe fn run_async_phase(endpoint: &CStr, service: &CStr, template: &LjLogRecord, count: usize) -> Result<AsyncResult, String> {
+    let logger = unsafe { lj_logger_new_grpc(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
+    if logger.is_null() {
+        return Err(last_error());
+    }
+
+    let mut record = clone_record(template);
+    let mut samples = Vec::with_capacity(count);
+    for _ in 0..count {
+        record.timestamp_unix_ns = now_unix_ns();
+        let start = Instant::now();
+        let ok = unsafe { lj_logger_log_async(logger, &record as *const LjLogRecord) };
+        let elapsed = start.elapsed().as_nanos();
+        if !ok {
+            let err = last_error();
+            unsafe { lj_logger_free(logger) };
+            return Err(err);
+        }
+        samples.push(elapsed);
+    }
+
+    let flush_start = Instant::now();
+    unsafe { lj_logger_flush(logger, 60_000) };
+    let flush_ns = flush_start.elapsed().as_nanos() as f64;
+
+    let errors = unsafe { lj_logger_async_errors(logger) };
+    let dropped = unsafe { lj_logger_async_dropped(logger) };
+
+    unsafe { lj_logger_free(logger) };
+    Ok(AsyncResult { samples, flush_ns, errors, dropped })
 }
 
 fn last_error() -> String {
