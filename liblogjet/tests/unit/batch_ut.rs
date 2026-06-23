@@ -1,18 +1,19 @@
 use std::ffi::{CStr, CString};
 use std::ptr;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 
-use super::{Backend, HttpEndpoint, LjLogRecord, Logger, build_batch_request};
+use super::{AsyncEngine, Backend, HttpClient, HttpEndpoint, HttpPool, LjLogRecord, Logger, build_batch_request};
 
 fn test_logger(service: &str) -> Logger {
+    let pool = std::sync::Arc::new(HttpPool {
+        endpoint: HttpEndpoint { authority: "127.0.0.1:4318".to_string(), host_header: "127.0.0.1:4318".to_string(), path: "/v1/logs".to_string() },
+        idle: Mutex::new(Vec::new()),
+    });
     Logger {
-        backend: Backend::Http(HttpEndpoint {
-            authority: "127.0.0.1:4318".to_string(),
-            host_header: "127.0.0.1:4318".to_string(),
-            path: "/v1/logs".to_string(),
-        }),
+        backend: Backend::Http(HttpClient { runtime: OnceLock::new(), engine: AsyncEngine::new(), pool }),
         service_name: service.to_string(),
         timeout: Duration::from_millis(1000),
     }
