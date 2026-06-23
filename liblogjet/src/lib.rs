@@ -17,7 +17,7 @@ use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
 use tokio::runtime::{Builder, Runtime};
 use tonic::Request;
-use tonic::transport::Endpoint;
+use tonic::transport::{Channel, Endpoint};
 
 const LJ_ATTR_STRING: i32 = 0;
 const LJ_ATTR_INT: i32 = 1;
@@ -98,6 +98,7 @@ struct HttpEndpoint {
 struct GrpcClient {
     endpoint: String,
     runtime: Mutex<Runtime>,
+    channel: Mutex<Option<Channel>>,
 }
 
 /// Returns the library version string.
@@ -171,6 +172,43 @@ pub unsafe extern "C" fn lj_logger_log(logger: *mut lj_logger, record: *const Lj
     }
 }
 
+/// Sends one log record, reusing a persistent connection.
+///
+/// For gRPC loggers this reuses a cached channel, avoiding a fresh connection
+/// handshake on every call. For HTTP loggers it currently behaves like
+/// `lj_logger_log` (a new connection per call) until HTTP keep-alive lands.
+///
+/// # Safety
+///
+/// `logger` must be a valid pointer returned by `lj_logger_new_http` or
+/// `lj_logger_new_grpc`. `record` must point to a valid `LjLogRecord` for the
+/// duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lj_logger_log_reuse(logger: *mut lj_logger, record: *const LjLogRecord) -> bool {
+    clear_last_error();
+    let logger = match unsafe { logger.as_mut() } {
+        Some(logger) => logger,
+        None => {
+            set_last_error("logger is null");
+            return false;
+        }
+    };
+    let record = match unsafe { record.as_ref() } {
+        Some(record) => record,
+        None => {
+            set_last_error("record is null");
+            return false;
+        }
+    };
+    match build_request(&logger.inner, record).and_then(|request| send_request_reuse(&logger.inner, request)) {
+        Ok(()) => true,
+        Err(err) => {
+            set_last_error(err);
+            false
+        }
+    }
+}
+
 /// Frees a logger created by one of the constructors. Accepts null.
 ///
 /// # Safety
@@ -207,7 +245,9 @@ unsafe fn new_logger_impl(endpoint: *const c_char, service_name: *const c_char, 
     let timeout = Duration::from_millis(timeout_ms.max(1));
     let backend = match kind {
         BackendKind::Http => Backend::Http(parse_http_endpoint(&endpoint)?),
-        BackendKind::Grpc => Backend::Grpc(GrpcClient { endpoint: normalise_grpc_endpoint(&endpoint), runtime: Mutex::new(grpc_runtime()?) }),
+        BackendKind::Grpc => {
+            Backend::Grpc(GrpcClient { endpoint: normalise_grpc_endpoint(&endpoint), runtime: Mutex::new(grpc_runtime()?), channel: Mutex::new(None) })
+        }
     };
     Ok(Logger { backend, service_name, timeout })
 }
@@ -308,6 +348,47 @@ fn send_request(logger: &Logger, request: ExportLogsServiceRequest) -> Result<()
             .block_on(send_otlp_grpc(client.endpoint.clone(), logger.timeout, request))
             .map_err(|err| err.to_string()),
     }
+}
+
+fn send_request_reuse(logger: &Logger, request: ExportLogsServiceRequest) -> Result<(), String> {
+    match &logger.backend {
+        Backend::Http(endpoint) => post_otlp_http(endpoint, logger.timeout, &request).map_err(|err| err.to_string()),
+        Backend::Grpc(client) => send_otlp_grpc_pooled(client, logger.timeout, request),
+    }
+}
+
+fn send_otlp_grpc_pooled(client: &GrpcClient, timeout: Duration, request: ExportLogsServiceRequest) -> Result<(), String> {
+    let runtime = client.runtime.lock().map_err(|_| "gRPC runtime lock poisoned".to_string())?;
+
+    let channel = {
+        let mut guard = client.channel.lock().map_err(|_| "gRPC channel lock poisoned".to_string())?;
+        match guard.as_ref() {
+            Some(channel) => channel.clone(),
+            None => {
+                let channel = runtime.block_on(connect_channel(&client.endpoint, timeout)).map_err(|err| err.to_string())?;
+                *guard = Some(channel.clone());
+                channel
+            }
+        }
+    };
+
+    let result = runtime.block_on(export_on_channel(channel, request));
+    if result.is_err()
+        && let Ok(mut guard) = client.channel.lock()
+    {
+        *guard = None;
+    }
+    result.map_err(|err| err.to_string())
+}
+
+async fn connect_channel(endpoint: &str, timeout: Duration) -> Result<Channel, Box<dyn std::error::Error>> {
+    Ok(Endpoint::from_shared(endpoint.to_string())?.timeout(timeout).connect_timeout(timeout).connect().await?)
+}
+
+async fn export_on_channel(channel: Channel, request: ExportLogsServiceRequest) -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = LogsServiceClient::new(channel);
+    client.export(Request::new(request)).await?;
+    Ok(())
 }
 
 async fn send_otlp_grpc(endpoint: String, timeout: Duration, request: ExportLogsServiceRequest) -> Result<(), Box<dyn std::error::Error>> {

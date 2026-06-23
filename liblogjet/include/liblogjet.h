@@ -156,6 +156,7 @@ const char *lj_error_message(void);
 lj_logger *lj_logger_new_http(const char *endpoint, const char *service_name, uint64_t timeout_ms);
 lj_logger *lj_logger_new_grpc(const char *endpoint, const char *service_name, uint64_t timeout_ms);
 bool lj_logger_log(lj_logger *logger, const lj_log_record *record);
+bool lj_logger_log_reuse(lj_logger *logger, const lj_log_record *record);
 void lj_logger_free(lj_logger *logger);
 
 lj_ingest_plugin *lj_ingest_create(void);

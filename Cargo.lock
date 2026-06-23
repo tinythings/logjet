@@ -1715,6 +1715,7 @@ name = "otlp-demo"
 version = "0.9.0"
 dependencies = [
  "colored",
+ "liblogjet",
  "logjet",
  "lz4_flex",
  "opentelemetry-proto",
