@@ -136,7 +136,10 @@ struct AsyncEngine {
 impl AsyncEngine {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            backpressure: Mutex::new(Backpressure { model: LJ_BACKPRESSURE_DROP, semaphore: Arc::new(Semaphore::new(DEFAULT_BACKPRESSURE_CAPACITY)) }),
+            backpressure: Mutex::new(Backpressure {
+                model: LJ_BACKPRESSURE_DROP,
+                semaphore: Arc::new(Semaphore::new(DEFAULT_BACKPRESSURE_CAPACITY)),
+            }),
             inflight: AtomicU64::new(0),
             errors: AtomicU64::new(0),
             dropped: AtomicU64::new(0),

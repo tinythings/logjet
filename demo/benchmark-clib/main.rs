@@ -20,8 +20,8 @@ use std::ptr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use liblogjet::{
-    LjAttribute, LjLogRecord, lj_error_message, lj_logger, lj_logger_async_dropped, lj_logger_async_errors, lj_logger_flush, lj_logger_free, lj_logger_log, lj_logger_log_async,
-    lj_logger_log_batch, lj_logger_log_reuse, lj_logger_new_grpc, lj_logger_new_http, lj_logger_set_backpressure,
+    LjAttribute, LjLogRecord, lj_error_message, lj_logger, lj_logger_async_dropped, lj_logger_async_errors, lj_logger_flush, lj_logger_free,
+    lj_logger_log, lj_logger_log_async, lj_logger_log_batch, lj_logger_log_reuse, lj_logger_new_grpc, lj_logger_new_http, lj_logger_set_backpressure,
 };
 use logjet::{LogjetWriter, RecordType};
 
@@ -125,14 +125,7 @@ fn print_legend() {
 
 #[allow(clippy::too_many_arguments)]
 fn run_and_print_transport(
-    proto: &str,
-    new_fn: NewFn,
-    endpoint: &CStr,
-    endpoint_str: &str,
-    service: &CStr,
-    record: &mut LjLogRecord,
-    count: usize,
-    batch_size: usize,
+    proto: &str, new_fn: NewFn, endpoint: &CStr, endpoint_str: &str, service: &CStr, record: &mut LjLogRecord, count: usize, batch_size: usize,
     file_stats: Option<&Stats>,
 ) {
     let per_connection = match unsafe { run_backend_phase(endpoint, service, record, count, new_fn, lj_logger_log) } {
@@ -236,7 +229,9 @@ struct BackendResult {
     cold_first: f64,
 }
 
-unsafe fn run_backend_phase(endpoint: &CStr, service: &CStr, record: &mut LjLogRecord, count: usize, new_fn: NewFn, log_fn: LogFn) -> Result<BackendResult, String> {
+unsafe fn run_backend_phase(
+    endpoint: &CStr, service: &CStr, record: &mut LjLogRecord, count: usize, new_fn: NewFn, log_fn: LogFn,
+) -> Result<BackendResult, String> {
     let logger = unsafe { new_fn(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
     if logger.is_null() {
         return Err(last_error());
@@ -289,7 +284,9 @@ fn clone_record(template: &LjLogRecord) -> LjLogRecord {
     }
 }
 
-unsafe fn run_batch_phase(endpoint: &CStr, service: &CStr, template: &LjLogRecord, count: usize, batch_size: usize, new_fn: NewFn) -> Result<BatchResult, String> {
+unsafe fn run_batch_phase(
+    endpoint: &CStr, service: &CStr, template: &LjLogRecord, count: usize, batch_size: usize, new_fn: NewFn,
+) -> Result<BatchResult, String> {
     let logger = unsafe { new_fn(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
     if logger.is_null() {
         return Err(last_error());
@@ -341,7 +338,9 @@ struct AsyncResult {
     dropped: u64,
 }
 
-unsafe fn run_async_phase(endpoint: &CStr, service: &CStr, template: &LjLogRecord, count: usize, new_fn: NewFn, backpressure: Option<(i32, usize)>) -> Result<AsyncResult, String> {
+unsafe fn run_async_phase(
+    endpoint: &CStr, service: &CStr, template: &LjLogRecord, count: usize, new_fn: NewFn, backpressure: Option<(i32, usize)>,
+) -> Result<AsyncResult, String> {
     let logger = unsafe { new_fn(endpoint.as_ptr(), service.as_ptr(), TIMEOUT_MS) };
     if logger.is_null() {
         return Err(last_error());
