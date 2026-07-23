@@ -115,7 +115,7 @@ fn modal_info_lists_otlp_attributes() {
                             value: Some(Value::ArrayValue(opentelemetry_proto::tonic::common::v1::ArrayValue {
                                 values: vec![
                                     AnyValue { value: Some(Value::StringValue("de".to_string())) },
-                                    AnyValue { value: Some(Value::StringValue("eso".to_string())) },
+                                    AnyValue { value: Some(Value::StringValue("demo".to_string())) },
                                 ],
                             })),
                         }),
@@ -159,7 +159,7 @@ fn modal_info_lists_otlp_attributes() {
     let entries = render_modal_info_entries(&detail);
     assert!(entries.iter().any(|(key, value)| key == "resource.service.name" && value == "cpp-appliance"));
     assert!(entries.iter().any(|(key, value)| key == "scope.demo.channel" && value == "de"));
-    assert!(entries.iter().any(|(key, value)| key.is_empty() && value == "eso"));
+    assert!(entries.iter().any(|(key, value)| key.is_empty() && value == "demo"));
     assert!(entries.iter().any(|(key, value)| key == "record.character" && value == "Bender"));
 }
 
@@ -891,7 +891,12 @@ fn summary_decodes_otlp_metrics_payload() {
         resource_metrics: vec![ResourceMetrics {
             resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
             scope_metrics: vec![ScopeMetrics {
-                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 metrics: vec![metric],
                 schema_url: String::new(),
             }],
@@ -900,7 +905,14 @@ fn summary_decodes_otlp_metrics_payload() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Metrics,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
     assert_eq!(format_summary(&detail, false), "cpu.usage=45.5%");
@@ -932,7 +944,12 @@ fn modal_message_decodes_otlp_metrics_payload() {
         resource_metrics: vec![ResourceMetrics {
             resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
             scope_metrics: vec![ScopeMetrics {
-                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 metrics: vec![metric],
                 schema_url: String::new(),
             }],
@@ -941,7 +958,14 @@ fn modal_message_decodes_otlp_metrics_payload() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Metrics,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
     let message = render_modal_message(&detail, false);
@@ -975,7 +999,12 @@ fn modal_info_entries_decodes_otlp_metrics_payload() {
         resource_metrics: vec![ResourceMetrics {
             resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
             scope_metrics: vec![ScopeMetrics {
-                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 metrics: vec![metric],
                 schema_url: String::new(),
             }],
@@ -984,7 +1013,14 @@ fn modal_info_entries_decodes_otlp_metrics_payload() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Metrics, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Metrics,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
     let entries = render_modal_info_entries(&detail);
@@ -1006,43 +1042,48 @@ fn summary_decodes_otlp_traces_payload() {
                 entity_refs: vec![],
             }),
             scope_spans: vec![ScopeSpans {
-                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 spans: vec![
                     Span {
                         trace_id: vec![1, 2, 3, 4],
                         span_id: vec![5, 6, 7, 8],
                         parent_span_id: vec![],
                         name: "GET /api".to_string(),
-                    kind: 2,
-                    start_time_unix_nano: 1_700_000_000_000_000_000,
-                    end_time_unix_nano: 1_700_000_000_000_000_100,
-                    attributes: vec![],
-                    dropped_attributes_count: 0,
-                    events: vec![],
-                    dropped_events_count: 0,
-                    links: vec![],
-                    dropped_links_count: 0,
-                    status: None,
-                    flags: 0,
-                    trace_state: String::new(),
-                },
-                Span {
-                    trace_id: vec![1, 2, 3, 4],
-                    span_id: vec![9, 10, 11, 12],
-                    parent_span_id: vec![5, 6, 7, 8],
-                    name: "SELECT".to_string(),
-                    kind: 3,
-                    start_time_unix_nano: 1_700_000_000_000_000_050,
-                    end_time_unix_nano: 1_700_000_000_000_000_080,
-                    attributes: vec![],
-                    dropped_attributes_count: 0,
-                    events: vec![],
-                    dropped_events_count: 0,
-                    links: vec![],
-                    dropped_links_count: 0,
-                    status: None,
-                    flags: 0,
-                    trace_state: String::new(),
+                        kind: 2,
+                        start_time_unix_nano: 1_700_000_000_000_000_000,
+                        end_time_unix_nano: 1_700_000_000_000_000_100,
+                        attributes: vec![],
+                        dropped_attributes_count: 0,
+                        events: vec![],
+                        dropped_events_count: 0,
+                        links: vec![],
+                        dropped_links_count: 0,
+                        status: None,
+                        flags: 0,
+                        trace_state: String::new(),
+                    },
+                    Span {
+                        trace_id: vec![1, 2, 3, 4],
+                        span_id: vec![9, 10, 11, 12],
+                        parent_span_id: vec![5, 6, 7, 8],
+                        name: "SELECT".to_string(),
+                        kind: 3,
+                        start_time_unix_nano: 1_700_000_000_000_000_050,
+                        end_time_unix_nano: 1_700_000_000_000_000_080,
+                        attributes: vec![],
+                        dropped_attributes_count: 0,
+                        events: vec![],
+                        dropped_events_count: 0,
+                        links: vec![],
+                        dropped_links_count: 0,
+                        status: None,
+                        flags: 0,
+                        trace_state: String::new(),
                     },
                 ],
                 schema_url: String::new(),
@@ -1052,7 +1093,14 @@ fn summary_decodes_otlp_traces_payload() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Traces, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Traces,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
     let summary = format_summary(&detail, false);
@@ -1066,7 +1114,12 @@ fn modal_message_decodes_otlp_traces_payload() {
         resource_spans: vec![ResourceSpans {
             resource: Some(Resource { attributes: vec![], dropped_attributes_count: 0, entity_refs: vec![] }),
             scope_spans: vec![ScopeSpans {
-                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 spans: vec![Span {
                     trace_id: vec![1, 2, 3, 4],
                     span_id: vec![5, 6, 7, 8],
@@ -1092,7 +1145,14 @@ fn modal_message_decodes_otlp_traces_payload() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Traces, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Traces,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
     let message = render_modal_message(&detail, false);
@@ -1114,7 +1174,12 @@ fn modal_info_entries_decodes_otlp_traces_payload() {
                 entity_refs: vec![],
             }),
             scope_spans: vec![ScopeSpans {
-                scope: Some(InstrumentationScope { name: "test".to_string(), version: String::new(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: String::new(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 spans: vec![
                     Span {
                         trace_id: vec![1, 2, 3, 4],
@@ -1160,7 +1225,14 @@ fn modal_info_entries_decodes_otlp_traces_payload() {
     };
     let payload = batch.encode_to_vec();
     let detail = DetailRecord {
-        meta: EntryMeta { offset: 0, record_type: RecordType::Traces, seq: 1, ts_unix_ns: 2, payload_len: payload.len() as u64, source_path: "a.logjet".into() },
+        meta: EntryMeta {
+            offset: 0,
+            record_type: RecordType::Traces,
+            seq: 1,
+            ts_unix_ns: 2,
+            payload_len: payload.len() as u64,
+            source_path: "a.logjet".into(),
+        },
         payload,
     };
     let entries = render_modal_info_entries(&detail);

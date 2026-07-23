@@ -7,8 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    ChildGuard, MockCollector, MockGrpcCollector, ReservedPort, TestDir, connect_replay_client, ensure_rustls_provider, free_port, ljd_command, post_otlp_http,
-    read_replay_message, replay_messages, reserve_port, wait_for_tcp, wait_until, write_fake_grpc_tls_files,
+    ChildGuard, MockCollector, MockGrpcCollector, ReservedPort, TestDir, connect_replay_client, ensure_rustls_provider, free_port, ljd_command,
+    post_otlp_http, read_replay_message, replay_messages, reserve_port, wait_for_tcp, wait_until, write_fake_grpc_tls_files,
 };
 
 fn http_collector(port: ReservedPort) -> io::Result<MockCollector> {

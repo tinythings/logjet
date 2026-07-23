@@ -473,7 +473,8 @@ fn data_point_value_to_json(value: &opentelemetry_proto::tonic::metrics::v1::num
     }
 }
 
-fn flatten_otlp_attrs_into_json(    target: &mut JsonMap<String, JsonValue>, attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue], preview_bytes: Option<usize>,
+fn flatten_otlp_attrs_into_json(
+    target: &mut JsonMap<String, JsonValue>, attrs: &[opentelemetry_proto::tonic::common::v1::KeyValue], preview_bytes: Option<usize>,
 ) {
     for attr in attrs {
         let key = attr.key.replace('.', "_");

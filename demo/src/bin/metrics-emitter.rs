@@ -15,11 +15,8 @@ fn main() {
     let addr = &args[1];
     let count: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(20);
 
-    let endpoint = if addr.starts_with("http://") || addr.starts_with("https://") {
-        format!("{addr}/v1/metrics")
-    } else {
-        format!("http://{addr}/v1/metrics")
-    };
+    let endpoint =
+        if addr.starts_with("http://") || addr.starts_with("https://") { format!("{addr}/v1/metrics") } else { format!("http://{addr}/v1/metrics") };
 
     println!("metrics-emitter sending {count} batches to {endpoint}");
 

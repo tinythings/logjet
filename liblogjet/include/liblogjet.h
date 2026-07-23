@@ -20,6 +20,11 @@ extern "C" {
 #define LJ_ATTR_INT 1
 #define LJ_ATTR_ARRAY 2
 
+// Async backpressure models (lj_logger_set_backpressure).
+#define LJ_BACKPRESSURE_UNBOUNDED 0
+#define LJ_BACKPRESSURE_DROP 1
+#define LJ_BACKPRESSURE_BLOCK 2
+
 // Ingest plugin signal bitmask (in descriptor reserved[0], ABI >= 1.1).
 #define LJ_INGEST_SIGNAL_LOGS    (1u << 0)
 #define LJ_INGEST_SIGNAL_METRICS (1u << 1)
@@ -155,7 +160,35 @@ const char *lj_version(void);
 const char *lj_error_message(void);
 lj_logger *lj_logger_new_http(const char *endpoint, const char *service_name, uint64_t timeout_ms);
 lj_logger *lj_logger_new_grpc(const char *endpoint, const char *service_name, uint64_t timeout_ms);
+// Send one log record. Opens a fresh connection — simplest, most robust.
 bool lj_logger_log(lj_logger *logger, const lj_log_record *record);
+// Send one record over a persistent gRPC channel or HTTP keep-alive connection.
+// First call establishes the connection (slightly slower); subsequent calls reuse it.
+bool lj_logger_log_reuse(lj_logger *logger, const lj_log_record *record);
+// Send many records in one export request over a persistent connection.
+// Records are grouped by service name, resource attributes, and scope.
+// A len of 0 or null records is a successful no-op.
+bool lj_logger_log_batch(lj_logger *logger, const lj_log_record *records, size_t len);
+// Enqueue one record for send on a background runtime; returns immediately.
+// Returns false only on validation errors. Network failures are counted via
+// lj_logger_async_errors(); records dropped by backpressure via lj_logger_async_dropped().
+bool lj_logger_log_async(lj_logger *logger, const lj_log_record *record);
+// Enqueue a batch for background send. Same error semantics as lj_logger_log_async.
+bool lj_logger_log_batch_async(lj_logger *logger, const lj_log_record *records, size_t len);
+// Configure async backpressure. model is LJ_BACKPRESSURE_UNBOUNDED / _DROP / _BLOCK.
+// capacity is the max in-flight sends for bounded models (ignored for unbounded).
+// Default: LJ_BACKPRESSURE_DROP, capacity 1024. Call before first async send.
+bool lj_logger_set_backpressure(lj_logger *logger, int32_t model, size_t capacity);
+// Block until all in-flight async sends complete or timeout_ms elapses.
+// Returns true if fully drained. Also called by lj_logger_free.
+bool lj_logger_flush(lj_logger *logger, uint64_t timeout_ms);
+// Count of async sends that failed on the network.
+uint64_t lj_logger_async_errors(lj_logger *logger);
+// Count of records dropped by bounded backpressure (LJ_BACKPRESSURE_DROP).
+uint64_t lj_logger_async_dropped(lj_logger *logger);
+// Number of async sends currently in flight.
+uint64_t lj_logger_async_inflight(lj_logger *logger);
+// Free the logger. Drains in-flight async sends first. Accepts NULL.
 void lj_logger_free(lj_logger *logger);
 
 lj_ingest_plugin *lj_ingest_create(void);

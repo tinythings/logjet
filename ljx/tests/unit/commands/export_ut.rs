@@ -162,12 +162,20 @@ fn export_ndjson_objects_includes_otlp_metrics_fields() {
     let batch = ExportMetricsServiceRequest {
         resource_metrics: vec![ResourceMetrics {
             resource: Some(Resource {
-                attributes: vec![KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue("metrics-svc".to_string())) }) }],
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue { value: Some(Value::StringValue("metrics-svc".to_string())) }),
+                }],
                 dropped_attributes_count: 0,
                 entity_refs: vec![],
             }),
             scope_metrics: vec![ScopeMetrics {
-                scope: Some(InstrumentationScope { name: "demo.metrics.scope".to_string(), version: "1.0.0".to_string(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "demo.metrics.scope".to_string(),
+                    version: "1.0.0".to_string(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 metrics: vec![metric],
                 schema_url: String::new(),
             }],
@@ -194,12 +202,20 @@ fn export_ndjson_objects_includes_otlp_traces_fields() {
     let batch = ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
             resource: Some(Resource {
-                attributes: vec![KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue("traces-svc".to_string())) }) }],
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue { value: Some(Value::StringValue("traces-svc".to_string())) }),
+                }],
                 dropped_attributes_count: 0,
                 entity_refs: vec![],
             }),
             scope_spans: vec![ScopeSpans {
-                scope: Some(InstrumentationScope { name: "demo.traces.scope".to_string(), version: "2.0.0".to_string(), attributes: vec![], dropped_attributes_count: 0 }),
+                scope: Some(InstrumentationScope {
+                    name: "demo.traces.scope".to_string(),
+                    version: "2.0.0".to_string(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
                 spans: vec![Span {
                     trace_id: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
                     span_id: vec![16, 17, 18, 19, 20, 21, 22, 23],
@@ -208,7 +224,10 @@ fn export_ndjson_objects_includes_otlp_traces_fields() {
                     kind: 2,
                     start_time_unix_nano: 1_700_000_000_000_000_000,
                     end_time_unix_nano: 1_700_000_000_000_000_100,
-                    attributes: vec![KeyValue { key: "http.method".to_string(), value: Some(AnyValue { value: Some(Value::StringValue("GET".to_string())) }) }],
+                    attributes: vec![KeyValue {
+                        key: "http.method".to_string(),
+                        value: Some(AnyValue { value: Some(Value::StringValue("GET".to_string())) }),
+                    }],
                     dropped_attributes_count: 0,
                     events: vec![],
                     dropped_events_count: 0,

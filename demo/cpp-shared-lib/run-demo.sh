@@ -9,7 +9,9 @@ LIB_SRC="$TARGET_DIR/libliblogjet.so"
 LIB_DST="$SCRIPT_DIR/liblogjet.so"
 CPP_SRC="$SCRIPT_DIR/cpp-logger.cpp"
 CPP_BIN="$SCRIPT_DIR/cpp-logger"
-CONFIG="$SCRIPT_DIR/ljd.conf"
+CONFIG_GRPC="$SCRIPT_DIR/ljd.conf"
+CONFIG_HTTP="$SCRIPT_DIR/ljd-http.conf"
+COUNT="${1:-25}"
 
 for bin in "$LJD" "$LJX" "$LIB_SRC"; do
     if [ ! -e "$bin" ]; then
@@ -31,22 +33,35 @@ ln -sf "$LIB_SRC" "$LIB_DST"
 echo "building C++ example"
 g++ -std=c++17 -Wall -Wextra -pedantic -O2 -I"$SCRIPT_DIR/../../liblogjet/include" "$CPP_SRC" -ldl -o "$CPP_BIN"
 
-echo "starting ljd with file-backed OTLP ingest"
-"$LJD" --config "$CONFIG" serve &
-LJD_PID=$!
+# Run from the demo dir so ljd resolves the relative file.path (./logs).
+cd "$SCRIPT_DIR"
+
+echo "starting ljd: OTLP/gRPC on 127.0.0.1:4317 and OTLP/HTTP on 127.0.0.1:4318"
+"$LJD" --config "$CONFIG_GRPC" serve &
+LJD_GRPC_PID=$!
+"$LJD" --config "$CONFIG_HTTP" serve &
+LJD_HTTP_PID=$!
 
 cleanup() {
-    kill "${LJD_PID:-}" 2>/dev/null || true
+    kill "${LJD_GRPC_PID:-}" 2>/dev/null || true
+    kill "${LJD_HTTP_PID:-}" 2>/dev/null || true
 }
-
 trap cleanup EXIT INT TERM
 
 sleep 1
 
-echo "sending logs from C++ through liblogjet.so into ljd over OTLP/gRPC"
-"$CPP_BIN" "$LIB_DST" "127.0.0.1:4317" 25
+echo
+echo "=== OTLP/gRPC: per-connection, reuse, batch, async ==="
+"$CPP_BIN" "$LIB_DST" "127.0.0.1:4317" "$COUNT" grpc
+
+echo
+echo "=== OTLP/HTTP: per-connection, reuse, batch, async ==="
+"$CPP_BIN" "$LIB_DST" "127.0.0.1:4318" "$COUNT" http
 
 sleep 1
 
-echo "opening ljx view on ./logs/cpp-demo.logjet"
+echo
+echo "results: ./logs/cpp-demo.logjet (gRPC) and ./logs/cpp-demo-http.logjet (HTTP)"
+echo "opening ljx view on the gRPC capture (quit to open the HTTP capture)"
 "$LJX" view "$SCRIPT_DIR/logs/cpp-demo.logjet"
+"$LJX" view "$SCRIPT_DIR/logs/cpp-demo-http.logjet"

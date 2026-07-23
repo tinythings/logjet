@@ -31,7 +31,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn send_batch(client: &mut MetricsServiceClient<tonic::transport::Channel>, request: ExportMetricsServiceRequest) -> Result<(), Box<dyn std::error::Error>> {
+async fn send_batch(
+    client: &mut MetricsServiceClient<tonic::transport::Channel>, request: ExportMetricsServiceRequest,
+) -> Result<(), Box<dyn std::error::Error>> {
     client.export(Request::new(request)).await?;
     Ok(())
 }
