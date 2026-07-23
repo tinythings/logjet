@@ -351,12 +351,11 @@ fn triples_to_kvs_string_value() {
     let triples = vec![("key".to_string(), LJ_ATTR_STRING, "val".to_string())];
     let kvs = triples_to_kvs(&triples).unwrap();
     assert_eq!(kvs[0].key, "key");
-    if let Some(ref v) = kvs[0].value {
-        if let Some(Value::StringValue(s)) = &v.value {
+    if let Some(ref v) = kvs[0].value
+        && let Some(Value::StringValue(s)) = &v.value {
             assert_eq!(s, "val");
             return;
         }
-    }
     panic!("unexpected value");
 }
 
@@ -364,12 +363,11 @@ fn triples_to_kvs_string_value() {
 fn triples_to_kvs_int_value() {
     let triples = vec![("count".to_string(), LJ_ATTR_INT, "42".to_string())];
     let kvs = triples_to_kvs(&triples).unwrap();
-    if let Some(ref v) = kvs[0].value {
-        if let Some(Value::IntValue(i)) = &v.value {
+    if let Some(ref v) = kvs[0].value
+        && let Some(Value::IntValue(i)) = &v.value {
             assert_eq!(*i, 42);
             return;
         }
-    }
     panic!("unexpected value");
 }
 
@@ -377,8 +375,8 @@ fn triples_to_kvs_int_value() {
 fn triples_to_kvs_array_value() {
     let triples = vec![("tags".to_string(), LJ_ATTR_ARRAY, "a, b, c".to_string())];
     let kvs = triples_to_kvs(&triples).unwrap();
-    if let Some(ref v) = kvs[0].value {
-        if let Some(Value::ArrayValue(arr)) = &v.value {
+    if let Some(ref v) = kvs[0].value
+        && let Some(Value::ArrayValue(arr)) = &v.value {
             let items: Vec<&str> = arr.values.iter().filter_map(|av| match &av.value {
                 Some(Value::StringValue(s)) => Some(s.as_str()),
                 _ => None,
@@ -386,7 +384,6 @@ fn triples_to_kvs_array_value() {
             assert_eq!(items, vec!["a", "b", "c"]);
             return;
         }
-    }
     panic!("unexpected value");
 }
 
@@ -409,12 +406,11 @@ fn resolve_resource_falls_back_to_logger_service_name() {
     let (key, attrs) = resolve_resource(&logger, &rec).unwrap();
     assert_eq!(key.0, "default-svc");
     let svc = attrs.iter().find(|kv| kv.key == "service.name").expect("service.name");
-    if let Some(ref v) = svc.value {
-        if let Some(Value::StringValue(s)) = &v.value {
+    if let Some(ref v) = svc.value
+        && let Some(Value::StringValue(s)) = &v.value {
             assert_eq!(s, "default-svc");
             return;
         }
-    }
     panic!("unexpected service.name value");
 }
 
