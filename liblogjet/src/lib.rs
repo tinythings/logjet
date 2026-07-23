@@ -1068,3 +1068,7 @@ fn set_last_error(message: impl Into<String>) {
 #[cfg(test)]
 #[path = "../tests/unit/batch_ut.rs"]
 mod batch_ut;
+
+#[cfg(test)]
+#[path = "../tests/unit/async_ut.rs"]
+mod async_ut;
