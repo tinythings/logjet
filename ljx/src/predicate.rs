@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use clap::{Args, CommandFactory, FromArgMatches, Parser, ValueEnum};
+use ljcel::CelExpression;
 use logjet::{OwnedRecord, RecordType};
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use prost::Message;
@@ -10,6 +11,7 @@ use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterMode {
+    Cel,
     Strings,
     Regex,
 }
@@ -91,6 +93,9 @@ pub struct PredicateArgs {
 
     #[arg(short = 'i', long = "ignore-case", help = "Apply case-insensitive matching to all payload matchers")]
     pub ignore_case: bool,
+
+    #[arg(long = "cel", value_name = "EXPR", help = "CEL expression evaluated against decoded OTel attributes; repeat for AND semantics")]
+    pub cel: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +106,7 @@ pub struct RecordPredicate {
     ts_min: Option<u64>,
     ts_max: Option<u64>,
     payload_matchers: Vec<PayloadMatcher>,
+    cel_queries: Vec<CelExpression>,
     pub field_filter: FieldFilter,
 }
 
@@ -118,6 +124,7 @@ impl PredicateArgs {
             || self.ts_max.is_some()
             || !self.grep.is_empty()
             || !self.fixed_string.is_empty()
+            || !self.cel.is_empty()
             || self.ignore_case
     }
 }
@@ -145,6 +152,11 @@ impl PredicateArgs {
         for text in self.fixed_string {
             payload_matchers.push(PayloadMatcher::new(&text, true, self.ignore_case)?);
         }
+        let cel_queries = self
+            .cel
+            .iter()
+            .map(|e| CelExpression::compile(e).map_err(|err| Error::Usage(format!("invalid CEL expression: {err}"))))
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(RecordPredicate {
             record_type: self.record_type.map(Into::into),
@@ -153,6 +165,7 @@ impl PredicateArgs {
             ts_min: self.ts_min,
             ts_max: self.ts_max,
             payload_matchers,
+            cel_queries,
             field_filter: FieldFilter::default(),
         })
     }
@@ -173,6 +186,7 @@ pub fn parse_filter_query(query: &str, mode: FilterMode) -> Result<RecordPredica
     // Bare text in the TUI stays ergonomic and depends on the active filter mode.
     if !trimmed.starts_with('-') {
         return match mode {
+            FilterMode::Cel => PredicateArgs { cel: vec![trimmed.to_string()], ..PredicateArgs::default() }.build(),
             FilterMode::Strings => PredicateArgs { fixed_string: vec![trimmed.to_string()], ..PredicateArgs::default() }.build(),
             FilterMode::Regex => PredicateArgs { grep: vec![trimmed.to_string()], ..PredicateArgs::default() }.build(),
         };
@@ -218,6 +232,11 @@ impl RecordPredicate {
         }
         for matcher in &self.payload_matchers {
             if !matcher.is_match(&record.payload) {
+                return false;
+            }
+        }
+        for cel in &self.cel_queries {
+            if !cel.matches_logs_payload(&record.payload).unwrap_or(false) {
                 return false;
             }
         }

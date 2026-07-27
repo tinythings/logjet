@@ -69,6 +69,7 @@ impl ViewApp {
         }
 
         let title = match self.filter_mode {
+            crate::predicate::FilterMode::Cel => "Filter (CEL): ",
             crate::predicate::FilterMode::Strings => "Filter (strings): ",
             crate::predicate::FilterMode::Regex => "Filter (regex): ",
         };
