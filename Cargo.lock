@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "liblogjet"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "opentelemetry-proto 0.31.0",
  "prost",
@@ -1417,11 +1417,11 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "lj-logcat-ingest"
-version = "0.9.0"
+version = "0.11.0"
 
 [[package]]
 name = "lj-perfetto-ingest"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "opentelemetry-proto 0.31.0",
  "prost",
@@ -1431,15 +1431,15 @@ dependencies = [
 
 [[package]]
 name = "lj-stress-ingest"
-version = "0.9.0"
+version = "0.11.0"
 
 [[package]]
 name = "lj-syslog-ingest"
-version = "0.9.0"
+version = "0.11.0"
 
 [[package]]
 name = "ljcel"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "cel",
  "logjet",
@@ -1449,7 +1449,7 @@ dependencies = [
 
 [[package]]
 name = "ljd"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "clap",
  "colored",
@@ -1478,7 +1478,7 @@ dependencies = [
 
 [[package]]
 name = "ljx"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "clap",
@@ -1500,7 +1500,7 @@ dependencies = [
 
 [[package]]
 name = "ljx-parquet-exporter"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1528,7 +1528,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "logjet"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "arrow-array",
  "crc32c",
@@ -1846,7 +1846,7 @@ dependencies = [
 
 [[package]]
 name = "otlp-demo"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "colored",
  "liblogjet",
