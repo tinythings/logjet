@@ -134,3 +134,16 @@ fn help_lists_current_export_formats() {
     assert!(!help.contains("Discovered plugin export formats:"));
     assert!(!help.contains("All export formats now:"));
 }
+
+#[test]
+fn top_level_query_parses_cel_flag() {
+    let cli = Cli::try_parse_from(["ljx", "input.logjet", "--cel", "severity_number >= 13"]).expect("cli parses");
+    assert_eq!(cli.predicate.cel, vec!["severity_number >= 13".to_string()]);
+}
+
+#[test]
+fn top_level_query_parses_repeated_cel_flags() {
+    let cli = Cli::try_parse_from(["ljx", "input.logjet", "--cel", "severity_number >= 13", "--cel", "body.contains(\"err\")"])
+        .expect("cli parses");
+    assert_eq!(cli.predicate.cel, vec!["severity_number >= 13".to_string(), "body.contains(\"err\")".to_string()]);
+}

@@ -1,8 +1,13 @@
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value::Value;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
+use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics};
 use opentelemetry_proto::tonic::resource::v1::Resource;
+use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span, Status};
+use logjet::RecordType;
 use prost::Message;
 
 use crate::CelExpression;
@@ -207,4 +212,185 @@ fn no_record_in_batch_matches() {
         log_record("warn msg", 13, "WARN"),
     ]);
     assert!(!expr.matches_logs_payload(&payload).unwrap());
+}
+
+// --- metrics helpers ---
+
+fn make_metric_payload(metric_name: &str, metric_type: &str, value: f64) -> Vec<u8> {
+    let batch = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource {
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue { value: Some(Value::StringValue("test-svc".to_string())) }),
+                }],
+                dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
+            }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: Some(InstrumentationScope {
+                    name: "test-scope".to_string(),
+                    version: "1.0.0".to_string(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
+                metrics: vec![Metric {
+                    name: metric_name.to_string(),
+                    unit: "ms".to_string(),
+                    description: String::new(),
+                    metadata: vec![],
+                    data: Some(match metric_type {
+                        "Gauge" => opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+                            data_points: vec![NumberDataPoint {
+                                value: Some(
+                                    opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(value),
+                                ),
+                                time_unix_nano: 1000,
+                                attributes: vec![],
+                                start_time_unix_nano: 0,
+                                flags: 0,
+                                exemplars: vec![],
+                            }],
+                        }),
+                        _ => opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
+                            data_points: vec![NumberDataPoint {
+                                value: Some(
+                                    opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsDouble(value),
+                                ),
+                                time_unix_nano: 1000,
+                                attributes: vec![],
+                                start_time_unix_nano: 0,
+                                flags: 0,
+                                exemplars: vec![],
+                            }],
+                        }),
+                    }),
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    batch.encode_to_vec()
+}
+
+// --- traces helpers ---
+
+fn make_trace_payload(span_name: &str, kind: i32, status_code: i32) -> Vec<u8> {
+    let batch = ExportTraceServiceRequest {
+        resource_spans: vec![ResourceSpans {
+            resource: Some(Resource {
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue { value: Some(Value::StringValue("test-svc".to_string())) }),
+                }],
+                dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
+            }),
+            scope_spans: vec![ScopeSpans {
+                scope: Some(InstrumentationScope {
+                    name: "test-scope".to_string(),
+                    version: "1.0.0".to_string(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
+                spans: vec![Span {
+                    trace_id: vec![1u8; 16],
+                    span_id: vec![2u8; 8],
+                    name: span_name.to_string(),
+                    kind,
+                    start_time_unix_nano: 1_000_000_000,
+                    end_time_unix_nano: 2_000_000_000,
+                    status: Some(Status { code: status_code, message: String::new() }),
+                    ..Default::default()
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    batch.encode_to_vec()
+}
+
+// --- metrics tests ---
+
+#[test]
+fn metric_name_match() {
+    let expr = CelExpression::compile("metric_name == \"http.latency\"").unwrap();
+    let payload = make_metric_payload("http.latency", "Gauge", 42.0);
+    assert!(expr.matches_metrics_payload(&payload).unwrap());
+}
+
+#[test]
+fn metric_name_no_match() {
+    let expr = CelExpression::compile("metric_name == \"http.latency\"").unwrap();
+    let payload = make_metric_payload("cpu.usage", "Gauge", 42.0);
+    assert!(!expr.matches_metrics_payload(&payload).unwrap());
+}
+
+#[test]
+fn metric_value_above_threshold() {
+    let expr = CelExpression::compile("value >= 100.0").unwrap();
+    let payload = make_metric_payload("cpu.usage", "Gauge", 150.0);
+    assert!(expr.matches_metrics_payload(&payload).unwrap());
+}
+
+#[test]
+fn metric_type_gauge() {
+    let expr = CelExpression::compile("metric_type == \"Gauge\"").unwrap();
+    let payload = make_metric_payload("cpu.usage", "Gauge", 50.0);
+    assert!(expr.matches_metrics_payload(&payload).unwrap());
+}
+
+// --- traces tests ---
+
+#[test]
+fn span_name_match() {
+    let expr = CelExpression::compile("name == \"GetUser\"").unwrap();
+    let payload = make_trace_payload("GetUser", 2, 0);
+    assert!(expr.matches_traces_payload(&payload).unwrap());
+}
+
+#[test]
+fn span_kind_server() {
+    let expr = CelExpression::compile("kind == 2").unwrap();
+    let payload = make_trace_payload("GetUser", 2, 0);
+    assert!(expr.matches_traces_payload(&payload).unwrap());
+}
+
+#[test]
+fn span_status_error() {
+    let expr = CelExpression::compile("status_code == 2").unwrap();
+    let payload = make_trace_payload("GetUser", 2, 2);
+    assert!(expr.matches_traces_payload(&payload).unwrap());
+}
+
+#[test]
+fn span_duration_above_threshold() {
+    let expr = CelExpression::compile("duration_ns >= 500000000").unwrap();
+    let payload = make_trace_payload("GetUser", 2, 0);
+    assert!(expr.matches_traces_payload(&payload).unwrap());
+}
+
+// --- generic dispatch tests ---
+
+#[test]
+fn matches_payload_dispatches_to_logs() {
+    let expr = CelExpression::compile("severity_number == 17").unwrap();
+    let payload = make_log_payload(vec![log_record("error msg", 17, "ERROR")]);
+    assert!(expr.matches_payload(RecordType::Logs, &payload).unwrap());
+}
+
+#[test]
+fn matches_payload_dispatches_to_metrics() {
+    let expr = CelExpression::compile("metric_name == \"cpu.usage\"").unwrap();
+    let payload = make_metric_payload("cpu.usage", "Gauge", 50.0);
+    assert!(expr.matches_payload(RecordType::Metrics, &payload).unwrap());
+}
+
+#[test]
+fn matches_payload_dispatches_to_traces() {
+    let expr = CelExpression::compile("name == \"GetUser\"").unwrap();
+    let payload = make_trace_payload("GetUser", 2, 0);
+    assert!(expr.matches_payload(RecordType::Traces, &payload).unwrap());
 }
