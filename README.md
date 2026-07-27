@@ -1,7 +1,7 @@
 # logjet
 
 [![Release](https://img.shields.io/github/v/release/tinythings/logjet)](https://github.com/tinythings/logjet/releases)
-[![Rust](https://img.shields.io/badge/rust-2024%20edition-orange)](https://doc.rust-lang.org/edition-guide/)
+[![Rust](https://img.shields.io/badge/rust-1.97.1-orange)](https://www.rust-lang.org)
 [![It is alive!](https://github.com/tinythings/logjet/actions/workflows/it-is-alive.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/it-is-alive.yml)
 [![Unit Tests](https://github.com/tinythings/logjet/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/unit-tests.yml)
 [![Integration Tests](https://github.com/tinythings/logjet/actions/workflows/integration-tests.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/integration-tests.yml)
