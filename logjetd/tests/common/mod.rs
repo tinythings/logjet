@@ -206,16 +206,6 @@ pub struct MockCollector {
 }
 
 impl MockCollector {
-    pub fn start(port: u16) -> io::Result<Self> {
-        Self::start_with_delay(port, Duration::ZERO)
-    }
-
-    pub fn start_with_delay(port: u16, delay: Duration) -> io::Result<Self> {
-        let addr = format!("127.0.0.1:{port}");
-        let listener = TcpListener::bind(&addr)?;
-        Self::start_with_listener(listener, delay)
-    }
-
     pub fn start_with_listener(listener: TcpListener, delay: Duration) -> io::Result<Self> {
         listener.set_nonblocking(false)?;
         let received = Arc::new(Mutex::new(Vec::new()));
@@ -244,8 +234,7 @@ pub struct MockGrpcCollector {
 }
 
 impl MockGrpcCollector {
-    pub fn start(port: u16) -> io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", port))?;
+    pub fn start_with_listener(listener: TcpListener) -> io::Result<Self> {
         Self::start_with_listener_and_mode(listener, GrpcTlsMode::Plain)
     }
 
@@ -253,13 +242,11 @@ impl MockGrpcCollector {
         self.received.lock().unwrap().iter().flat_map(extract_messages).collect()
     }
 
-    pub fn start_tls(port: u16, tls: &GrpcTlsFiles) -> io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", port))?;
+    pub fn start_tls_with_listener(listener: TcpListener, tls: &GrpcTlsFiles) -> io::Result<Self> {
         Self::start_with_listener_and_mode(listener, GrpcTlsMode::Tls { tls: tls.clone() })
     }
 
-    pub fn start_mtls(port: u16, tls: &GrpcTlsFiles) -> io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", port))?;
+    pub fn start_mtls_with_listener(listener: TcpListener, tls: &GrpcTlsFiles) -> io::Result<Self> {
         Self::start_with_listener_and_mode(listener, GrpcTlsMode::Mtls { tls: tls.clone() })
     }
 
