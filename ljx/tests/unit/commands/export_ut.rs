@@ -48,6 +48,7 @@ fn export_ndjson_objects_includes_core_otlp_log_fields() {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("demo-svc".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: Vec::new(),
@@ -101,6 +102,7 @@ fn export_ndjson_objects_with_preview_truncates_long_fields() {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("demo-svc".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: Vec::new(),
@@ -121,6 +123,7 @@ fn export_ndjson_objects_with_preview_truncates_long_fields() {
                     attributes: vec![KeyValue {
                         key: "http.target".to_string(),
                         value: Some(AnyValue { value: Some(Value::StringValue("/api/v1/very/long/path".to_string())) }),
+                        ..Default::default()
                     }],
                     dropped_attributes_count: 0,
                     flags: 3,
@@ -149,7 +152,7 @@ fn export_ndjson_objects_includes_otlp_metrics_fields() {
         unit: "%".to_string(),
         data: Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(Gauge {
             data_points: vec![NumberDataPoint {
-                attributes: vec![KeyValue { key: "cpu".to_string(), value: Some(AnyValue { value: Some(Value::StringValue("all".to_string())) }) }],
+                attributes: vec![KeyValue { key: "cpu".to_string(), value: Some(AnyValue { value: Some(Value::StringValue("all".to_string())) }), ..Default::default() }],
                 start_time_unix_nano: 0,
                 time_unix_nano: 1_700_000_000_000_000_000,
                 value: Some(DataPointValue::AsDouble(45.5)),
@@ -165,6 +168,7 @@ fn export_ndjson_objects_includes_otlp_metrics_fields() {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("metrics-svc".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: vec![],
@@ -205,6 +209,7 @@ fn export_ndjson_objects_includes_otlp_traces_fields() {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("traces-svc".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: vec![],
@@ -227,6 +232,7 @@ fn export_ndjson_objects_includes_otlp_traces_fields() {
                     attributes: vec![KeyValue {
                         key: "http.method".to_string(),
                         value: Some(AnyValue { value: Some(Value::StringValue("GET".to_string())) }),
+                        ..Default::default()
                     }],
                     dropped_attributes_count: 0,
                     events: vec![],

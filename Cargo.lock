@@ -1365,7 +1365,7 @@ dependencies = [
 name = "liblogjet"
 version = "0.9.0"
 dependencies = [
- "opentelemetry-proto",
+ "opentelemetry-proto 0.31.0",
  "prost",
  "tokio",
  "tonic",
@@ -1423,7 +1423,7 @@ version = "0.9.0"
 name = "lj-perfetto-ingest"
 version = "0.9.0"
 dependencies = [
- "opentelemetry-proto",
+ "opentelemetry-proto 0.31.0",
  "prost",
  "rusqlite",
  "serde_json",
@@ -1443,7 +1443,7 @@ version = "0.9.0"
 dependencies = [
  "cel",
  "logjet",
- "opentelemetry-proto",
+ "opentelemetry-proto 0.31.0",
  "prost",
 ]
 
@@ -1463,7 +1463,7 @@ dependencies = [
  "liblogjet",
  "logjet",
  "lz4_flex",
- "opentelemetry-proto",
+ "opentelemetry-proto 0.31.0",
  "prost",
  "rcgen",
  "rustls",
@@ -1488,7 +1488,7 @@ dependencies = [
  "liblogjet",
  "ljcel",
  "logjet",
- "opentelemetry-proto",
+ "opentelemetry-proto 0.32.0",
  "prost",
  "ratatui",
  "regex",
@@ -1505,7 +1505,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "liblogjet",
- "opentelemetry-proto",
+ "opentelemetry-proto 0.31.0",
  "parquet",
  "prost",
  "serde_json",
@@ -1533,7 +1533,7 @@ dependencies = [
  "arrow-array",
  "crc32c",
  "lz4_flex",
- "opentelemetry-proto",
+ "opentelemetry-proto 0.32.0",
  "parquet",
  "prost",
  "rand 0.9.5",
@@ -1749,6 +1749,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
 name = "opentelemetry-proto"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1756,11 +1770,27 @@ checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
 dependencies = [
  "base64",
  "const-hex",
- "opentelemetry",
- "opentelemetry_sdk",
+ "opentelemetry 0.31.0",
+ "opentelemetry_sdk 0.31.0",
  "prost",
  "serde",
  "serde_json",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56d658ba1faf63f7b9c492cfbe6e0ec365440a16132d3270c1065f7b33f1b638"
+dependencies = [
+ "base64",
+ "const-hex",
+ "opentelemetry 0.32.0",
+ "opentelemetry_sdk 0.32.1",
+ "prost",
+ "serde",
  "tonic",
  "tonic-prost",
 ]
@@ -1774,8 +1804,24 @@ dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "percent-encoding",
+ "rand 0.9.5",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b59f80e1ac4d5ff7a2db8fb6c80badb7f0f3f858211fba08dd9aaec750894f9"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry 0.32.0",
+ "percent-encoding",
+ "portable-atomic",
  "rand 0.9.5",
  "thiserror 2.0.19",
 ]
@@ -1806,7 +1852,7 @@ dependencies = [
  "liblogjet",
  "logjet",
  "lz4_flex",
- "opentelemetry-proto",
+ "opentelemetry-proto 0.31.0",
  "prost",
  "rustls",
  "rustls-pemfile",

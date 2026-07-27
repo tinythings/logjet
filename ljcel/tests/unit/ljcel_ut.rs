@@ -48,11 +48,11 @@ fn make_log_payload_with_context(
 }
 
 fn string_attr(key: &str, value: &str) -> KeyValue {
-    KeyValue { key: key.to_string(), value: Some(AnyValue { value: Some(Value::StringValue(value.to_string())) }) }
+    KeyValue { key: key.to_string(), value: Some(AnyValue { value: Some(Value::StringValue(value.to_string())) }), ..Default::default() }
 }
 
 fn int_attr(key: &str, value: i64) -> KeyValue {
-    KeyValue { key: key.to_string(), value: Some(AnyValue { value: Some(Value::IntValue(value)) }) }
+    KeyValue { key: key.to_string(), value: Some(AnyValue { value: Some(Value::IntValue(value)) }), ..Default::default() }
 }
 
 fn log_record(body: &str, severity_number: i32, severity_text: &str) -> LogRecord {
@@ -235,6 +235,7 @@ fn make_metric_payload(metric_name: &str, metric_type: &str, value: f64) -> Vec<
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("test-svc".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: Vec::new(),
@@ -295,6 +296,7 @@ fn make_trace_payload(span_name: &str, kind: i32, status_code: i32) -> Vec<u8> {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("test-svc".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: Vec::new(),

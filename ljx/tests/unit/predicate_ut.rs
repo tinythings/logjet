@@ -19,6 +19,7 @@ fn make_cel_test_payload(body: &str, severity_number: i32, severity_text: &str, 
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue(service_name.to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: Vec::new(),

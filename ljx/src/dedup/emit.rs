@@ -142,9 +142,17 @@ fn dedup_metadata(mode_label: &str, used_drain3: bool) -> DedupMetadata<'_> {
 }
 
 fn push_attr_str(attrs: &mut Vec<KeyValue>, key: &str, val: &str) {
-    attrs.push(KeyValue { key: key.to_string(), value: Some(AnyValue { value: Some(Value::StringValue(val.to_string())) }) });
+    attrs.push(KeyValue {
+        key: key.to_string(),
+        value: Some(AnyValue { value: Some(Value::StringValue(val.to_string())) }),
+        ..Default::default()
+    });
 }
 
 fn push_attr_i64(attrs: &mut Vec<KeyValue>, key: &str, val: i64) {
-    attrs.push(KeyValue { key: key.to_string(), value: Some(AnyValue { value: Some(Value::IntValue(val)) }) });
+    attrs.push(KeyValue {
+        key: key.to_string(),
+        value: Some(AnyValue { value: Some(Value::IntValue(val)) }),
+        ..Default::default()
+    });
 }
