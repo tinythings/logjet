@@ -40,6 +40,7 @@ Documented command set:
 - `split`
 - `join`
 - `dedup`
+- CEL querying
 
 Current implementation status for release `0.1`:
 
@@ -91,6 +92,7 @@ ljx telemetry.logjet
 ljx telemetry.logjet -F error -i
 ljx telemetry.logjet -F error -e 'customer-123|customer-456' -i
 ljx telemetry.logjet --fields body,timestamp,service_name
+ljx telemetry.logjet --cel 'severity_number >= 17'
 ljx --grep 'timeout|deadline' ./logs/*.logjet
 ```
 
@@ -198,6 +200,7 @@ Supported payload matching modes:
 - `-F`, `--fixed-string` for literal payload substring matching
 - `-e`, `--grep` for grep-style regex matching
 - `-i`, `--ignore-case` to make either payload matcher case-insensitive
+- `--cel` for CEL expressions evaluated against decoded OTel attributes. See [CEL Querying](cel.md).
 
 Payload matchers are repeatable and combined with logical AND:
 
@@ -253,6 +256,7 @@ Current shape:
 - dynamic details for the selected record on the right
 - `Enter` opens a full-record popup, `Esc` closes it
 - bounded-memory scan that spools matched records to a temp file instead of loading the whole input
+- filter mode cycles between CEL, strings, and regex with Up / Down; default is CEL. See [CEL Querying](cel.md).
 
 ## `ljx split`
 

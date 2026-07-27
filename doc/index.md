@@ -2,7 +2,9 @@
 
 - [overview.md](./overview.md): project overview
 - [c-cpp-integration.md](./c-cpp-integration.md): minimal `liblogjet` usage from C and C++
+- [cel.md](./cel.md): CEL querying for OTel attributes
 - [ljx.md](./ljx.md): `ljx` offline CLI scope and command plan
+- [perfetto-ingest.md](./perfetto-ingest.md): Perfetto trace ingest plugin
 - [daemon.md](./daemon.md): `ljd` behaviour and current limits
 - [configuration.md](./configuration.md): YAML keys and defaults
 - [features.md](./features.md): current implemented daemon features and use cases
