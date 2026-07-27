@@ -1,3 +1,2 @@
 [toolchain]
-channel = "1.94.0"
-components = ["clippy"]
+channel = "1.97.1"
