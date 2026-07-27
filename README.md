@@ -104,7 +104,7 @@ The demos are useful as small reference systems. They show file-backed retention
 
 ## Build And Explore
 
-From the project root, `make` builds the main release binaries. `make demo` builds the demo artefacts. `make test` runs the full test path, and `make check` runs clippy through the Makefile. Readers who prefer orientation before compilation should begin with [doc/README.md](./doc/README.md), then continue to [doc/overview.md](./doc/overview.md) for the system shape, [doc/configuration.md](./doc/configuration.md) for the YAML configuration surface, [doc/features.md](./doc/features.md) for the daemon feature set, and [doc/c-cpp-integration.md](./doc/c-cpp-integration.md) for the shared-library boundary. Standalone Rust examples remain in [examples](./examples), and the scenario-driven material remains in [demo](./demo).
+From the project root, `make` builds the main release binaries. `make demo` builds the demo artefacts. `make test` runs the full test path, and `make check` runs clippy through the Makefile. Readers who prefer orientation before compilation should begin with [doc/index.md](./doc/index.md), then continue to [doc/overview.md](./doc/overview.md) for the system shape, [doc/configuration.md](./doc/configuration.md) for the YAML configuration surface, [doc/features.md](./doc/features.md) for the daemon feature set, and [doc/c-cpp-integration.md](./doc/c-cpp-integration.md) for the shared-library boundary. Standalone Rust examples remain in [examples](./examples), and the scenario-driven material remains in [demo](./demo).
 
 ## Final Word
 
