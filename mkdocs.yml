@@ -3,10 +3,27 @@ site_description: Append-only OTLP-native log persistence
 repo_url: https://github.com/tinythings/logjet
 theme:
   name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: red
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: red
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
   features:
     - navigation.instant
     - navigation.tracking
     - toc.follow
+extra_css:
+  - stylesheets/extra.css
 markdown_extensions:
   - admonition
   - tables
