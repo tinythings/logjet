@@ -143,20 +143,18 @@ impl Drain {
 
         // Walk prefix tree following token values (or wildcard).
         let mut current = first_layer;
-        let mut depth: i64 = 1;
 
-        for token in tokens {
+        for (i, token) in tokens.iter().enumerate() {
+            let depth = i as i64 + 1;
             if depth >= self.max_node_depth || depth >= token_count as i64 {
                 break;
             }
             if let Some(child) = current.children.get(token.as_str()) {
                 current = child;
-            } else if let Some(child) = current.children.get(&self.param_str) {
-                current = child;
             } else {
-                return None;
+                let child = current.children.get(&self.param_str)?;
+                current = child;
             }
-            depth += 1;
         }
 
         self.fast_match(&current.cluster_ids, tokens, false)
@@ -192,9 +190,9 @@ impl Drain {
         }
 
         let mut current = first_layer as *mut Node;
-        let mut depth: i64 = 1;
 
-        for token in &cluster.template_tokens {
+        for (i, token) in cluster.template_tokens.iter().enumerate() {
+            let depth = i as i64 + 1;
             // Safety: we only hold one mutable reference at a time through
             // the pointer, never aliasing. The tree structure is owned by
             // self and not accessed concurrently.
@@ -225,8 +223,6 @@ impl Drain {
             } else {
                 node.children.get_mut(&self.param_str).unwrap() as *mut Node
             };
-
-            depth += 1;
         }
     }
 
