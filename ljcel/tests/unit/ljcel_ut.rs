@@ -168,6 +168,18 @@ fn resource_attribute_match() {
 }
 
 #[test]
+fn resource_attribute_strict_equality() {
+    let expr = CelExpression::compile("resource[\"custom.label\"] == \"processor-a\"").unwrap();
+    let payload = make_log_payload_with_context(
+        vec![log_record("msg", 9, "INFO")],
+        &[string_attr("custom.label", "processor-a")],
+        &[],
+        "test-svc",
+    );
+    assert!(expr.matches_logs_payload(&payload).unwrap());
+}
+
+#[test]
 fn scope_attribute_match() {
     let expr = CelExpression::compile("scope[\"custom.channel\"] >= 3").unwrap();
     let payload = make_log_payload_with_context(

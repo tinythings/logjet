@@ -9,7 +9,7 @@ use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValueKind;
 use opentelemetry_proto::tonic::metrics::v1::metric::Data as MetricData;
 use prost::Message;
 
-use crate::context::{LogRecordContext, MetricDataPointContext, SpanContext, extract_service_name, hex_encode, key_values_to_map};
+use crate::context::{LogRecordContext, MetricDataPointContext, SpanContext, extract_service_name, hex_encode, key_values_to_cel_map};
 use crate::error::CelError;
 
 #[derive(Debug, Clone)]
@@ -42,7 +42,7 @@ impl CelExpression {
 
         for rl in &batch.resource_logs {
             let resource_attrs =
-                key_values_to_map(rl.resource.as_ref().map(|r| r.attributes.as_slice()).unwrap_or(&[]));
+                key_values_to_cel_map(rl.resource.as_ref().map(|r| r.attributes.as_slice()).unwrap_or(&[]));
             let service_name = extract_service_name(
                 rl.resource.as_ref().map(|r| r.attributes.as_slice()).unwrap_or(&[]),
             );
@@ -50,7 +50,7 @@ impl CelExpression {
             for sl in &rl.scope_logs {
                 let scope_name = sl.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
                 let scope_attrs =
-                    key_values_to_map(sl.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]));
+                    key_values_to_cel_map(sl.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]));
 
                 for lr in &sl.log_records {
                     let body = lr
@@ -76,7 +76,7 @@ impl CelExpression {
                         flags: lr.flags as i32,
                         resource: resource_attrs.clone(),
                         scope: scope_attrs.clone(),
-                        attributes: key_values_to_map(&lr.attributes),
+                        attributes: key_values_to_cel_map(&lr.attributes),
                     };
 
                     if self.eval_log(&ctx)? {
@@ -93,7 +93,7 @@ impl CelExpression {
 
         for rm in &batch.resource_metrics {
             let resource_attrs =
-                key_values_to_map(rm.resource.as_ref().map(|r| r.attributes.as_slice()).unwrap_or(&[]));
+                key_values_to_cel_map(rm.resource.as_ref().map(|r| r.attributes.as_slice()).unwrap_or(&[]));
             let service_name = extract_service_name(
                 rm.resource.as_ref().map(|r| r.attributes.as_slice()).unwrap_or(&[]),
             );
@@ -101,7 +101,7 @@ impl CelExpression {
             for sm in &rm.scope_metrics {
                 let scope_name = sm.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
                 let scope_attrs =
-                    key_values_to_map(sm.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]));
+                    key_values_to_cel_map(sm.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]));
 
                 for metric in &sm.metrics {
                     let dp_contexts: Vec<MetricDataPointContext> = match &metric.data {
@@ -123,7 +123,7 @@ impl CelExpression {
                                 scope_name: scope_name.clone(),
                                 resource: resource_attrs.clone(),
                                 scope: scope_attrs.clone(),
-                                attributes: key_values_to_map(&dp.attributes),
+                                attributes: key_values_to_cel_map(&dp.attributes),
                             }
                         }).collect(),
                         Some(MetricData::Sum(s)) => s.data_points.iter().map(|dp| {
@@ -144,7 +144,7 @@ impl CelExpression {
                                 scope_name: scope_name.clone(),
                                 resource: resource_attrs.clone(),
                                 scope: scope_attrs.clone(),
-                                attributes: key_values_to_map(&dp.attributes),
+                                attributes: key_values_to_cel_map(&dp.attributes),
                             }
                         }).collect(),
                         Some(MetricData::Histogram(h)) => h.data_points.iter().map(|dp| {
@@ -161,7 +161,7 @@ impl CelExpression {
                                 scope_name: scope_name.clone(),
                                 resource: resource_attrs.clone(),
                                 scope: scope_attrs.clone(),
-                                attributes: key_values_to_map(&dp.attributes),
+                                attributes: key_values_to_cel_map(&dp.attributes),
                             }
                         }).collect(),
                         Some(MetricData::ExponentialHistogram(eh)) => eh.data_points.iter().map(|dp| {
@@ -178,7 +178,7 @@ impl CelExpression {
                                 scope_name: scope_name.clone(),
                                 resource: resource_attrs.clone(),
                                 scope: scope_attrs.clone(),
-                                attributes: key_values_to_map(&dp.attributes),
+                                attributes: key_values_to_cel_map(&dp.attributes),
                             }
                         }).collect(),
                         Some(MetricData::Summary(s)) => s.data_points.iter().map(|dp| {
@@ -195,7 +195,7 @@ impl CelExpression {
                                 scope_name: scope_name.clone(),
                                 resource: resource_attrs.clone(),
                                 scope: scope_attrs.clone(),
-                                attributes: key_values_to_map(&dp.attributes),
+                                attributes: key_values_to_cel_map(&dp.attributes),
                             }
                         }).collect(),
                         None => continue,
@@ -217,7 +217,7 @@ impl CelExpression {
 
         for rs in &batch.resource_spans {
             let resource_attrs =
-                key_values_to_map(rs.resource.as_ref().map(|r| r.attributes.as_slice()).unwrap_or(&[]));
+                key_values_to_cel_map(rs.resource.as_ref().map(|r| r.attributes.as_slice()).unwrap_or(&[]));
             let service_name = extract_service_name(
                 rs.resource.as_ref().map(|r| r.attributes.as_slice()).unwrap_or(&[]),
             );
@@ -225,15 +225,10 @@ impl CelExpression {
             for ss in &rs.scope_spans {
                 let scope_name = ss.scope.as_ref().map(|s| s.name.clone()).unwrap_or_default();
                 let scope_attrs =
-                    key_values_to_map(ss.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]));
+                    key_values_to_cel_map(ss.scope.as_ref().map(|s| s.attributes.as_slice()).unwrap_or(&[]));
 
                 for span in &ss.spans {
-                    let duration_ns =
-                        if span.end_time_unix_nano > span.start_time_unix_nano {
-                            span.end_time_unix_nano - span.start_time_unix_nano
-                        } else {
-                            0
-                        };
+                    let duration_ns = span.end_time_unix_nano.saturating_sub(span.start_time_unix_nano);
 
                     let (status_code, status_message) = span.status.as_ref().map_or((0, String::new()), |s| {
                         (s.code, s.message.clone())
@@ -254,7 +249,7 @@ impl CelExpression {
                         scope_name: scope_name.clone(),
                         resource: resource_attrs.clone(),
                         scope: scope_attrs.clone(),
-                        attributes: key_values_to_map(&span.attributes),
+                        attributes: key_values_to_cel_map(&span.attributes),
                     };
 
                     if self.eval_span(&ctx)? {

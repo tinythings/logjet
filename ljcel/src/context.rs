@@ -1,6 +1,8 @@
-use opentelemetry_proto::tonic::common::v1::any_value::Value;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use opentelemetry_proto::tonic::common::v1::any_value::Value as OtelValue;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
-use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::error::CelError;
 
@@ -16,9 +18,9 @@ pub(crate) struct LogRecordContext {
     pub trace_id: String,
     pub span_id: String,
     pub flags: i32,
-    pub resource: JsonMap<String, JsonValue>,
-    pub scope: JsonMap<String, JsonValue>,
-    pub attributes: JsonMap<String, JsonValue>,
+    pub resource: cel::Value,
+    pub scope: cel::Value,
+    pub attributes: cel::Value,
 }
 
 impl LogRecordContext {
@@ -81,9 +83,9 @@ pub(crate) struct MetricDataPointContext {
     pub time_unix_nano: i64,
     pub service_name: String,
     pub scope_name: String,
-    pub resource: JsonMap<String, JsonValue>,
-    pub scope: JsonMap<String, JsonValue>,
-    pub attributes: JsonMap<String, JsonValue>,
+    pub resource: cel::Value,
+    pub scope: cel::Value,
+    pub attributes: cel::Value,
 }
 
 impl MetricDataPointContext {
@@ -142,9 +144,9 @@ pub(crate) struct SpanContext {
     pub status_message: String,
     pub service_name: String,
     pub scope_name: String,
-    pub resource: JsonMap<String, JsonValue>,
-    pub scope: JsonMap<String, JsonValue>,
-    pub attributes: JsonMap<String, JsonValue>,
+    pub resource: cel::Value,
+    pub scope: cel::Value,
+    pub attributes: cel::Value,
 }
 
 impl SpanContext {
@@ -206,47 +208,50 @@ pub(crate) fn extract_service_name(resource_attrs: &[KeyValue]) -> String {
         .find(|a| a.key == "service.name")
         .and_then(|a| a.value.as_ref())
         .and_then(|v| match &v.value {
-            Some(Value::StringValue(s)) => Some(s.clone()),
+            Some(OtelValue::StringValue(s)) => Some(s.clone()),
             _ => None,
         })
         .unwrap_or_default()
 }
 
-pub(crate) fn key_values_to_map(attrs: &[KeyValue]) -> JsonMap<String, JsonValue> {
-    let mut map = JsonMap::new();
+pub(crate) fn key_values_to_cel_map(attrs: &[KeyValue]) -> cel::Value {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut map: HashMap<Arc<String>, cel::Value> = HashMap::new();
     for attr in attrs {
-        if map.contains_key(&attr.key) {
+        if !seen.insert(attr.key.clone()) {
             continue;
         }
-        if let Some(value) = attr.value.as_ref()
-            && let Some(json) = any_value_to_json(value)
-        {
-            map.insert(attr.key.clone(), json);
+        if let Some(value) = attr.value.as_ref() {
+            map.insert(Arc::new(attr.key.clone()), any_value_to_cel(value));
         }
     }
-    map
-}
+    cel::Value::Map(map.into())
+    }
 
-pub(crate) fn any_value_to_json(value: &AnyValue) -> Option<JsonValue> {
+
+fn any_value_to_cel(value: &AnyValue) -> cel::Value {
     match &value.value {
-        Some(Value::StringValue(s)) => Some(JsonValue::String(s.clone())),
-        Some(Value::BoolValue(b)) => Some(JsonValue::Bool(*b)),
-        Some(Value::IntValue(n)) => Some(JsonValue::Number((*n).into())),
-        Some(Value::DoubleValue(d)) => serde_json::Number::from_f64(*d).map(JsonValue::Number),
-        Some(Value::BytesValue(b)) => Some(JsonValue::String(format!("<{} bytes>", b.len()))),
-        Some(Value::ArrayValue(a)) => {
-            Some(JsonValue::Array(a.values.iter().filter_map(any_value_to_json).collect()))
+        Some(OtelValue::StringValue(s)) => cel::Value::String(Arc::new(s.clone())),
+        Some(OtelValue::BoolValue(b)) => cel::Value::Bool(*b),
+        Some(OtelValue::IntValue(n)) => cel::Value::Int(*n),
+        Some(OtelValue::DoubleValue(d)) => cel::Value::Float(*d),
+        Some(OtelValue::BytesValue(b)) => {
+            cel::Value::String(Arc::new(format!("<{} bytes>", b.len())))
         }
-        Some(Value::KvlistValue(k)) => {
-            let mut obj = JsonMap::new();
+        Some(OtelValue::ArrayValue(a)) => {
+            let list: Vec<cel::Value> = a.values.iter().map(any_value_to_cel).collect();
+            cel::Value::List(Arc::new(list))
+        }
+        Some(OtelValue::KvlistValue(k)) => {
+            let mut map: HashMap<Arc<String>, cel::Value> = HashMap::new();
             for item in &k.values {
-                if let Some(inner) = item.value.as_ref().and_then(any_value_to_json) {
-                    obj.insert(item.key.clone(), inner);
+                if let Some(value) = item.value.as_ref() {
+                    map.insert(Arc::new(item.key.clone()), any_value_to_cel(value));
                 }
             }
-            Some(JsonValue::Object(obj))
+            cel::Value::Map(map.into())
         }
-        None => None,
+        None => cel::Value::String(Arc::new(String::new())),
     }
 }
 
