@@ -1,10 +1,12 @@
 # logjet
 
+[![Release](https://img.shields.io/github/v/release/tinythings/logjet)](https://github.com/tinythings/logjet/releases)
+[![Rust](https://img.shields.io/badge/rust-2024%20edition-orange)](https://doc.rust-lang.org/edition-guide/)
 [![It is alive!](https://github.com/tinythings/logjet/actions/workflows/it-is-alive.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/it-is-alive.yml)
 [![Unit Tests](https://github.com/tinythings/logjet/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/unit-tests.yml)
 [![Integration Tests](https://github.com/tinythings/logjet/actions/workflows/integration-tests.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/integration-tests.yml)
 [![Insanity Check](https://github.com/tinythings/logjet/actions/workflows/insanity-check.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/insanity-check.yml)
-[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](./LICENSE)
+[![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](./LICENSE)
 
 `logjet` is a block-oriented binary format and Rust library for storing raw OTLP protobuf batches as an append-only stream. The project is aimed at telemetry relay, local backlog retention, and later replay on systems where sequential I/O is far easier to afford than elaborate indexing, background compaction, or large in-memory state. It is also intended for the less well-behaved parts of real deployments: links that are intermittent, slow, lossy, or simply unavailable for long enough that local backlog ceases to be optional. The emphasis throughout is on predictable writes, bounded reader memory, and partial recovery after corruption.
 
