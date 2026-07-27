@@ -236,7 +236,7 @@ impl RecordPredicate {
             }
         }
         for cel in &self.cel_queries {
-            if !cel.matches_logs_payload(&record.payload).unwrap_or(false) {
+            if !cel.matches_payload(record.record_type, &record.payload).unwrap_or(false) {
                 return false;
             }
         }

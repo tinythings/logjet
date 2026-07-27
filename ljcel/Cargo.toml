@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 cel = { version = "0.14", features = ["json"] }
-opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs"] }
+logjet = { path = ".." }
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs", "metrics", "trace"] }
 prost = "0.14"
 serde_json = "1"

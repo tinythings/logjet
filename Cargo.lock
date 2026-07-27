@@ -1431,6 +1431,7 @@ name = "ljcel"
 version = "0.9.0"
 dependencies = [
  "cel",
+ "logjet",
  "opentelemetry-proto",
  "prost",
  "serde_json",
