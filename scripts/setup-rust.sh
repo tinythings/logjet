@@ -164,4 +164,7 @@ ensure_cc
 echo "Installing cargo-nextest..."
 cargo install cargo-nextest --locked
 
+echo "Installing mxrun..."
+cargo install mxrun || true
+
 echo "Setup complete."

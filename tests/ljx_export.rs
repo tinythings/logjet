@@ -351,7 +351,7 @@ fn encode_logs_request(message: &str, service_name: Option<&str>) -> io::Result<
         resource: Some(opentelemetry_proto::tonic::resource::v1::Resource {
             attributes: service_name
                 .map(|name| {
-                    vec![KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(name.to_string())) }) }]
+                    vec![KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(name.to_string())) }), ..Default::default() }]
                 })
                 .unwrap_or_default(),
             dropped_attributes_count: 0,
@@ -383,7 +383,7 @@ fn encode_metrics_request(service_name: Option<&str>) -> io::Result<Vec<u8>> {
     let resource = opentelemetry_proto::tonic::resource::v1::Resource {
         attributes: service_name
             .map(|name| {
-                vec![KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(name.to_string())) }) }]
+                vec![KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(name.to_string())) }), ..Default::default() }]
             })
             .unwrap_or_default(),
         dropped_attributes_count: 0,
@@ -462,7 +462,7 @@ fn encode_traces_request(service_name: Option<&str>) -> io::Result<Vec<u8>> {
     let resource = opentelemetry_proto::tonic::resource::v1::Resource {
         attributes: service_name
             .map(|name| {
-                vec![KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(name.to_string())) }) }]
+                vec![KeyValue { key: "service.name".to_string(), value: Some(AnyValue { value: Some(Value::StringValue(name.to_string())) }), ..Default::default() }]
             })
             .unwrap_or_default(),
         dropped_attributes_count: 0,

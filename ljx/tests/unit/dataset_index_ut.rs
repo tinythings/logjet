@@ -23,6 +23,7 @@ fn write_star_wars_logjet(path: &std::path::Path, rows: &[(u64, u64, &str, &str,
                     attributes: vec![KeyValue {
                         key: "service.name".to_string(),
                         value: Some(AnyValue { value: Some(Value::StringValue((*service).to_string())) }),
+                        ..Default::default()
                     }],
                     dropped_attributes_count: 0,
                     entity_refs: Vec::new(),

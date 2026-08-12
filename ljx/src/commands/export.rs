@@ -493,6 +493,7 @@ fn flatten_otlp_attrs_into_json(
 fn any_value_to_json(value: &AnyValue, preview_bytes: Option<usize>) -> Option<JsonValue> {
     match &value.value {
         Some(Value::StringValue(text)) => Some(JsonValue::String(truncate_preview(text, preview_bytes))),
+        Some(Value::StringValueStrindex(_)) => Some(JsonValue::Null),
         Some(Value::BoolValue(flag)) => Some(JsonValue::Bool(*flag)),
         Some(Value::IntValue(number)) => Some(JsonValue::Number((*number).into())),
         Some(Value::DoubleValue(number)) => serde_json::Number::from_f64(*number).map(JsonValue::Number),
@@ -521,6 +522,7 @@ fn format_any_value(value: Option<&AnyValue>) -> String {
     };
     match &value.value {
         Some(Value::StringValue(text)) => text.clone(),
+        Some(Value::StringValueStrindex(_)) => "<strindex>".to_string(),
         Some(Value::BoolValue(flag)) => flag.to_string(),
         Some(Value::IntValue(number)) => number.to_string(),
         Some(Value::DoubleValue(number)) => number.to_string(),

@@ -5,6 +5,51 @@ fn sample_record(payload: &[u8]) -> OwnedRecord {
     OwnedRecord { record_type: RecordType::Logs, seq: 42, ts_unix_ns: 1_700_000_000, payload: payload.to_vec() }
 }
 
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::common::v1::any_value::Value;
+use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue};
+use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
+use opentelemetry_proto::tonic::resource::v1::Resource;
+use prost::Message;
+
+fn make_cel_test_payload(body: &str, severity_number: i32, severity_text: &str, service_name: &str) -> Vec<u8> {
+    let batch = ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            resource: Some(Resource {
+                attributes: vec![KeyValue {
+                    key: "service.name".to_string(),
+                    value: Some(AnyValue { value: Some(Value::StringValue(service_name.to_string())) }),
+                    ..Default::default()
+                }],
+                dropped_attributes_count: 0,
+                entity_refs: Vec::new(),
+            }),
+            scope_logs: vec![ScopeLogs {
+                scope: Some(InstrumentationScope {
+                    name: "test".to_string(),
+                    version: "1.0.0".to_string(),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                }),
+                log_records: vec![LogRecord {
+                    body: Some(AnyValue { value: Some(Value::StringValue(body.to_string())) }),
+                    severity_number,
+                    severity_text: severity_text.to_string(),
+                    ..Default::default()
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    };
+    batch.encode_to_vec()
+}
+
+fn cel_sample(body: &str, severity_number: i32, severity_text: &str) -> OwnedRecord {
+    let payload = make_cel_test_payload(body, severity_number, severity_text, "test-svc");
+    sample_record(&payload)
+}
+
 #[test]
 fn fixed_string_match_is_literal() {
     let predicate = PredicateArgs { fixed_string: vec!["java.crap.failed".to_string()], ..PredicateArgs::default() }.build().unwrap();
@@ -103,4 +148,69 @@ fn parse_filter_query_uses_regex_mode_for_bare_text() {
     let predicate = parse_filter_query("reb.*", FilterMode::Regex).unwrap();
     assert!(predicate.matches(&sample_record(b"rebooted node")));
     assert!(!predicate.matches(&sample_record(b"stopped node")));
+}
+
+#[test]
+fn cel_severity_number_match() {
+    let predicate = PredicateArgs { cel: vec!["severity_number == 17".to_string()], ..PredicateArgs::default() }.build().unwrap();
+    assert!(predicate.matches(&cel_sample("fatal error", 17, "FATAL")));
+    assert!(!predicate.matches(&cel_sample("info msg", 9, "INFO")));
+}
+
+#[test]
+fn cel_body_contains_match() {
+    let predicate =
+        PredicateArgs { cel: vec!["body.contains(\"timeout\")".to_string()], ..PredicateArgs::default() }.build().unwrap();
+    assert!(predicate.matches(&cel_sample("connection timeout", 17, "ERROR")));
+    assert!(!predicate.matches(&cel_sample("connection ok", 9, "INFO")));
+}
+
+#[test]
+fn cel_service_name_match() {
+    let predicate =
+        PredicateArgs { cel: vec!["service_name == \"test-svc\"".to_string()], ..PredicateArgs::default() }.build().unwrap();
+    assert!(predicate.matches(&cel_sample("msg", 9, "INFO")));
+}
+
+#[test]
+fn cel_combined_with_fixed_string() {
+    let predicate = PredicateArgs {
+        cel: vec!["severity_number >= 13".to_string()],
+        fixed_string: vec!["timeout".to_string()],
+        ..PredicateArgs::default()
+    }
+    .build()
+    .unwrap();
+    assert!(predicate.matches(&cel_sample("connection timeout after 30s", 17, "ERROR")));
+    assert!(!predicate.matches(&cel_sample("connection timeout after 30s", 9, "INFO")));
+}
+
+#[test]
+fn cel_invalid_expression_is_reported() {
+    let error = PredicateArgs { cel: vec!["@$#% invalid".to_string()], ..PredicateArgs::default() }.build().unwrap_err();
+    assert!(error.to_string().contains("invalid CEL expression"));
+}
+
+#[test]
+fn cel_repeated_exprs_are_combined_with_and_semantics() {
+    let predicate = PredicateArgs {
+        cel: vec![
+            "severity_number >= 13".to_string(),
+            "body.contains(\"timeout\")".to_string(),
+        ],
+        ..PredicateArgs::default()
+    }
+    .build()
+    .unwrap();
+    assert!(predicate.matches(&cel_sample("connection timeout", 17, "ERROR")));
+    assert!(!predicate.matches(&cel_sample("connection timeout", 9, "INFO")));
+    assert!(!predicate.matches(&cel_sample("connection ok", 17, "ERROR")));
+}
+
+#[test]
+fn parse_filter_query_uses_cel_mode_for_bare_text() {
+    let predicate = parse_filter_query("severity_number >= 13", FilterMode::Cel).unwrap();
+    let payload = make_cel_test_payload("error msg", 13, "ERROR", "test-svc");
+    let record = sample_record(&payload);
+    assert!(predicate.matches(&record));
 }

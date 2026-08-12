@@ -1,0 +1,11 @@
+[package]
+name = "ljcel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cel = "0.14"
+logjet = { path = ".." }
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs", "metrics", "trace"] }
+prost = "0.14"

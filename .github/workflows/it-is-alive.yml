@@ -21,4 +21,4 @@ jobs:
         run: make
 
       - name: Smoke test release exporter loading
-        run: make test-exporter-release-smoke
+        run: make test-exp-smoke

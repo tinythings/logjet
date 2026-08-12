@@ -1,10 +1,12 @@
 # logjet
 
+[![Release](https://img.shields.io/github/v/release/tinythings/logjet)](https://github.com/tinythings/logjet/releases)
+[![Rust](https://img.shields.io/badge/rust-1.97.1-orange)](https://www.rust-lang.org)
 [![It is alive!](https://github.com/tinythings/logjet/actions/workflows/it-is-alive.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/it-is-alive.yml)
 [![Unit Tests](https://github.com/tinythings/logjet/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/unit-tests.yml)
 [![Integration Tests](https://github.com/tinythings/logjet/actions/workflows/integration-tests.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/integration-tests.yml)
 [![Insanity Check](https://github.com/tinythings/logjet/actions/workflows/insanity-check.yml/badge.svg)](https://github.com/tinythings/logjet/actions/workflows/insanity-check.yml)
-[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](./LICENSE)
+[![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](./LICENSE)
 
 `logjet` is a block-oriented binary format and Rust library for storing raw OTLP protobuf batches as an append-only stream. The project is aimed at telemetry relay, local backlog retention, and later replay on systems where sequential I/O is far easier to afford than elaborate indexing, background compaction, or large in-memory state. It is also intended for the less well-behaved parts of real deployments: links that are intermittent, slow, lossy, or simply unavailable for long enough that local backlog ceases to be optional. The emphasis throughout is on predictable writes, bounded reader memory, and partial recovery after corruption.
 
@@ -104,7 +106,7 @@ The demos are useful as small reference systems. They show file-backed retention
 
 ## Build And Explore
 
-From the project root, `make` builds the main release binaries. `make demo` builds the demo artefacts. `make test` runs the full test path, and `make check` runs clippy through the Makefile. Readers who prefer orientation before compilation should begin with [doc/README.md](./doc/README.md), then continue to [doc/overview.md](./doc/overview.md) for the system shape, [doc/configuration.md](./doc/configuration.md) for the YAML configuration surface, [doc/features.md](./doc/features.md) for the daemon feature set, and [doc/c-cpp-integration.md](./doc/c-cpp-integration.md) for the shared-library boundary. Standalone Rust examples remain in [examples](./examples), and the scenario-driven material remains in [demo](./demo).
+From the project root, `make` builds the main release binaries. `make demo` builds the demo artefacts. `make test` runs the full test path, and `make check` runs clippy through the Makefile. Readers who prefer orientation before compilation should begin with [doc/index.md](./doc/index.md), then continue to [doc/overview.md](./doc/overview.md) for the system shape, [doc/configuration.md](./doc/configuration.md) for the YAML configuration surface, [doc/features.md](./doc/features.md) for the daemon feature set, and [doc/c-cpp-integration.md](./doc/c-cpp-integration.md) for the shared-library boundary. Standalone Rust examples remain in [examples](./examples), and the scenario-driven material remains in [demo](./demo).
 
 ## Final Word
 

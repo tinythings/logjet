@@ -58,7 +58,7 @@ impl ViewApp {
             exporters,
             export_formats,
             focus: Focus::Search,
-            filter_mode: FilterMode::Strings,
+            filter_mode: FilterMode::Cel,
             query_input: String::new(),
             applied_query: String::new(),
             status: "Type a filter and press Enter to scan matching records".to_string(),
@@ -187,7 +187,8 @@ impl ViewApp {
     fn handle_search_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Tab => self.focus = Focus::List,
-            KeyCode::Up | KeyCode::Down => self.cycle_filter_mode(),
+            KeyCode::Up => self.cycle_filter_mode_fwd(),
+            KeyCode::Down => self.cycle_filter_mode_rev(),
             KeyCode::Esc => {
                 self.query_input.clear();
                 self.apply_filter()?;
@@ -405,10 +406,19 @@ impl ViewApp {
         Ok(())
     }
 
-    fn cycle_filter_mode(&mut self) {
+    fn cycle_filter_mode_fwd(&mut self) {
         self.filter_mode = match self.filter_mode {
+            FilterMode::Cel => FilterMode::Strings,
             FilterMode::Strings => FilterMode::Regex,
+            FilterMode::Regex => FilterMode::Cel,
+        };
+    }
+
+    fn cycle_filter_mode_rev(&mut self) {
+        self.filter_mode = match self.filter_mode {
+            FilterMode::Cel => FilterMode::Regex,
             FilterMode::Regex => FilterMode::Strings,
+            FilterMode::Strings => FilterMode::Cel,
         };
     }
 

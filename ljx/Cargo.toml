@@ -11,8 +11,9 @@ colored = "3"
 crossterm = "0.28"
 libloading = "0.8"
 liblogjet = { path = "../liblogjet" }
+ljcel = { path = "../ljcel" }
 logjet = { path = ".." }
-opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs", "metrics", "trace"] }
+opentelemetry-proto = { version = "0.32", features = ["gen-tonic", "logs", "metrics", "trace"] }
 prost = "0.14"
 ratatui = "0.30"
 regex = "1.12"

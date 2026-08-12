@@ -1,0 +1,56 @@
+site_name: Logjet
+site_description: Append-only OTLP-native log persistence
+repo_url: https://github.com/tinythings/logjet
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: red
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: red
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - toc.follow
+extra_css:
+  - stylesheets/extra.css
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - attr_list
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+docs_dir: doc/
+exclude_docs: |
+  manpage/ljd.1
+  manpage/ljx.1
+nav:
+  - Home: index.md
+  - Overview: overview.md
+  - Guides:
+      - ljx Toolbox: ljx.md
+      - CEL Querying: cel.md
+      - Daemon: daemon.md
+      - Perfetto Ingest: perfetto-ingest.md
+      - Parquet Export: parquet/export-parquet.md
+  - Reference:
+      - Configuration: configuration.md
+      - Protocol: protocol.md
+      - Config Samples: config-samples.md
+      - C/C++ Integration: c-cpp-integration.md
+      - Features: features.md

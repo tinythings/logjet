@@ -162,6 +162,41 @@ pub fn free_port() -> io::Result<u16> {
     Ok(port)
 }
 
+#[allow(dead_code)]
+pub struct Appliance {
+    _guard: ChildGuard,
+    pub ingest_port: u16,
+    pub replay_port: u16,
+}
+
+#[allow(dead_code)]
+pub fn start_serve(dir: &TestDir, config_name: &str, config_template: &str) -> io::Result<Appliance> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let ingest_port = free_port()?;
+        let replay_port = free_port()?;
+        let config = config_template
+            .replace("{ingest_port}", &ingest_port.to_string())
+            .replace("{replay_port}", &replay_port.to_string());
+        let config_path = dir.write(config_name, &config)?;
+
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&config_path).arg("serve");
+        let Ok(guard) = ChildGuard::spawn(cmd) else { continue; };
+
+        if wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(3)).is_ok()
+            && wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(3)).is_ok()
+        {
+            return Ok(Appliance { _guard: guard, ingest_port, replay_port });
+        }
+
+        drop(guard);
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "ljd serve did not start within 10s"));
+        }
+    }
+}
+
 pub fn wait_for_tcp(addr: &str, timeout: Duration) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -206,16 +241,6 @@ pub struct MockCollector {
 }
 
 impl MockCollector {
-    pub fn start(port: u16) -> io::Result<Self> {
-        Self::start_with_delay(port, Duration::ZERO)
-    }
-
-    pub fn start_with_delay(port: u16, delay: Duration) -> io::Result<Self> {
-        let addr = format!("127.0.0.1:{port}");
-        let listener = TcpListener::bind(&addr)?;
-        Self::start_with_listener(listener, delay)
-    }
-
     pub fn start_with_listener(listener: TcpListener, delay: Duration) -> io::Result<Self> {
         listener.set_nonblocking(false)?;
         let received = Arc::new(Mutex::new(Vec::new()));
@@ -244,8 +269,7 @@ pub struct MockGrpcCollector {
 }
 
 impl MockGrpcCollector {
-    pub fn start(port: u16) -> io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", port))?;
+    pub fn start_with_listener(listener: TcpListener) -> io::Result<Self> {
         Self::start_with_listener_and_mode(listener, GrpcTlsMode::Plain)
     }
 
@@ -253,13 +277,11 @@ impl MockGrpcCollector {
         self.received.lock().unwrap().iter().flat_map(extract_messages).collect()
     }
 
-    pub fn start_tls(port: u16, tls: &GrpcTlsFiles) -> io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", port))?;
+    pub fn start_tls_with_listener(listener: TcpListener, tls: &GrpcTlsFiles) -> io::Result<Self> {
         Self::start_with_listener_and_mode(listener, GrpcTlsMode::Tls { tls: tls.clone() })
     }
 
-    pub fn start_mtls(port: u16, tls: &GrpcTlsFiles) -> io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", port))?;
+    pub fn start_mtls_with_listener(listener: TcpListener, tls: &GrpcTlsFiles) -> io::Result<Self> {
         Self::start_with_listener_and_mode(listener, GrpcTlsMode::Mtls { tls: tls.clone() })
     }
 

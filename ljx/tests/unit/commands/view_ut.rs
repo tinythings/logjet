@@ -101,6 +101,7 @@ fn modal_info_lists_otlp_attributes() {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("cpp-appliance".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: Vec::new(),
@@ -119,6 +120,7 @@ fn modal_info_lists_otlp_attributes() {
                                 ],
                             })),
                         }),
+                        ..Default::default()
                     }],
                     dropped_attributes_count: 0,
                 }),
@@ -131,6 +133,7 @@ fn modal_info_lists_otlp_attributes() {
                     attributes: vec![KeyValue {
                         key: "character".to_string(),
                         value: Some(AnyValue { value: Some(Value::StringValue("Bender".to_string())) }),
+                        ..Default::default()
                     }],
                     dropped_attributes_count: 0,
                     flags: 0,
@@ -166,12 +169,13 @@ fn modal_info_lists_otlp_attributes() {
 #[test]
 fn modal_info_caps_attribute_entries_per_kind() {
     let record_attributes = (0..40)
-        .map(|index| KeyValue { key: format!("custom.{index}"), value: Some(AnyValue { value: Some(Value::StringValue(format!("value-{index}"))) }) })
+        .map(|index| KeyValue { key: format!("custom.{index}"), value: Some(AnyValue { value: Some(Value::StringValue(format!("value-{index}"))) }), ..Default::default() })
         .collect::<Vec<_>>();
     let scope_attributes = (0..40)
         .map(|index| KeyValue {
             key: format!("scope.custom.{index}"),
             value: Some(AnyValue { value: Some(Value::StringValue(format!("scope-value-{index}"))) }),
+            ..Default::default()
         })
         .collect::<Vec<_>>();
     let batch = ExportLogsServiceRequest {
@@ -272,6 +276,7 @@ fn write_test_logjet(path: &std::path::Path, bodies: &[&str]) {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("fake-service".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: Vec::new(),
@@ -326,21 +331,23 @@ fn write_test_logjet_rows(path: &std::path::Path, rows: &[(&str, &[&str], &str)]
                     attributes: vec![KeyValue {
                         key: "service.name".to_string(),
                         value: Some(AnyValue { value: Some(Value::StringValue("fake-service".to_string())) }),
+                        ..Default::default()
                     }],
                     dropped_attributes_count: 0,
                     entity_refs: Vec::new(),
                 }),
                 scope_logs: vec![ScopeLogs {
                     scope: Some(InstrumentationScope {
-                        name: "fake-scope".to_string(),
-                        version: String::new(),
-                        attributes: vec![KeyValue {
+                    name: "fake-scope".to_string(),
+                    version: String::new(),
+                    attributes: vec![KeyValue {
                             key: "demo.channel".to_string(),
                             value: Some(AnyValue {
                                 value: Some(Value::ArrayValue(opentelemetry_proto::tonic::common::v1::ArrayValue {
                                     values: channel.iter().map(|part| AnyValue { value: Some(Value::StringValue((*part).to_string())) }).collect(),
                                 })),
                             }),
+                            ..Default::default()
                         }],
                         dropped_attributes_count: 0,
                     }),
@@ -382,6 +389,7 @@ fn write_test_logjet_records(path: &std::path::Path, rows: &[(u64, u64, &str)]) 
                     attributes: vec![KeyValue {
                         key: "service.name".to_string(),
                         value: Some(AnyValue { value: Some(Value::StringValue("fake-service".to_string())) }),
+                        ..Default::default()
                     }],
                     dropped_attributes_count: 0,
                     entity_refs: Vec::new(),
@@ -1037,6 +1045,7 @@ fn summary_decodes_otlp_traces_payload() {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("trace-demo".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: vec![],
@@ -1169,6 +1178,7 @@ fn modal_info_entries_decodes_otlp_traces_payload() {
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue("trace-demo".to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: vec![],

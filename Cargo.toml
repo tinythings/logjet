@@ -11,6 +11,7 @@ members = [
 	"demo",
 	"ljx",
 	"liblogjet",
+	"ljcel",
 	"plugins/syslog-ingest",
 	"plugins/logcat-ingest",
 	"plugins/stress-ingest",
@@ -19,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.11.0"
 edition = "2024"
 license = "Apache-2.0"
 default-members = [
@@ -28,6 +29,7 @@ default-members = [
 	"demo",
 	"ljx",
 	"liblogjet",
+	"ljcel",
 	"plugins/syslog-ingest",
 	"plugins/logcat-ingest",
 	"plugins/stress-ingest",
@@ -50,7 +52,7 @@ zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 arrow-array = "58.0.0"
-opentelemetry-proto = { version = "0.31", features = ["gen-tonic", "logs"] }
+opentelemetry-proto = { version = "0.32", features = ["gen-tonic", "logs"] }
 parquet = { version = "58.0.0", default-features = false, features = ["arrow", "zstd"] }
 prost = "0.14"
 rand = "0.9.3"

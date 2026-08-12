@@ -36,6 +36,7 @@ fn make_batch(service: &str, records: Vec<LogRecord>) -> ExportLogsServiceReques
                 attributes: vec![KeyValue {
                     key: "service.name".to_string(),
                     value: Some(AnyValue { value: Some(Value::StringValue(service.to_string())) }),
+                    ..Default::default()
                 }],
                 dropped_attributes_count: 0,
                 entity_refs: Vec::new(),

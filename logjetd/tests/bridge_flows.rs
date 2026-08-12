@@ -72,6 +72,7 @@ fn bridge_drain_consumes_upstream_records() -> io::Result<()> {
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
     let collector_port = reserve_port()?;
+    let _collector_addr = collector_port.port();
 
     let appliance_config = dir.write(
         "appliance.conf",
@@ -119,7 +120,8 @@ fn bridge_keep_forwards_backlog_over_grpc() -> io::Result<()> {
     let dir = TestDir::new("bridge-keep-grpc")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
 
     let appliance_config = dir.write(
         "appliance.conf",
@@ -129,7 +131,7 @@ fn bridge_keep_forwards_backlog_over_grpc() -> io::Result<()> {
     )?;
     let bridge_config = dir.write(
         "bridge.conf",
-        &format!("collector.url: grpc://127.0.0.1:{collector_port}\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
+        &format!("collector.url: grpc://127.0.0.1:{collector_addr}\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
     )?;
 
     let _appliance = ChildGuard::spawn({
@@ -144,7 +146,7 @@ fn bridge_keep_forwards_backlog_over_grpc() -> io::Result<()> {
         post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-grpc", message)?;
     }
 
-    let collector = MockGrpcCollector::start(collector_port)?;
+    let collector = MockGrpcCollector::start_with_listener(collector_port.into_listener())?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -162,8 +164,10 @@ fn bridge_keep_fans_out_to_http_and_grpc() -> io::Result<()> {
     let dir = TestDir::new("bridge-fanout")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let http_port = free_port()?;
-    let grpc_port = free_port()?;
+    let http_port = reserve_port()?;
+    let grpc_port = reserve_port()?;
+    let http_addr = http_port.port();
+    let grpc_addr = grpc_port.port();
 
     let appliance_config = dir.write(
         "appliance.conf",
@@ -174,7 +178,7 @@ fn bridge_keep_fans_out_to_http_and_grpc() -> io::Result<()> {
     let bridge_config = dir.write(
         "bridge.conf",
         &format!(
-            "collector.url:\n  - http://127.0.0.1:{http_port}/v1/logs\n  - grpc://127.0.0.1:{grpc_port}\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"
+            "collector.url:\n  - http://127.0.0.1:{http_addr}/v1/logs\n  - grpc://127.0.0.1:{grpc_addr}\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"
         ),
     )?;
 
@@ -190,10 +194,10 @@ fn bridge_keep_fans_out_to_http_and_grpc() -> io::Result<()> {
         post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-fanout", message)?;
     }
 
-    let http = MockCollector::start(http_port)?;
-    let grpc = MockGrpcCollector::start(grpc_port)?;
-    wait_for_tcp(&format!("127.0.0.1:{http_port}"), Duration::from_secs(5))?;
-    wait_for_tcp(&format!("127.0.0.1:{grpc_port}"), Duration::from_secs(5))?;
+    let http = MockCollector::start_with_listener(http_port.into_listener(), Duration::ZERO)?;
+    let grpc = MockGrpcCollector::start_with_listener(grpc_port.into_listener())?;
+    wait_for_tcp(&format!("127.0.0.1:{http_addr}"), Duration::from_secs(5))?;
+    wait_for_tcp(&format!("127.0.0.1:{grpc_addr}"), Duration::from_secs(5))?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -213,7 +217,8 @@ fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
     let dir = TestDir::new("bridge-keep-grpcs")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
     let tls = write_fake_grpc_tls_files(&dir)?;
 
     let appliance_config = dir.write(
@@ -225,7 +230,7 @@ fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
     let bridge_config = dir.write(
         "bridge.conf",
         &format!(
-            "collector.url: grpcs://127.0.0.1:{collector_port}\ncollector.ca-file: {}\ncollector.server-name: collector.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
+            "collector.url: grpcs://127.0.0.1:{collector_addr}\ncollector.ca-file: {}\ncollector.server-name: collector.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
             tls.ca.display()
         ),
     )?;
@@ -242,7 +247,8 @@ fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
         post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-jedi", message)?;
     }
 
-    let collector = MockGrpcCollector::start_tls(collector_port, &tls)?;
+    let collector = MockGrpcCollector::start_tls_with_listener(collector_port.into_listener(), &tls)?;
+    wait_for_tcp(&format!("127.0.0.1:{collector_addr}"), Duration::from_secs(5))?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -261,7 +267,8 @@ fn bridge_keep_forwards_backlog_over_grpcs_mtls() -> io::Result<()> {
     let dir = TestDir::new("bridge-keep-grpcs-mtls")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
     let tls = write_fake_grpc_tls_files(&dir)?;
 
     let appliance_config = dir.write(
@@ -273,7 +280,7 @@ fn bridge_keep_forwards_backlog_over_grpcs_mtls() -> io::Result<()> {
     let bridge_config = dir.write(
         "bridge.conf",
         &format!(
-            "collector.url: grpcs://127.0.0.1:{collector_port}\ncollector.ca-file: {}\ncollector.cert-file: {}\ncollector.key-file: {}\ncollector.server-name: collector.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
+            "collector.url: grpcs://127.0.0.1:{collector_addr}\ncollector.ca-file: {}\ncollector.cert-file: {}\ncollector.key-file: {}\ncollector.server-name: collector.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
             tls.ca.display(),
             tls.client_cert.display(),
             tls.client_key.display()
@@ -292,7 +299,8 @@ fn bridge_keep_forwards_backlog_over_grpcs_mtls() -> io::Result<()> {
         post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-sith", message)?;
     }
 
-    let collector = MockGrpcCollector::start_mtls(collector_port, &tls)?;
+    let collector = MockGrpcCollector::start_mtls_with_listener(collector_port.into_listener(), &tls)?;
+    wait_for_tcp(&format!("127.0.0.1:{collector_addr}"), Duration::from_secs(5))?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -311,7 +319,8 @@ fn bridge_keep_rejects_grpcs_with_bad_ca() -> io::Result<()> {
     let other = TestDir::new("bridge-keep-grpcs-bad-ca-other")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
     let tls = write_fake_grpc_tls_files(&dir)?;
     let wrong_tls = write_fake_grpc_tls_files(&other)?;
 
@@ -324,7 +333,7 @@ fn bridge_keep_rejects_grpcs_with_bad_ca() -> io::Result<()> {
     let bridge_config = dir.write(
         "bridge.conf",
         &format!(
-            "collector.url: grpcs://127.0.0.1:{collector_port}\ncollector.ca-file: {}\ncollector.server-name: collector.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
+            "collector.url: grpcs://127.0.0.1:{collector_addr}\ncollector.ca-file: {}\ncollector.server-name: collector.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
             wrong_tls.ca.display()
         ),
     )?;
@@ -339,7 +348,7 @@ fn bridge_keep_rejects_grpcs_with_bad_ca() -> io::Result<()> {
 
     post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-bad-ca", "BAD CA 001")?;
 
-    let collector = MockGrpcCollector::start_tls(collector_port, &tls)?;
+    let collector = MockGrpcCollector::start_tls_with_listener(collector_port.into_listener(), &tls)?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -357,7 +366,8 @@ fn bridge_keep_rejects_grpcs_with_wrong_server_name() -> io::Result<()> {
     let dir = TestDir::new("bridge-keep-grpcs-wrong-name")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
     let tls = write_fake_grpc_tls_files(&dir)?;
 
     let appliance_config = dir.write(
@@ -369,7 +379,7 @@ fn bridge_keep_rejects_grpcs_with_wrong_server_name() -> io::Result<()> {
     let bridge_config = dir.write(
         "bridge.conf",
         &format!(
-            "collector.url: grpcs://127.0.0.1:{collector_port}\ncollector.ca-file: {}\ncollector.server-name: wrong.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
+            "collector.url: grpcs://127.0.0.1:{collector_addr}\ncollector.ca-file: {}\ncollector.server-name: wrong.test.invalid\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n",
             tls.ca.display()
         ),
     )?;
@@ -384,7 +394,7 @@ fn bridge_keep_rejects_grpcs_with_wrong_server_name() -> io::Result<()> {
 
     post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-wrong-name", "WRONG NAME 001")?;
 
-    let collector = MockGrpcCollector::start_tls(collector_port, &tls)?;
+    let collector = MockGrpcCollector::start_tls_with_listener(collector_port.into_listener(), &tls)?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -402,7 +412,8 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
     let dir = TestDir::new("bridge-resume")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
     let state_path = dir.path().join("bridge.state");
 
     let appliance_config = dir.write(
@@ -414,7 +425,7 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
     let bridge_config = dir.write(
         "bridge.conf",
         &format!(
-            "collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\nupstream.state-file: {}\n",
+            "collector.url: http://127.0.0.1:{collector_addr}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\nupstream.state-file: {}\n",
             state_path.display()
         ),
     )?;
@@ -427,7 +438,7 @@ fn bridge_resume_state_survives_restart() -> io::Result<()> {
     wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
     wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
 
-    let collector = MockCollector::start(collector_port)?;
+    let collector = MockCollector::start_with_listener(collector_port.into_listener(), Duration::ZERO)?;
 
     for message in ["RESUME 001", "RESUME 002", "RESUME 003"] {
         post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-resume", message)?;
@@ -481,7 +492,8 @@ fn bridge_keep_works_with_file_rotation() -> io::Result<()> {
     fs::create_dir_all(&spool_dir)?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
 
     let appliance_config = dir.write(
         "appliance-file.conf",
@@ -492,7 +504,7 @@ fn bridge_keep_works_with_file_rotation() -> io::Result<()> {
     )?;
     let bridge_config = dir.write(
         "bridge-file.conf",
-        &format!("collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
+        &format!("collector.url: http://127.0.0.1:{collector_addr}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
     )?;
 
     let _appliance = ChildGuard::spawn({
@@ -508,7 +520,7 @@ fn bridge_keep_works_with_file_rotation() -> io::Result<()> {
         post_otlp_http(&format!("127.0.0.1:{ingest_port}"), "bridge-file", &message)?;
     }
 
-    let collector = MockCollector::start(collector_port)?;
+    let collector = MockCollector::start_with_listener(collector_port.into_listener(), Duration::ZERO)?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -541,7 +553,8 @@ fn bridge_resets_saved_state_when_upstream_stream_changes() -> io::Result<()> {
     let dir = TestDir::new("bridge-upstream-reset")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
     let state_path = dir.path().join("bridge.state");
 
     let appliance_alpha = dir.write(
@@ -559,12 +572,12 @@ fn bridge_resets_saved_state_when_upstream_stream_changes() -> io::Result<()> {
     let bridge_config = dir.write(
         "bridge-reset.conf",
         &format!(
-            "collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\nupstream.state-file: {}\n",
+            "collector.url: http://127.0.0.1:{collector_addr}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\nupstream.state-file: {}\n",
             state_path.display()
         ),
     )?;
 
-    let collector = MockCollector::start(collector_port)?;
+    let collector = MockCollector::start_with_listener(collector_port.into_listener(), Duration::ZERO)?;
 
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
@@ -610,7 +623,8 @@ fn bridge_block_mode_handles_slow_collector_without_losing_order() -> io::Result
     let dir = TestDir::new("bridge-slow-collector")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
 
     let appliance_config = dir.write(
         "appliance.conf",
@@ -621,7 +635,7 @@ fn bridge_block_mode_handles_slow_collector_without_losing_order() -> io::Result
     let bridge_config = dir.write(
         "bridge.conf",
         &format!(
-            "collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\nbackpressure.enabled: true\nbackpressure.mode: block\nbackpressure.max-buffered-records: 2\n"
+            "collector.url: http://127.0.0.1:{collector_addr}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\nbackpressure.enabled: true\nbackpressure.mode: block\nbackpressure.max-buffered-records: 2\n"
         ),
     )?;
 
@@ -633,7 +647,7 @@ fn bridge_block_mode_handles_slow_collector_without_losing_order() -> io::Result
     wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
     wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
 
-    let collector = MockCollector::start_with_delay(collector_port, Duration::from_millis(150))?;
+    let collector = MockCollector::start_with_listener(collector_port.into_listener(), Duration::from_millis(150))?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -666,7 +680,8 @@ fn replay_recovers_after_middle_of_file_is_removed() -> io::Result<()> {
     let spool_dir = dir.path().join("spool");
     fs::create_dir_all(&spool_dir)?;
     let ingest_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
 
     let appliance_config = dir.write(
         "appliance.conf",
@@ -699,10 +714,10 @@ fn replay_recovers_after_middle_of_file_is_removed() -> io::Result<()> {
     damaged.extend_from_slice(&original[second_cut..]);
     fs::write(&spool_file, damaged)?;
 
-    let collector = MockCollector::start(collector_port)?;
+    let collector = MockCollector::start_with_listener(collector_port.into_listener(), Duration::ZERO)?;
     let status = {
         let mut cmd = ljd_command();
-        cmd.arg("replay").arg("--path").arg(&spool_dir).arg("--name").arg("recover.logjet").arg("--dest").arg(format!("127.0.0.1:{collector_port}"));
+        cmd.arg("replay").arg("--path").arg(&spool_dir).arg("--name").arg("recover.logjet").arg("--dest").arg(format!("127.0.0.1:{collector_addr}"));
         cmd.status()?
     };
     assert!(status.success());
@@ -720,7 +735,8 @@ fn bridge_forwards_large_payloads_end_to_end() -> io::Result<()> {
     let dir = TestDir::new("bridge-large-payload")?;
     let ingest_port = free_port()?;
     let replay_port = free_port()?;
-    let collector_port = free_port()?;
+    let collector_port = reserve_port()?;
+    let collector_addr = collector_port.port();
 
     let appliance_config = dir.write(
         "appliance.conf",
@@ -730,7 +746,7 @@ fn bridge_forwards_large_payloads_end_to_end() -> io::Result<()> {
     )?;
     let bridge_config = dir.write(
         "bridge.conf",
-        &format!("collector.url: http://127.0.0.1:{collector_port}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
+        &format!("collector.url: http://127.0.0.1:{collector_addr}/v1/logs\nupstream.replay: 127.0.0.1:{replay_port}\nupstream.mode: keep\n"),
     )?;
 
     let _appliance = ChildGuard::spawn({
@@ -741,7 +757,7 @@ fn bridge_forwards_large_payloads_end_to_end() -> io::Result<()> {
     wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(5))?;
     wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(5))?;
 
-    let collector = MockCollector::start(collector_port)?;
+    let collector = MockCollector::start_with_listener(collector_port.into_listener(), Duration::ZERO)?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
