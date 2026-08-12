@@ -162,6 +162,39 @@ pub fn free_port() -> io::Result<u16> {
     Ok(port)
 }
 
+pub struct Appliance {
+    _guard: ChildGuard,
+    pub ingest_port: u16,
+    pub replay_port: u16,
+}
+
+pub fn start_serve(dir: &TestDir, config_name: &str, config_template: &str) -> io::Result<Appliance> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let ingest_port = free_port()?;
+        let replay_port = free_port()?;
+        let config = config_template
+            .replace("{ingest_port}", &ingest_port.to_string())
+            .replace("{replay_port}", &replay_port.to_string());
+        let config_path = dir.write(config_name, &config)?;
+
+        let mut cmd = ljd_command();
+        cmd.arg("--config").arg(&config_path).arg("serve");
+        let Ok(guard) = ChildGuard::spawn(cmd) else { continue; };
+
+        if wait_for_tcp(&format!("127.0.0.1:{ingest_port}"), Duration::from_secs(3)).is_ok()
+            && wait_for_tcp(&format!("127.0.0.1:{replay_port}"), Duration::from_secs(3)).is_ok()
+        {
+            return Ok(Appliance { _guard: guard, ingest_port, replay_port });
+        }
+
+        drop(guard);
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "ljd serve did not start within 10s"));
+        }
+    }
+}
+
 pub fn wait_for_tcp(addr: &str, timeout: Duration) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     loop {

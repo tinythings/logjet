@@ -6,7 +6,7 @@ C_DESCR := \033[38;5;43m
 C_RESET := \033[0m
 
 MXRUN_BIN ?= mxrun
-ARM_TARGET ?= aarch64-unknown-linux-musl
+ARM_TARGET ?= aarch64-unknown-linux-gnu
 X86_TARGET ?= x86_64-unknown-linux-musl
 CORE_WORKSPACE := --workspace --exclude otlp-demo
 MANPAGE_MD := $(wildcard doc/manpage/*.1.md)
