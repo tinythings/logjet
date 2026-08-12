@@ -248,6 +248,7 @@ fn bridge_keep_forwards_backlog_over_grpcs() -> io::Result<()> {
     }
 
     let collector = MockGrpcCollector::start_tls_with_listener(collector_port.into_listener(), &tls)?;
+    wait_for_tcp(&format!("127.0.0.1:{collector_addr}"), Duration::from_secs(5))?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
@@ -299,6 +300,7 @@ fn bridge_keep_forwards_backlog_over_grpcs_mtls() -> io::Result<()> {
     }
 
     let collector = MockGrpcCollector::start_mtls_with_listener(collector_port.into_listener(), &tls)?;
+    wait_for_tcp(&format!("127.0.0.1:{collector_addr}"), Duration::from_secs(5))?;
     let _bridge = ChildGuard::spawn({
         let mut cmd = ljd_command();
         cmd.arg("--config").arg(&bridge_config).arg("bridge");
