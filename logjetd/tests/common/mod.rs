@@ -162,12 +162,14 @@ pub fn free_port() -> io::Result<u16> {
     Ok(port)
 }
 
+#[allow(dead_code)]
 pub struct Appliance {
     _guard: ChildGuard,
     pub ingest_port: u16,
     pub replay_port: u16,
 }
 
+#[allow(dead_code)]
 pub fn start_serve(dir: &TestDir, config_name: &str, config_template: &str) -> io::Result<Appliance> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
